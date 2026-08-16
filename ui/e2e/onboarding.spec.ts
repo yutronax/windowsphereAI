@@ -129,6 +129,32 @@ test.describe('first-run folder onboarding', () => {
     await expect(page.getByTestId('folder-path-tooltip')).toHaveText('C:\\Users\\Yusuf\\Documents\\Müvekkiller');
   });
 
+  // AC-3: request-textarea odaklanınca kenarlık #2563EB olmalı ve bir box-shadow görünmeli.
+  test('shows a focus border and box-shadow on the request textarea when focused (AC-3)', async ({ page }) => {
+    await page.goto('/');
+
+    const textarea = page.getByTestId('request-textarea');
+    await textarea.focus();
+
+    await expect(textarea).toHaveCSS('border-color', 'rgb(37, 99, 235)');
+    const boxShadow = await textarea.evaluate((el) => getComputedStyle(el).boxShadow);
+    expect(boxShadow).not.toBe('none');
+    expect(boxShadow).not.toBe('');
+  });
+
+  // AC-4: request-textarea blur olunca kenarlık tekrar #E5E7EB'e dönmeli.
+  test('reverts the request textarea border to #E5E7EB on blur (AC-4)', async ({ page }) => {
+    await page.goto('/');
+
+    const textarea = page.getByTestId('request-textarea');
+    await textarea.focus();
+    await expect(textarea).toHaveCSS('border-color', 'rgb(37, 99, 235)');
+
+    await page.getByRole('heading', { name: /klasör seç/i }).click();
+
+    await expect(textarea).toHaveCSS('border-color', 'rgb(229, 231, 235)');
+  });
+
   // AC-4: hover ve active durumlarında buton arka planı koyulaşmalı.
   test('darkens the "Klasör Seç" button background on hover and active (AC-4)', async ({ page }) => {
     await page.goto('/');

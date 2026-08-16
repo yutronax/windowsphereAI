@@ -117,6 +117,30 @@ describe('primary button color contrast (AC-5)', () => {
   });
 });
 
+// AC-1/AC-2: istek metin kutusu (textarea) render, stil ve controlled-state doğrulaması.
+describe('request textarea (onboarding-istek-metin-kutusu)', () => {
+  it('renders a textarea with min-height 120px, border-radius 12px, and #E5E7EB border (AC-1)', () => {
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    const textarea = screen.getByTestId('request-textarea');
+    const style = getComputedStyle(textarea);
+
+    expect(textarea).toBeInTheDocument();
+    expect(parseFloat(style.minHeight)).toBeGreaterThanOrEqual(120);
+    expect(style.borderRadius).toBe('12px');
+    expect(style.borderColor).toBe('rgb(229, 231, 235)');
+  });
+
+  it('reflects typed text in the textarea value as a controlled component (AC-2)', () => {
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    const textarea = screen.getByTestId('request-textarea') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'bu klasördeki PDF\'leri tarihe göre sırala' } });
+
+    expect(textarea.value).toBe('bu klasördeki PDF\'leri tarihe göre sırala');
+  });
+});
+
 // AC-1: uzun bir yol seçiliyken CSS tabanlı tek satır kesme uygulanmalı.
 describe('selected-folder-path CSS truncation (AC-1, AC-4)', () => {
   it('applies single-line CSS ellipsis truncation to a long selected folder path (AC-1)', async () => {

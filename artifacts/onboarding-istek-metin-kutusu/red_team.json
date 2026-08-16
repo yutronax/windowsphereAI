@@ -1,0 +1,39 @@
+{
+  "task": "onboarding-istek-metin-kutusu",
+  "reviewed_at": "2026-08-16",
+  "summary": "OnboardingScreen.tsx'e requestText state'i ve stil verilmiş bir textarea eklendi (Saga #253). ATDD'de disabled kararı bilinçli olarak ertelenmiş; bu bilinçli karar makul ama iki yan etkisi red-team tarafından bulundu: (1) textarea'nın erişilebilir adı yok (a11y gap), (2) CSS'te width/box-sizing tanımlanmadığı için gerçek görsel genişlik tarayıcı varsayılanına (yaklaşık 20 karakter) kalıyor ve verify_report'taki 'ekran görüntüsü alınamadı' notuyla birleşince bu hiç görsel olarak doğrulanmamış olabilir. Kod küçük ve izole; genel yaklaşım doğru yönde ama iki orta öncelikli boşluk var.",
+  "findings": [
+    {
+      "area": "accessibility",
+      "finding": "textarea'nın erişilebilir adı (accessible name) yok: ne <label htmlFor>, ne aria-label, ne aria-labelledby var. Sadece data-testid ile bulunabiliyor. Ekran okuyucu kullanıcısı için bu alan 'textbox, boş' olarak duyurulur, ne yazılması gerektiği belirsiz kalır.",
+      "severity": "medium",
+      "scenario": "NVDA/JAWS kullanan bir kullanıcı Tab ile textarea'ya geldiğinde sadece 'multi-line edit' duyar, işlevini anlayamaz. Placeholder (#254) eklendiğinde de placeholder tek başına erişilebilir ad yerine geçmez (WCAG başarısızlığı, screen reader'lar placeholder'ı bazı durumlarda okumaz/farklı önceliklendirir)."
+    },
+    {
+      "area": "layout/correctness",
+      "finding": "`.onboarding-textarea` CSS class'ında `width` ve `box-sizing` tanımlanmamış. Native <textarea> varsayılan genişliği (~cols=20, content-box) kullanılacak; 16px padding content-box modelinde toplam genişliğe eklenir. AC-1 testleri sadece min-height/border-radius/border-color'ı `getComputedStyle` ile kontrol ediyor, width'i kontrol etmiyor — bu yüzden test yeşil ama görsel olarak dar/garip bir kutu ortaya çıkma riski var. verify_report.md bunu da doğruluyor: ekran görüntüsü alınamadığı için gerçek görsel doğrulama hiç yapılmamış, sadece sayısal computed-style değerleri kontrol edilmiş.",
+      "severity": "medium",
+      "scenario": "Kullanıcı (Yusuf) uygulamayı açtığında klasör seçim alanının altında, ekranın geri kalanına göre anormal derecede dar (varsayılan ~20 karakter genişliğinde) bir metin kutusu görür; 'bu klasördeki PDF'leri tarihe göre sırala' gibi bir cümle yazarken kutu görsel olarak bozuk/tutarsız görünür. Bu, gate 13'teki insan onayında reddedilme riski taşır ve #254/#255/#258 bu hatalı temel üzerine inşa edilirse iş tekrar gerekir."
+    },
+    {
+      "area": "reliability/behavior-contract",
+      "finding": "Textarea backendStatus ne olursa olsun (starting/backend_timeout dahil) her zaman etkileşimli ve disabled değil — bu ATDD'de 'Unknowns' olarak açıkça belgelenmiş ve kullanıcı onayıyla bilinçli bırakılmış bir karar, dolayısıyla bug değil. Ancak diğer tüm interaktif elemanlarla (Klasör Seç, Devam butonları) tutarsız bir davranış sözleşmesi yaratıyor: kullanıcı backend henüz hazır değilken bir istek yazabilir, backend timeout'a düşerse yazdığı metin hiçbir yere kaydedilmeden ekranda kalır (state kaybolma riski yoktur çünkü component unmount olmaz, ama kullanıcı deneyimi açısından 'bu ne işe yarıyor backend yokken' sorusu doğurur).",
+      "severity": "low",
+      "scenario": "Kullanıcı backend başlarken (starting durumunda) uzun bir istek yazar, backend 10 saniye içinde ready olmazsa timeout ekranı görünür ama textarea DOM'da kalmaya devam eder (retry butonuna kadar) — kullanıcı yazdığı metnin kaybolup kaybolmadığından emin olamaz çünkü hiçbir görsel/durum geri bildirimi (disabled, uyarı mesajı) yok."
+    }
+  ],
+  "approved_points": [
+    "Controlled component deseni doğru uygulanmış: value={requestText} + onChange={(e) => setRequestText(e.target.value)} — React'in idiyomatik controlled-input kalıbı, XSS riski taşımıyor çünkü React JSX her zaman değerleri kaçış (escape) yapıyor, dangerouslySetInnerHTML kullanılmamış.",
+    "CSS class konvansiyonu (`onboarding-*` prefix) tutarlı şekilde takip edilmiş, task #251/#252'nin kurduğu deseni bozmuyor.",
+    "ATDD'nin 'disabled uygulanmıyor' kararı açıkça belgelenmiş ve kullanıcı onayı alınmış (Unknowns bölümü) — bu, sessizce alınmış bir kısayol değil, izlenebilir bir karar.",
+    "Test kapsamı AC'lerle 1:1 eşleşiyor (AC-1..AC-4 hem vitest hem playwright'ta ayrı ayrı test edilmiş), data-testid seçici DOM yapısı değişse bile testleri kırılgan yapmıyor."
+  ],
+  "risks": [
+    "Görsel regresyon gate'i (gate 12) ekran görüntüsü olmadan 'KISMİ PASS' işaretlenmiş; sadece sayısal computed-style kanıtı var, gerçek layout/width hiç doğrulanmamış — bu, width/box-sizing eksikliğinin fark edilmemiş olma ihtimalini yükseltiyor.",
+    "Sonraki task'lar (#254 placeholder, #255 boş istek engelleme, #258 gönderim) bu component üzerine inşa edecek; textarea'da erişilebilir ad ve width tanımı olmadan devam edilirse, bu eksiklikler her yeni task'ta tekrar tekrar gündeme gelip iş tekrarına (rework) yol açabilir."
+  ],
+  "caveman_review": "Bir dosya değişti (OnboardingScreen.tsx), 2 test dosyası genişletildi. Yeni bağımlılık yok, yeni state (requestText) mevcut state'lerden bağımsız ve izole. CSS bloğu mevcut <style> içine eklenmiş, ayrı dosya yaratılmamış — basit ve minimal. Kod okunabilir, JSX kısa. Ana eksik: erişilebilirlik özniteliği (label/aria-label) ve width/box-sizing CSS kuralı eklenmemiş; bunlar 1-2 satırlık ekler olurdu ama atlanmış.",
+  "scope_review": "Kod, ATDD'deki AC-1..AC-4'ü tam kapsıyor, kapsam dışı bırakılanlara (placeholder, boş istek engelleme, gerçek gönderim, disabled mantığı) dokunulmamış — scope creep yok. Tek gerçek scope-adjacent boşluk: AC-1 'textarea görünür' derken görsel stilin sadece kısmi bir alt kümesi (min-height/border-radius/border-color) test edilmiş, width AC'de veya davranış sözleşmesinde hiç adı geçmiyor, dolayısıyla bu teknik olarak AC ihlali değil ama gerçek kullanılabilirlik açısından bir kör nokta.",
+  "ready_to_commit": true,
+  "verdict": "conditional_approve"
+}

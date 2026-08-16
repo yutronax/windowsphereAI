@@ -13,6 +13,7 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [isFocused, setIsFocused] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
+  const [requestText, setRequestText] = useState('');
   const isPathTooltipVisible = isFocused || isHovered;
   const isReady = backendStatus === 'ready';
 
@@ -59,6 +60,20 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
           text-overflow: ellipsis;
           max-width: 320px;
         }
+        .onboarding-textarea {
+          width: 100%;
+          box-sizing: border-box;
+          min-height: 120px;
+          border-radius: 12px;
+          border: 1px solid #E5E7EB;
+          font-size: 16px;
+          padding: 16px;
+        }
+        .onboarding-textarea:focus {
+          border-color: #2563EB;
+          box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+          outline: none;
+        }
       `}</style>
       <button type="button" className="onboarding-primary-btn" onClick={chooseFolder} disabled={!isReady}>Klasör Seç</button>
       {selectedFolder && (
@@ -80,6 +95,13 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
           )}
         </>
       )}
+      <textarea
+        data-testid="request-textarea"
+        aria-label="Dosya işlemi isteği"
+        className="onboarding-textarea"
+        value={requestText}
+        onChange={(e) => setRequestText(e.target.value)}
+      />
       <button type="button" onClick={onContinue} disabled={!isReady || !selectedFolder}>Devam</button>
     </main>
   );
