@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { open } from '@tauri-apps/plugin-dialog';
 
-import OnboardingScreen, { truncateWindowsPath } from './OnboardingScreen';
+import OnboardingScreen from './OnboardingScreen';
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn(),
@@ -117,13 +117,32 @@ describe('primary button color contrast (AC-5)', () => {
   });
 });
 
-describe('truncateWindowsPath', () => {
-  it('shortens an overlong Windows path with an ellipsis while preserving its final folder', () => {
-    const path = 'C:\\Users\\Yusuf\\Documents\\Müvekkiller\\2026\\Dava Dosyaları\\Deliller';
-    const shortened = truncateWindowsPath(path, 40);
+// AC-1: uzun bir yol seçiliyken CSS tabanlı tek satır kesme uygulanmalı.
+describe('selected-folder-path CSS truncation (AC-1, AC-4)', () => {
+  it('applies single-line CSS ellipsis truncation to a long selected folder path (AC-1)', async () => {
+    openFolderDialog.mockResolvedValue(
+      'C:\\Users\\Yusuf\\Documents\\Müvekkiller\\2026\\Dava Dosyaları\\Deliller\\Alt Klasör\\Çok Uzun Bir Klasör Adı',
+    );
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
 
-    expect(shortened).toContain('…');
-    expect(shortened).toEndWith('\\Deliller');
-    expect(shortened.length).toBeLessThanOrEqual(40);
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+
+    const pathElement = await screen.findByTestId('selected-folder-path');
+    const style = getComputedStyle(pathElement);
+
+    expect(style.whiteSpace).toBe('nowrap');
+    expect(style.overflow).toBe('hidden');
+    expect(style.textOverflow).toBe('ellipsis');
+  });
+
+  it('renders the full path text content for a short selected folder path without truncation (AC-4)', async () => {
+    openFolderDialog.mockResolvedValue('C:\\Kısa');
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+
+    const pathElement = await screen.findByTestId('selected-folder-path');
+
+    expect(pathElement).toHaveTextContent('C:\\Kısa');
   });
 });

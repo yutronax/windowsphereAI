@@ -1,0 +1,54 @@
+{
+  "task": "klasor-yolu-tek-satir-erisim",
+  "reviewed_at": "2026-08-16T00:00:00+03:00",
+  "summary": "Saga #252 (klasor yolu tek satir + tooltip erisim) icin OnboardingScreen.tsx uzerinde inceleme yapildi. Plandan sapma (CSS-only yerine useState + native olaylar) gerekce bakimindan dogru ve testte cakisan cift-metin sorununu cozmesi acisindan aslinda dogru karardi. Ancak tooltip'in erisilebilirlik semantigi eksik (role/aria-describedby yok), focus+hover durumlari tek bir boolean'da birlestirildigi icin klavye odagi devam ederken fare tooltip'i erken kapatabiliyor, ve '320px max-width' sabit deger ATDD'nin 'konteyner genisligine duyarli' ifadesiyle tam ortusmuyor (dokumantasyona da yansimamis ikinci bir sapma). Guvenlik acisindan risk yok (React auto-escape, XSS yok, dis veri/network yok).",
+  "findings": [
+    {
+      "area": "reliability_behavior_contract",
+      "finding": "isPathTooltipVisible tek bir boolean'da hem focus hem hover durumunu tutuyor. Kullanici Tab ile odaklanip (visible=true) sonra fare elementin uzerinden gecip ayrilirsa (mouseenter/mouseleave), onMouseLeave calisir ve tooltip'i gizler -- element hala klavye odaginda olmasina ragmen. AC-2 'klavye odagindayken tam yol tooltip'i gorunur' sozlesmesini ihlal eden somut bir senaryo.",
+      "severity": "medium",
+      "scenario": "Klavye kullanicisi Tab ile selected-folder-path elemanina odaklanir, tooltip acilir; ayni anda faresi ekranda o alanin uzerinden gecerse (orn. trackpad'e yanlislikla dokunma) mouseleave tetiklenir ve tooltip kaybolur, kullanici hala odakta oldugu halde tam yolu goremez."
+    },
+    {
+      "area": "reliability_behavior_contract",
+      "finding": "Tooltip <span data-testid=\"folder-path-tooltip\"> icin role=\"tooltip\" veya aria-describedby iliskisi yok. Ekran okuyucu, odaklanilan <p> elementiyle bu ek metni iliskilendirmez; sadece DOM'da ayri, baglantisiz bir metin olarak var. verify_report.md'de 'tabIndex ile klavye erisimi eklendi' denip erisilebilirlik 'KISMI PASS' olarak isaretlenmis ama bu, gorsel/klavye-odak erisimini kapsiyor, ekran okuyucu erisimini kapsamiyor -- ATDD'nin hedefi ('klavye kullanicisi icin tam yol hic erisilebilir degildi') tam anlamiyla cozulmus sayilamaz.",
+      "severity": "medium",
+      "scenario": "Ekran okuyucu kullanan bir kullanici Tab ile elemana gelir; okuyucu sadece kisaltilmis (gorsel olarak ellipsis ile kesilen ama DOM metni tam olan, dolayisiyla aslinda okunur) satiri okur, ayri tooltip span'i role/aria baglantisi olmadigi icin okunmayabilir veya cift okunabilir (tarayici/screen-reader davranisina gore degisir) -- deterministik degil."
+    },
+    {
+      "area": "architecture_maintainability",
+      "finding": "`.onboarding-path { max-width: 320px }` sabit piksel degeri, ATDD'nin 'CSS tabanli (konteyner genisligine duyarli)' hedefiyle tam ortusmuyor -- gercek konteyner genisligine gore degil, hardcoded sabit bir deger. code_diff.md'nin 'Plandan Sapma' bolumu sadece useState kararini belgelemis, bu ikinci (kucuk ama gercek) sapmayi belgelememis.",
+      "severity": "low",
+      "scenario": "Pencere genisletildiginde konteyner 600px genislige sahip olsa bile yol yine de 320px'te kesilir (gereksiz kesme); pencere daralip konteyner 250px'e inerse tasma/overflow riski (max-width parent'tan degil viewport'tan bagimsiz sabit)."
+    },
+    {
+      "area": "readability_ux",
+      "finding": "Tooltip <span>, <p>'nin hemen altinda normal akis (block/inline) icinde kosullu render ediliyor; absolute/fixed pozisyonlama veya sabit yukseklik rezervasyonu yok. Tooltip acilip kapandiginda altindaki 'Devam' butonu DOM'da yer degistirebilir (layout shift).",
+      "severity": "low",
+      "scenario": "Kullanici fareyle yol uzerine gelince tooltip belirir, 'Devam' butonu asagi kayar; fare ayrilinca buton eski yerine doner -- kullanici tikladigi anda buton konumu degismisse yanlis yere tiklama riski olusabilir (CLS benzeri sorun)."
+    }
+  ],
+  "approved_points": [
+    "selectedFolder ve tooltip metni React JSX children olarak render ediliyor (dangerouslySetInnerHTML yok) -- XSS riski yok, kullanici dosya sistemi yolundaki ozel karakterler otomatik escape edilir.",
+    "useState + native onFocus/onBlur/onMouseEnter/onMouseLeave kararı, mevcut `screen.findByText(fullPath)` testinin 'multiple elements found' hatasina dusmesini onlemek icin dogru ve gerekliydi -- salt CSS (:hover/:focus + her zaman DOM'da display:none) yaklasimi hem bu testi hem de gercek ekran okuyucularda cift-metin okunmasini engelleyemezdi (testing-library varsayilan olarak gizli elementleri de eslestirir), yani bu sapma sadece test uyumu icin degil gercek erisilebilirlik acisindan da daha dogru bir tercih.",
+    "Task #250'nin truncateWindowsPath fonksiyonu ve kendi test bloğu birlikte kaldirilmis (olu kod birakilmamis), plandaki 'diger 8 test dokunulmayacak' taahhudune uyulmus (test dosyasi incelemesinde diger testler degismedigi dogrulandi).",
+    "CSS class ismi (.onboarding-path) task #251'in kurdugu onboarding-* on-ek konvansiyonunu takip ediyor, tutarlilik saglaniyor.",
+    "Ag/dosya sistemi/DB etkilesimi olmayan salt UI degisikligi oldugu icin genis anlamda guvenlik yuzeyi (injection, yetkilendirme, veri sizintisi) bu task kapsaminda yok -- dogru sekilde ATDD'de de 'davranis sozlesmesi' bolumu N/A olarak isaretlenmis."
+  ],
+  "risks": [
+    "Focus+hover durumlarinin tek boolean'da birlesmesi, klavye kullanicisi icin ozellikle gecici olarak tooltip'in beklenmedik sekilde kaybolmasina yol acabilir -- ATDD AC-2'nin ruhuna (klavye kullanicisi icin guvenilir erisim) tam uymuyor.",
+    "Ekran okuyucu semantik baglantisi eksik oldugu icin bu task'in 'erisilebilirlik' hedefi sadece gorsel/klavye-odakli kullanicilar icin cozulmus, ekran okuyucu kullanicilari icin cozulmemis olabilir -- ATDD/plan bu ayrimi acikca yapmiyor, verify_report da bunu 'kapsam disi' diye gecmis ama orijinal hedef ('klavye kullanicisi icin erisilebilir degildi') kismen ekran okuyucu senaryosunu da ima ediyor.",
+    "max-width:320px sabiti dokumante edilmemis ikinci bir plandan sapma; gelecekte konteyner genisligi degisirse (orn. responsive layout eklenirse) bu deger unutulup tutarsizlik yaratabilir."
+  ],
+  "caveman_review": {
+    "new_files_added": 0,
+    "unnecessary_abstraction": "yok -- tek dosyada, tek yeni state, ek kutuphane yok, mevcut <style> bloguna eklenen class deseni takip edilmis. CAVEMAN prensibine uygun minimal implementasyon.",
+    "verdict": "CAVEMAN'a uygun, asiri muhendislik yok."
+  },
+  "scope_review": {
+    "in_scope_changes_only": true,
+    "notes": "Sadece atdd.md/plan.md'de belirtilen 3 dosya degismis (OnboardingScreen.tsx, .test.tsx, e2e/onboarding.spec.ts). Kapsam disi olarak isaretlenen tooltip pozisyonlama/animasyon eklenmemis -- dogru. Ancak plandan iki ayri sapma var: (1) code_diff.md'de belgelenen useState karari (gerekceli, onaylanmis), (2) max-width:320px sabit deger (belgelenmemis, kucuk)."
+  },
+  "ready_to_commit": true,
+  "verdict": "approve_with_notes"
+}

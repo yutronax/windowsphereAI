@@ -89,6 +89,46 @@ test.describe('first-run folder onboarding', () => {
     expect(outline.color).not.toBe('transparent');
   });
 
+  // AC-2: klavye ile Tab yapıp odak selected-folder-path'e gelince tam yolu içeren tooltip görünmeli.
+  test('shows a full-path tooltip when tabbing focus to the selected folder path (AC-2)', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+        invoke: async (cmd: string) =>
+          cmd === 'plugin:dialog|open' ? 'C:\\Users\\Yusuf\\Documents\\Müvekkiller' : Promise.reject(new Error(`unmocked command: ${cmd}`)),
+      };
+    });
+    await page.goto('/');
+
+    await page.getByRole('button', { name: /klasör seç/i }).click();
+
+    const pathElement = page.getByTestId('selected-folder-path');
+    await expect(pathElement).toBeVisible();
+    await pathElement.focus();
+
+    await expect(page.getByTestId('folder-path-tooltip')).toBeVisible();
+    await expect(page.getByTestId('folder-path-tooltip')).toHaveText('C:\\Users\\Yusuf\\Documents\\Müvekkiller');
+  });
+
+  // AC-3: fare ile hover yapılınca aynı tooltip mekanizması tam yolu göstermeli.
+  test('shows the same full-path tooltip on mouse hover over the selected folder path (AC-3)', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+        invoke: async (cmd: string) =>
+          cmd === 'plugin:dialog|open' ? 'C:\\Users\\Yusuf\\Documents\\Müvekkiller' : Promise.reject(new Error(`unmocked command: ${cmd}`)),
+      };
+    });
+    await page.goto('/');
+
+    await page.getByRole('button', { name: /klasör seç/i }).click();
+
+    const pathElement = page.getByTestId('selected-folder-path');
+    await expect(pathElement).toBeVisible();
+    await pathElement.hover();
+
+    await expect(page.getByTestId('folder-path-tooltip')).toBeVisible();
+    await expect(page.getByTestId('folder-path-tooltip')).toHaveText('C:\\Users\\Yusuf\\Documents\\Müvekkiller');
+  });
+
   // AC-4: hover ve active durumlarında buton arka planı koyulaşmalı.
   test('darkens the "Klasör Seç" button background on hover and active (AC-4)', async ({ page }) => {
     await page.goto('/');

@@ -9,19 +9,11 @@ type Props = {
   onRetry?: () => void;
 };
 
-export function truncateWindowsPath(path: string, maxLength: number): string {
-  if (path.length <= maxLength) return path;
-
-  const lastSeparator = path.lastIndexOf('\\');
-  const finalFolder = lastSeparator >= 0 ? path.slice(lastSeparator) : path;
-  const prefixLength = maxLength - finalFolder.length - 1;
-
-  if (prefixLength <= 0) return `…${finalFolder.slice(-(maxLength - 1))}`;
-  return `${path.slice(0, prefixLength)}…${finalFolder}`;
-}
-
 export default function OnboardingScreen({ backendStatus, onContinue, onRetry }: Props) {
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
+  const [isFocused, setIsFocused] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+  const isPathTooltipVisible = isFocused || isHovered;
   const isReady = backendStatus === 'ready';
 
   async function chooseFolder() {
@@ -61,9 +53,33 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
           background-color: #94A3B8;
           cursor: not-allowed;
         }
+        .onboarding-path {
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          max-width: 320px;
+        }
       `}</style>
       <button type="button" className="onboarding-primary-btn" onClick={chooseFolder} disabled={!isReady}>Klasör Seç</button>
-      {selectedFolder && <p data-testid="selected-folder-path" title={selectedFolder}>{truncateWindowsPath(selectedFolder, 80)}</p>}
+      {selectedFolder && (
+        <>
+          <p
+            data-testid="selected-folder-path"
+            className="onboarding-path"
+            tabIndex={0}
+            aria-describedby="folder-path-tooltip-content"
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
+            onMouseEnter={() => setIsHovered(true)}
+            onMouseLeave={() => setIsHovered(false)}
+          >
+            {selectedFolder}
+          </p>
+          {isPathTooltipVisible && (
+            <span id="folder-path-tooltip-content" role="tooltip" data-testid="folder-path-tooltip">{selectedFolder}</span>
+          )}
+        </>
+      )}
       <button type="button" onClick={onContinue} disabled={!isReady || !selectedFolder}>Devam</button>
     </main>
   );
