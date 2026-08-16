@@ -64,6 +64,57 @@ describe('OnboardingScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: /tekrar dene/i }));
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
+
+  // AC-1: enabled "Klasör Seç" butonu birincil eylem stiline sahip olmalı.
+  it('renders the enabled "Klasör Seç" button with primary-action styling (AC-1)', () => {
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    const button = screen.getByRole('button', { name: /klasör seç/i });
+    const style = getComputedStyle(button);
+
+    expect(parseFloat(style.height)).toBeGreaterThanOrEqual(44);
+    expect(style.borderRadius).toBe('8px');
+    expect(style.backgroundColor).toBe('rgb(37, 99, 235)');
+    expect(style.color).toBe('rgb(255, 255, 255)');
+  });
+
+  // AC-3: backend hazır değilken buton devre dışı görünümde olmalı.
+  it('renders the disabled "Klasör Seç" button with a muted, not-allowed style (AC-3)', () => {
+    render(<OnboardingScreen backendStatus="starting" onContinue={vi.fn()} />);
+
+    const button = screen.getByRole('button', { name: /klasör seç/i });
+    const style = getComputedStyle(button);
+
+    expect(button).toBeDisabled();
+    expect(style.backgroundColor).toBe('rgb(148, 163, 184)');
+    expect(style.cursor).toBe('not-allowed');
+  });
+});
+
+// AC-5: #2563EB arka plan + beyaz metin, WCAG AA (>=4.5:1) kontrast oranını karşılamalı.
+describe('primary button color contrast (AC-5)', () => {
+  function relativeLuminance([r, g, b]: [number, number, number]): number {
+    const [rs, gs, bs] = [r, g, b].map((channel) => {
+      const c = channel / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs;
+  }
+
+  function contrastRatio(rgb1: [number, number, number], rgb2: [number, number, number]): number {
+    const l1 = relativeLuminance(rgb1);
+    const l2 = relativeLuminance(rgb2);
+    const lighter = Math.max(l1, l2);
+    const darker = Math.min(l1, l2);
+    return (lighter + 0.05) / (darker + 0.05);
+  }
+
+  it('meets WCAG AA contrast (>=4.5:1) for white text on #2563EB', () => {
+    const background: [number, number, number] = [0x25, 0x63, 0xeb];
+    const text: [number, number, number] = [255, 255, 255];
+
+    expect(contrastRatio(background, text)).toBeGreaterThanOrEqual(4.5);
+  });
 });
 
 describe('truncateWindowsPath', () => {

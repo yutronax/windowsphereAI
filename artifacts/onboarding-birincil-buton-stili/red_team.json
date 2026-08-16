@@ -1,0 +1,61 @@
+{
+  "task": "onboarding-birincil-buton-stili",
+  "reviewed_at": "2026-08-16",
+  "summary": "Tek dosyalık, düşük riskli görsel stil değişikliği. AC-1..AC-5 kod ve testlerle karşılanmış, e2e/vitest yeşil. İki orta önemli bulgu var: (1) implementasyon yöntemi plan.md'de onaylanan 'inline style' yerine sessizce 'gömülü <style> + global CSS class'a değişti, plan/atdd güncellenmedi; (2) AC-5 WCAG testi implementasyondan tamamen bağımsız sabit renk kontrolü, gerçek render edilen butonu doğrulamıyor. Kritik/bloklayıcı bulgu yok.",
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "scope",
+      "file": "windows-ai-files/artifacts/onboarding-birincil-buton-stili/plan.md",
+      "issue": "plan.md ve atdd.md Assumptions bölümü 'inline style veya basit .css, yeni framework eklenmeyecek' varsayımını kayıt altına almış ve bunu bilinçli olarak sonraki stil task'larına (#253/#254/#255) emsal olacak bir karar olarak işaretlemiş (plan.md satır 35-38, atdd.md satır 104-107). Gerçek implementasyon (OnboardingScreen.tsx satır 42-64) bunun yerine component içine gömülü, global scope'lu bir <style> bloğu + CSS class (.onboarding-primary-btn) kullandı. code_diff.md bu değişikliği gerekçelendiriyor (pseudo-class ihtiyacı) ama plan.md/atdd.md geriye dönük güncellenmedi.",
+      "better_approach": "code_diff.md'deki gerekçe (gerçek :hover/:active/:focus-visible/:disabled pseudo-class ihtiyacı) teknik olarak makul; ancak plan.md'nin 'Assumptions'/'Risks' bölümü bu kararı yansıtacak şekilde güncellenmeli ki sonraki stil task'ları (#253/#254/#255) hangi yöntemin emsal olduğunu (inline style değil, gömülü <style> + CSS class) doğru bilsin.",
+      "reason": "atdd.md satır 98-102 açıkça bu task'ın seçtiği yöntemin 'sonraki stil task'ları için emsal oluşturacağını' belirtiyor; belgelenen varsayım ile gerçekleşen implementasyon farklı olduğunda bir sonraki efektor subagent (Codex kotası yine tükenirse) yanlış emsali takip edebilir."
+    },
+    {
+      "severity": "low",
+      "category": "test-gap",
+      "file": "ui/src/components/onboarding/OnboardingScreen.test.tsx",
+      "issue": "AC-5 (WCAG kontrast) testi (satır 94-118) `getComputedStyle` ile gerçek render edilen butonu okumuyor; bunun yerine `#2563EB`/`#fff` sabit hex değerlerini elle kopyalayıp kontrast hesaplıyor. test_diff.md bunu zaten 'implementasyondan bağımsız' olarak işaretlemiş (satır 12, 20) — yani implementasyon öncesi de sonrası da PASS veriyor, gerçek bir doğrulama sağlamıyor.",
+      "better_approach": "AC-5 testi, AC-1 testinde zaten okunan `getComputedStyle(button).backgroundColor`/`color` değerlerini (rgb string'i hex'e çevirip) kontrast fonksiyonuna geçirmeli; böylece biri gelecekte CSS'teki `#2563EB` değerini yanlışlıkla değiştirirse AC-5 de kırılır.",
+      "reason": "Şu an AC-5, buton implementasyonundaki renk değerleriyle hiç bağlı değil — sadece 'seçilen sabitlerin matematiksel olarak doğru olduğunu' kanıtlıyor, 'butonun bu sabitleri kullandığını' kanıtlamıyor (o kısmı zaten AC-1'in ayrı assertion'ları karşılıyor, ama iki testin birbirinden bağımsız kopyalanmış sabitleri var — DRY ihlali + gerçek regresyon koruması eksik)."
+    },
+    {
+      "severity": "low",
+      "category": "architecture",
+      "file": "ui/src/components/onboarding/OnboardingScreen.tsx",
+      "issue": "`.onboarding-primary-btn` class'ı component gövdesi içinde global scope'lu bir `<style>` etiketiyle tanımlanıyor (CSS Modules/scoped stil yok). Şu an tek bir OnboardingScreen instance'ı olduğu için pratik çakışma riski düşük, ama plan.md bu tekniği 'Devam' düğmesi (#253) ve diğer onboarding öğeleri (#254/#255) için emsal ilan ettiğinden, isimlendirme çakışması (ör. iki farklı component'in de '-primary-btn' gibi genel bir sınıf adı seçmesi) ilerleyen task'larda global CSS sızıntısına yol açabilir.",
+      "better_approach": "İsimlendirme konvansiyonu erken netleştirilmeli (ör. her component kendi component-prefix'li class adı kullanır: `.onboarding-screen__primary-btn`) ya da CSS Modules'e geçiş DESIGN_DECISIONS.md'ye eklenmeli.",
+      "reason": "Proje henüz CSS dosya konvansiyonu seçmediği (plan.md satır 5-6) doğrulanmış durumda; bu task ilk somut CSS-in-component örneği olduğu için isimlendirme kuralı burada belirlenmezse sonraki 3 task aynı riski tekrar üretir."
+    }
+  ],
+  "strengths": [
+    "OnboardingScreen.tsx satır 50/53'te `:hover:not(:disabled)` ve `:active:not(:disabled)` kullanılarak disabled state'te hover/active renklerinin yanlışlıkla uygulanması engellenmiş — bu, atdd.md AC-3/AC-4 arasındaki olası çakışmayı doğru şekilde çözüyor.",
+    "chooseFolder/isReady/disabled mantığı hiç değişmemiş (plan.md satır 14 'mevcut davranış değişmiyor' vaadi kod incelemesiyle doğrulandı) — sadece görsel katman eklendi, davranışsal regresyon riski yok.",
+    "AC-2'nin e2e testindeki gerçek race condition (App.tsx'in async config/health zinciriyle Tab basışının yarışması) doğru teşhis edilip testin kendisine düzeltme uygulanmış, üretim kodunda gereksiz bir workaround eklenmemiş — bu doğru kök neden analizi ve minimal müdahale."
+  ],
+  "risks": [
+    "e2e testine eklenen `toBeEnabled()` bekleme adımı, gerçek kullanıcı senaryosunda (yavaş backend başlatma + hızlı Tab basışı) butonun hâlâ disabled iken odaklanabileceği bir zamanlama penceresini test kapsamı dışına almış olabilir; bu, bu task'ın kapsamı dışında (App.tsx zaten önceki task'ta doğru disabled state yönetiyor) ama gelecekte gözden geçirilmeye değer.",
+    "Global `<style>` etiketi component her render'da JSX'e dahil ediliyor; React aynı pozisyon/tip için reconcile ettiğinden pratikte performans sorunu yaratmıyor, ama component birden fazla kez mount/unmount edilirse (örn. router değişiminde) tarayıcının DOM'a tekrar tekrar aynı stil bloğunu eklemesi mümkün — mevcut kullanım tek seferlik onboarding ekranı olduğu için düşük risk."
+  ],
+  "caveman_review": {
+    "complexity": "low",
+    "unnecessary_files": 0,
+    "unnecessary_helpers": 0,
+    "unnecessary_abstractions": 0
+  },
+  "scope_review": {
+    "matches_atdd": true,
+    "scope_expansion": false
+  },
+  "ready_to_commit": {
+    "atdd_satisfied": true,
+    "tests_passed": true,
+    "no_critical_findings": true,
+    "scope_respected": true,
+    "caveman_satisfied": true,
+    "security_acceptable": true,
+    "maintainability_acceptable": true,
+    "no_blocking_risks": true
+  },
+  "verdict": "approve-with-changes"
+}

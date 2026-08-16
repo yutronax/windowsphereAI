@@ -67,4 +67,39 @@ test.describe('first-run folder onboarding', () => {
     await expect(page.getByRole('heading', { name: /klasör seç/i })).toHaveCount(0);
     await expect(page.getByTestId('main-chat-screen')).toBeVisible();
   });
+
+  // AC-2: klavye ile Tab yapılınca görünür bir odak halkası (outline) olmalı.
+  test('shows a visible focus ring on the "Klasör Seç" button when tabbed to (AC-2)', async ({ page }) => {
+    await page.goto('/');
+
+    const button = page.getByRole('button', { name: /klasör seç/i });
+    await expect(button).toBeEnabled();
+
+    await page.keyboard.press('Tab');
+
+    await expect(button).toBeFocused();
+
+    const outline = await button.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { style: style.outlineStyle, width: style.outlineWidth, color: style.outlineColor };
+    });
+
+    expect(outline.style).not.toBe('none');
+    expect(outline.width).toBe('2px');
+    expect(outline.color).not.toBe('transparent');
+  });
+
+  // AC-4: hover ve active durumlarında buton arka planı koyulaşmalı.
+  test('darkens the "Klasör Seç" button background on hover and active (AC-4)', async ({ page }) => {
+    await page.goto('/');
+
+    const button = page.getByRole('button', { name: /klasör seç/i });
+
+    await button.hover();
+    await expect(button).toHaveCSS('background-color', 'rgb(29, 78, 216)');
+
+    await page.mouse.down();
+    await expect(button).toHaveCSS('background-color', 'rgb(30, 64, 175)');
+    await page.mouse.up();
+  });
 });

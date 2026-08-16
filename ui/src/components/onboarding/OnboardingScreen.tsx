@@ -39,7 +39,30 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
           <button type="button" onClick={onRetry}>Tekrar dene</button>
         </>
       )}
-      <button type="button" onClick={chooseFolder} disabled={!isReady}>Klasör Seç</button>
+      <style>{`
+        .onboarding-primary-btn {
+          height: 44px;
+          border-radius: 8px;
+          background-color: #2563EB;
+          color: #fff;
+          border: none;
+        }
+        .onboarding-primary-btn:hover:not(:disabled) {
+          background-color: #1D4ED8;
+        }
+        .onboarding-primary-btn:active:not(:disabled) {
+          background-color: #1E40AF;
+        }
+        .onboarding-primary-btn:focus-visible {
+          outline: 2px solid #1E40AF;
+          outline-offset: 2px;
+        }
+        .onboarding-primary-btn:disabled {
+          background-color: #94A3B8;
+          cursor: not-allowed;
+        }
+      `}</style>
+      <button type="button" className="onboarding-primary-btn" onClick={chooseFolder} disabled={!isReady}>Klasör Seç</button>
       {selectedFolder && <p data-testid="selected-folder-path" title={selectedFolder}>{truncateWindowsPath(selectedFolder, 80)}</p>}
       <button type="button" onClick={onContinue} disabled={!isReady || !selectedFolder}>Devam</button>
     </main>
