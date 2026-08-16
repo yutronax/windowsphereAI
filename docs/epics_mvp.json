@@ -1,0 +1,165 @@
+{
+  "epics": [
+    {
+      "name": "Kullanıcı girişi ve ilk kayıt akışı",
+      "description": "Kullanıcının ilk açılışta izin verilen çalışma klasörünü seçtiği, doğal dil isteğini güvenle başlatabildiği ve hataları anlaşılır biçimde gördüğü MVP başlangıç akışı.",
+      "priority": "high",
+      "tasks": [
+        {
+          "title": "İlk açılışta çalışma klasörü seçimi ekranını göster",
+          "description": "React ekranı Tauri penceresinde, FastAPI sidecar hazır olduğunda görünmelidir. Seçilen klasör, sonraki dosya işlemleri için ALLOWED_PATHS kaynağı olacaktır.",
+          "priority": "high"
+        },
+        {
+          "title": "Klasör seçici düğmesini birincil eylem olarak tasarla",
+          "description": "Düğme 44px minimum yüksekliğe, 8px border-radius'a, beyaz metne ve #2563EB arka plana sahip olmalıdır. Klavye odağında 2px görünür odak halkası göstermelidir.",
+          "priority": "high"
+        },
+        {
+          "title": "Seçilen klasör yolunu salt okunur özet alanında göster",
+          "description": "Uzun Windows yolları tek satırda üç noktayla kısaltılmalı, tam yol hover veya klavye odağında erişilebilir olmalıdır. Kullanıcı seçimi doğrulamadan önce hangi klasöre izin verdiğini açıkça görmelidir.",
+          "priority": "high"
+        },
+        {
+          "title": "İlk istek metin kutusuna 12px border-radius ve #E5E7EB kenarlık ekle",
+          "description": "Metin kutusu 16px gövde yazısı, en az 120px yükseklik ve 16px iç boşluk kullanmalıdır. Odaklandığında #2563EB kenarlık ve hafif odak gölgesi görünmelidir.",
+          "priority": "low"
+        },
+        {
+          "title": "İstek alanında yönlendirici placeholder metni göster",
+          "description": "Placeholder, örneğin “Bu klasördeki PDF'leri tarihe göre sırala” demeli ve gerçek metinden daha düşük kontrastta olmalıdır. Metin girildiğinde tamamen kaybolmalı ve etiket görünür kalmalıdır.",
+          "priority": "low"
+        },
+        {
+          "title": "Boş istek gönderimini engelle ve alan içi hata mesajı göster",
+          "description": "Boşluklardan oluşan değer de boş kabul edilmeli; gönderim yapılmamalıdır. Alan #DC2626 kenarlıkla vurgulanmalı ve altında “Devam etmek için bir istek yazın.” mesajı gösterilmelidir.",
+          "priority": "high"
+        },
+        {
+          "title": "Geçersiz veya erişilemeyen klasör seçimini açıklayıcı hata ile reddet",
+          "description": "Entry katmanı yolu normalize etmeli ve klasörün erişilebilir olduğunu doğrulamalıdır. Hata mesajı seçimi korumalı, kullanıcıya yeniden seçim düğmesi sunmalı ve diske yazma başlatmamalıdır.",
+          "priority": "high"
+        },
+        {
+          "title": "Formu klavye ile eksiksiz gezilebilir yap",
+          "description": "Tab sırası klasör seçimi, istek alanı ve gönder düğmesi şeklinde olmalı; Enter gönderimi yalnızca geçerli formda başlatmalıdır. Hata sonrası odak ilgili hatalı alana taşınmalıdır.",
+          "priority": "high"
+        },
+        {
+          "title": "İlk isteği SessionContext oluşturmak için yerel API'ye gönder",
+          "description": "Frontend seçili klasör ve normalize edilmiş metni 127.0.0.1:8000 üzerindeki Entry uç noktasına iletmelidir. Backend oturum bağlamını kurmalı ve yalnızca doğrulanmış girdiyi Decision katmanına aktarabilmelidir.",
+          "priority": "high"
+        }
+      ]
+    },
+    {
+      "name": "Ana sohbet arayüzü",
+      "description": "Kullanıcının isteğini, planı, güvenlik kararını ve işlem sonucunu takip edip planı onaylayabildiği erişilebilir ana sohbet deneyimi.",
+      "priority": "high",
+      "tasks": [
+        {
+          "title": "Sohbet alanını kullanıcı ve asistan mesajları için dikey akış olarak oluştur",
+          "description": "Mesaj listesi Tauri/React içinde ana alanı doldurmalı ve yazma alanını sabit alt bölgede tutmalıdır. Yeni mesajlar sıralı, seçilebilir ve ekran okuyucuya anlamlı biçimde sunulmalıdır.",
+          "priority": "high"
+        },
+        {
+          "title": "Kullanıcı mesaj balonlarını sağa hizalı mavi yüzeyle biçimlendir",
+          "description": "Balonlar en fazla okunabilir satır genişliğinde, 16px iç boşlukta ve 14px köşe yarıçapında olmalıdır. Koyu mavi yüzey üzerindeki beyaz metin erişilebilir kontrast sağlamalıdır.",
+          "priority": "low"
+        },
+        {
+          "title": "Asistan mesaj balonlarını sola hizalı nötr yüzeyle biçimlendir",
+          "description": "Asistan balonları #F3F4F6 yüzey, koyu metin ve 14px köşe yarıçapı kullanmalıdır. Plan, hata ve sonuç metinleri taranabilir başlıklar ve kısa paragraflar halinde gösterilmelidir.",
+          "priority": "low"
+        },
+        {
+          "title": "Plan adımlarını numaralı ve dosya etkisini belirten kartta göster",
+          "description": "LLM plan-skeleton yanıtındaki her adım sıra numarası, işlem türü, hedef klasör ve etkilenecek dosya sayısıyla sunulmalıdır. Kullanıcı, onay vermeden önce işlemin kapsamını açıkça anlayabilmelidir.",
+          "priority": "high"
+        },
+        {
+          "title": "Plan onay düğmesini yalnızca güvenlikten geçen plan için etkinleştir",
+          "description": "Birincil “Planı onayla” düğmesi 44px minimum yüksekliğe ve belirgin odak durumuna sahip olmalıdır. Security katmanı reddederse düğme devre dışı kalmalı ve ret nedeni görünmelidir.",
+          "priority": "high"
+        },
+        {
+          "title": "Planı değiştir düğmesinin sohbet girişine düzenleme bağlamı eklemesini sağla",
+          "description": "“Planı değiştir” seçildiğinde onay verilmez; yazma alanı odaklanır ve kullanıcı talebi düzenlemeye yönlendiren kısa bir ipucu gösterir. Yeni mesaj önceki planı geçersiz kılar ve yeni plan üretim akışını başlatır.",
+          "priority": "high"
+        },
+        {
+          "title": "Plan üretilirken gönderimi kilitleyen yükleniyor durumunu göster",
+          "description": "Asistan tarafında hareket azaltma tercihine saygılı üç nokta göstergesi ve “Plan hazırlanıyor…” metni görünmelidir. Aynı isteğin iki kez gönderilmesini önlemek için giriş ve gönder düğmesi işlem bitene kadar devre dışı kalmalıdır.",
+          "priority": "high"
+        },
+        {
+          "title": "Yeni mesajlarda kullanıcı alttaysa sohbeti otomatik kaydır",
+          "description": "Kullanıcı en alttan uzaklaşmışsa otomatik kaydırma yapılmamalı; bunun yerine “En yeni mesaja dön” düğmesi gösterilmelidir. Kullanıcı alttaysa yeni plan, durum ve sonuç mesajları görünür kalacak şekilde yumuşakça kaydırılmalıdır.",
+          "priority": "high"
+        },
+        {
+          "title": "Sohbet hatalarını yeniden deneme eylemiyle ayrı durum olarak göster",
+          "description": "Plan üretimi veya yerel API hatası başarısız balonda kısa neden ve “Tekrar dene” düğmesiyle görünmelidir. Başarısızlık sessizce kaybolmamalı ve işlem onayı asla açılmamalıdır.",
+          "priority": "high"
+        }
+      ]
+    },
+    {
+      "name": "PDF'leri tarihe göre sıralama uçtan uca dosya operasyonu",
+      "description": "“Bu klasördeki PDF'leri tarihe göre sırala” isteğinin güvenli planlamadan onaylı uygulama, atomik geri alma ve sonuç gösterimine kadar tek MVP operasyonu.",
+      "priority": "critical",
+      "tasks": [
+        {
+          "title": "PDF sıralama isteğini Entry katmanında normalize et ve oturum klasörüyle bağla",
+          "description": "İstek metni trimlenmeli, oturumun seçtiği klasör bağlama eklenmeli ve boş/geçersiz girdi reddedilmelidir. Kullanıcı metni doğrudan dosya sistemi aracına aktarılmamalıdır.",
+          "priority": "high"
+        },
+        {
+          "title": "Pinlenmiş LLM modeliyle yalnızca metadata kullanan plan-skeleton üret",
+          "description": "FastAPI Decision katmanı, env ile override edilebilen pinlenmiş model kimliğiyle PDF dosya adı ve tarih metadata'sından adım adım plan üretmelidir. PDF içerikleri bütünüyle LLM'e gönderilmemeli; plan üretilemezse net hata dönmelidir.",
+          "priority": "high"
+        },
+        {
+          "title": "Planı tarih kaynaklarını ve hedef klasör yapısını açıkça tanımlayacak şekilde doğrula",
+          "description": "Plan, tarih önceliğini (dosya oluşturulma tarihi veya güvenilir metadata), artan/azalan sıralamayı ve örneğin YYYY-MM hedef klasörlerini açıkça içermelidir. Belirsiz ya da desteklenmeyen plan güvenlik incelemesine geçmemelidir.",
+          "priority": "high"
+        },
+        {
+          "title": "Her planlanan taşıma için ALLOWED_PATHS whitelist kontrolü uygula",
+          "description": "Security Gate kaynak PDF'lerin ve oluşturulacak hedef klasörlerin kullanıcının izin verdiği kök altında kaldığını canonical path üzerinden doğrulamalıdır. Whitelist dışındaki tek operasyon bile tüm planı reddetmelidir.",
+          "priority": "critical"
+        },
+        {
+          "title": "Planlanan yolları derinlik ve sistem-dosyası kurallarına karşı denetle",
+          "description": "Security katmanı aşırı iç içe klasör hedeflerini, sistem klasörlerini ve korunan dosyaları reddetmelidir. Ret halinde hiçbir klasör oluşturulmamalı veya dosya taşınmamalıdır.",
+          "priority": "critical"
+        },
+        {
+          "title": "Güvenlikten geçen planı kullanıcı onayı olmadan çalıştırma",
+          "description": "Security sonucu ve plan özeti sohbet kartında görünmeli; Orchestrator yalnızca açık “Planı onayla” eyleminden sonra çağrılmalıdır. Reddetme veya plan değişikliği işlem kuyruğunu temizlemelidir.",
+          "priority": "critical"
+        },
+        {
+          "title": "Onaylanan taşıma adımlarını tek transaction içinde Orchestrator ile uygula",
+          "description": "Operation katmanı hedef tarih klasörlerini oluşturup PDF'leri plan sırasıyla taşımalıdır. Her adımın kaynak, hedef ve durum bilgisi transaction'a bağlanmalıdır.",
+          "priority": "critical"
+        },
+        {
+          "title": "Her dosya hareketi için SQLite FileOperation kaydı ve backup_path oluştur",
+          "description": "SQLAlchemy üzerinden transaction ve FileOperation kayıtları kaynak/hedef yolları, zaman damgası ve fiziksel yedek konumunu saklamalıdır. Bu kayıtlar işlemin denetlenmesini ve geri alınmasını mümkün kılar.",
+          "priority": "high"
+        },
+        {
+          "title": "Kısmi hata halinde tamamlanmış taşıma adımlarını ters sırayla geri al",
+          "description": "Bir taşıma veya kayıt başarısız olursa Orchestrator önceki adımları backup_path ve işlem kayıtlarını kullanarak atomik biçimde geri çevirmelidir. Sohbete kısmi başarı değil, geri alma sonucu ve net hata durumu dönmelidir.",
+          "priority": "critical"
+        },
+        {
+          "title": "Başarılı işlem sonucunu taşınan dosya sayısı ve hedef klasörlerle sohbet içinde göster",
+          "description": "Sonuç kartı kaç PDF'nin işlendiğini, oluşturulan tarih klasörlerini ve tamamlanma durumunu göstermelidir. Varsa hata içermeyen özet, kullanıcıya takip eden bir isteği yazabileceği etkin giriş alanıyla birlikte sunulmalıdır.",
+          "priority": "high"
+        }
+      ]
+    }
+  ]
+}
