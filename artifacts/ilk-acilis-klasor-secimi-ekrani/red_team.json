@@ -1,0 +1,36 @@
+{
+  "security_findings": [
+    {
+      "finding": "backend/config.py load_setup_config() calls json.load(file) and config.get(...) with no try/except around JSONDecodeError or AttributeError/TypeError. A partially-written or corrupted config.json (app crash mid-write, disk-full, AV lock, hand-edit) raises an unhandled exception inside the /api/config route handler, so FastAPI returns a raw 500 instead of treating it like a missing file.",
+      "severity": "medium",
+      "scenario": "save_setup_config() (wired up in a later task, #258) writes via path.write_text(...) which is not atomic (no temp-file+rename). If the process is killed mid-write, config.json is left truncated/invalid JSON. Next launch, GET /api/config throws JSONDecodeError uncaught, and no test in backend/tests/test_config.py exercises a corrupted-file scenario, so this regressed path is completely unverified."
+    },
+    {
+      "finding": "backend/main.py has no CORS middleware configured, while the product architecture (Tauri desktop shell + FastAPI sidecar, per DESIGN_DECISIONS.md) means the webview origin (tauri://localhost) and the sidecar origin (http://127.0.0.1:<port>) will differ in the packaged app. Every fetch call in the frontend (waitForBackendHealth, App.tsx config check) uses a bare relative path, which only works because tests serve frontend and backend from the same origin (Playwright dev server mocks, vitest mocks) rather than the real two-process architecture.",
+      "severity": "high",
+      "scenario": "App is packaged and shipped. The Tauri window loads the built UI from a tauri:// origin while the FastAPI sidecar listens on 127.0.0.1:PORT. Relative fetch('/api/health') resolves against the wrong origin or gets CORS-blocked, so onboarding is stuck on Baslatiliyor... forever, then flips to backend_timeout even though the backend process is actually running fine - the app looks completely broken for every real user on first launch, yet all automated tests stay green because every single one of them (ui/e2e/onboarding.spec.ts via page.route, backendHealth.test.ts via fetch mocks) replaces the real backend with a mock instead of exercising backend/main.py."
+    },
+    {
+      "finding": "config_path() uses os.environ['APPDATA'] (bracket access, raises KeyError if unset) instead of os.environ.get with a fallback or explicit platform check.",
+      "severity": "low",
+      "scenario": "Any environment without APPDATA set (a stripped CI runner, a locked-down service account, or a future non-Windows dev environment) causes every call to /api/config or /api/health-adjacent config logic to throw an unhandled KeyError, surfaced to the client as a bare 500 with no diagnosable message."
+    }
+  ],
+  "alternative_approach": {
+    "recommended_direction": "The task's own Test Strategy in atdd.md promises unit 20 / integration 30 / e2e 50, implying real cross-boundary verification, but every test that touches the frontend-backend contract mocks the backend instead of calling it (page.route('**/api/health', ...) in onboarding.spec.ts, fetch mocks in backendHealth.test.ts). Recommend adding a real integration test that boots backend/main.py's FastAPI app with TestClient/httpx and drives the same relative-path fetch logic the frontend uses, plus wiring an explicit CORS/base-URL story between the Tauri sidecar and the webview now, before src-tauri/ is scaffolded in a later task.",
+    "files_that_should_change": [
+      "backend/main.py - add CORSMiddleware (or document and verify why Tauri's asset protocol makes it unnecessary - right now that's assumed, not proven) so AC-4/AC-5 hold in the packaged app, not just in the dev-server test harness.",
+      "backend/config.py - load_setup_config() should catch (json.JSONDecodeError, AttributeError, TypeError, OSError) and treat a corrupt file the same as a missing one (return None), applying the same 'no silent broken state' discipline the ATDD already required of the frontend Cancel case.",
+      "ui/src/lib/backendHealth.ts (or a new ui/src/lib/apiBase.ts) - resolve health/config fetches against an explicit backend base URL injected at build/runtime instead of relying on same-origin relative paths, which only work in the mocked test setup.",
+      "a new backend/tests/test_main_integration.py using FastAPI TestClient, added to the same pytest run as test_config.py, so the 'integration: 30%' promised in atdd.md is not entirely substituted by mocked e2e tests."
+    ],
+    "rationale": "The single most operationally risky part of this task - whether the real sidecar actually answers the real frontend across a process/origin boundary - is exactly the part left unverified by all 17 green tests. Catching this now, while the codebase is 6 files, is far cheaper than discovering it after src-tauri/ scaffolding lands and the onboarding screen silently fails for every real user on first launch."
+  },
+  "approved_points": [
+    "OnboardingScreen.tsx correctly implements the no-silent-success discipline atdd.md required for AC-3: the typeof folder === 'string' guard means a Cancelled dialog (null) never mutates selectedFolder, so Devam stays disabled and no state is silently changed.",
+    "backendHealth.ts's waitForBackendHealth guards against double-resolution races with a settled flag and clears both the retry timer and the deadline timer on completion, avoiding a common setTimeout-leak/double-resolve bug in polling code.",
+    "config.py's save_setup_config calls path.parent.mkdir(parents=True, exist_ok=True) before writing, correctly handling the first-run case where %APPDATA%/windows-ai-files/ does not yet exist.",
+    "The ATDD's explicit scoping-out of folder-path validation (Saga #256) and of persisting the selection (Saga #258, onContinue is a documented no-op in App.tsx) is honestly reflected in the code rather than half-implemented, avoiding hidden scope creep."
+  ],
+  "overall_assessment": "The frontend-only state logic (Cancel handling, disabled-button gating, timeout polling) is correctly implemented and well covered by unit/e2e tests. But the task's biggest real-world risk - the FastAPI sidecar actually being reachable from the packaged Tauri webview, with no CORS middleware and relative-path fetches assuming same-origin - is untested by every automated test in this suite, all of which mock the backend rather than exercise it. Combined with an unguarded JSON parse in config.py that turns a corrupted config file into an unhandled 500, this task is green on paper but has not proven the actual frontend-backend contract under AC-4/AC-5. Recommend a real FastAPI TestClient integration test and CORS/base-URL wiring before considering this fully verified."
+}

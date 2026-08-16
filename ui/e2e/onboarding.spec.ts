@@ -1,0 +1,70 @@
+import { expect, test } from '@playwright/test';
+
+test.describe('first-run folder onboarding', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/api/health', (route) => route.fulfill({ json: { status: 'ok' } }));
+    await page.route('**/api/config', (route) => route.fulfill({ status: 404 }));
+  });
+
+  test('shows an enabled folder chooser within 500ms on a first run with a ready backend', async ({ page }) => {
+    // Warm-up navigation so Vite's cold-compile time isn't counted in the measured render time.
+    await page.goto('/');
+    await expect(page.getByRole('heading', { name: /klasör seç/i })).toBeVisible();
+
+    const loadedAt = Date.now();
+    await page.reload();
+
+    await expect(page.getByRole('heading', { name: /klasör seç/i })).toBeVisible({ timeout: 500 });
+    expect(Date.now() - loadedAt).toBeLessThan(500);
+    await expect(page.getByRole('button', { name: /klasör seç/i })).toBeEnabled();
+    await expect(page.getByRole('button', { name: /devam/i })).toBeDisabled();
+  });
+
+  test('shows the chosen native-dialog folder and enables Continue', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+        invoke: async (cmd: string) =>
+          cmd === 'plugin:dialog|open' ? 'C:\\Users\\Yusuf\\Documents\\Müvekkiller' : Promise.reject(new Error(`unmocked command: ${cmd}`)),
+      };
+    });
+    await page.goto('/');
+
+    await page.getByRole('button', { name: /klasör seç/i }).click();
+
+    await expect(page.getByTestId('selected-folder-path')).toHaveText('C:\\Users\\Yusuf\\Documents\\Müvekkiller');
+    await expect(page.getByRole('button', { name: /devam/i })).toBeEnabled();
+  });
+
+  test('leaves Continue disabled when the native dialog is cancelled', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+        invoke: async (cmd: string) => (cmd === 'plugin:dialog|open' ? null : Promise.reject(new Error(`unmocked command: ${cmd}`))),
+      };
+    });
+    await page.goto('/');
+
+    await page.getByRole('button', { name: /klasör seç/i }).click();
+
+    await expect(page.getByTestId('selected-folder-path')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /devam/i })).toBeDisabled();
+  });
+
+  test('disables onboarding while the backend is starting, then shows retry after ten seconds', async ({ page }) => {
+    await page.route('**/api/health', (route) => route.abort('failed'));
+    await page.goto('/');
+
+    await expect(page.getByText(/başlatılıyor/i)).toBeVisible();
+    await expect(page.getByRole('button', { name: /klasör seç/i })).toBeDisabled();
+    await expect(page.getByRole('button', { name: /devam/i })).toBeDisabled();
+    await expect(page.getByText(/backend.*(ulaşılamadı|zaman aşımı)/i)).toBeVisible({ timeout: 10_500 });
+    await expect(page.getByRole('button', { name: /tekrar dene/i })).toBeVisible();
+  });
+
+  test('skips onboarding entirely when a saved config already exists', async ({ page }) => {
+    await page.route('**/api/config', (route) => route.fulfill({ json: { selectedFolder: 'C:\\Users\\Yusuf\\Documents' } }));
+    await page.goto('/');
+
+    await expect(page.getByRole('heading', { name: /klasör seç/i })).toHaveCount(0);
+    await expect(page.getByTestId('main-chat-screen')).toBeVisible();
+  });
+});
