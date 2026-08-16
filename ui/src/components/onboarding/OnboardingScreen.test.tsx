@@ -204,3 +204,82 @@ describe('selected-folder-path CSS truncation (AC-1, AC-4)', () => {
     expect(pathElement).toHaveTextContent('C:\\Kısa');
   });
 });
+
+// AC-1..AC-6 (bos-istek-engelleme / Saga #255): boş/whitespace istek gönderimi
+// engellenmeli, alan içi #DC2626 kenarlık + hata mesajı gösterilmeli.
+describe('empty request validation (bos-istek-engelleme)', () => {
+  async function renderWithFolderSelected(onContinue = vi.fn()) {
+    openFolderDialog.mockResolvedValue('C:\\Users\\Yusuf\\Documents\\Müvekkiller');
+    render(<OnboardingScreen backendStatus="ready" onContinue={onContinue} />);
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+    await screen.findByTestId('selected-folder-path');
+    return { onContinue };
+  }
+
+  it('shows no error and calls onContinue when the request text is non-empty (AC-1)', async () => {
+    const { onContinue } = await renderWithFolderSelected();
+    const textarea = screen.getByTestId('request-textarea');
+    fireEvent.change(textarea, { target: { value: 'Bu klasördeki PDF\'leri tarihe göre sırala' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /devam/i }));
+
+    expect(screen.queryByText('Devam etmek için bir istek yazın.')).not.toBeInTheDocument();
+    expect(textarea).not.toHaveClass('has-error');
+    expect(onContinue).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a red border and inline error, and does not call onContinue when the request is empty (AC-2)', async () => {
+    const { onContinue } = await renderWithFolderSelected();
+
+    fireEvent.click(screen.getByRole('button', { name: /devam/i }));
+
+    const textarea = screen.getByTestId('request-textarea');
+    expect(getComputedStyle(textarea).borderColor).toBe('rgb(220, 38, 38)');
+    expect(screen.getByText('Devam etmek için bir istek yazın.')).toBeVisible();
+    expect(onContinue).not.toHaveBeenCalled();
+  });
+
+  it('treats whitespace-only text the same as empty (AC-3)', async () => {
+    const { onContinue } = await renderWithFolderSelected();
+    const textarea = screen.getByTestId('request-textarea');
+    fireEvent.change(textarea, { target: { value: '   \n\t  ' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /devam/i }));
+
+    expect(getComputedStyle(textarea).borderColor).toBe('rgb(220, 38, 38)');
+    expect(screen.getByText('Devam etmek için bir istek yazın.')).toBeVisible();
+    expect(onContinue).not.toHaveBeenCalled();
+  });
+
+  it('clears the error as soon as the user types non-empty content (AC-4)', async () => {
+    await renderWithFolderSelected();
+    const textarea = screen.getByTestId('request-textarea');
+    fireEvent.click(screen.getByRole('button', { name: /devam/i }));
+    expect(screen.getByText('Devam etmek için bir istek yazın.')).toBeVisible();
+
+    fireEvent.change(textarea, { target: { value: 'artık boş değil' } });
+
+    expect(screen.queryByText('Devam etmek için bir istek yazın.')).not.toBeInTheDocument();
+    expect(getComputedStyle(textarea).borderColor).not.toBe('rgb(220, 38, 38)');
+  });
+
+  it('renders the error message inside an aria-live="polite" region (AC-5)', async () => {
+    await renderWithFolderSelected();
+    fireEvent.click(screen.getByRole('button', { name: /devam/i }));
+
+    const message = screen.getByText('Devam etmek için bir istek yazın.');
+    expect(message.closest('[aria-live="polite"]')).not.toBeNull();
+  });
+
+  it('re-shows the error if the user clears the field again and resubmits (AC-6)', async () => {
+    await renderWithFolderSelected();
+    const textarea = screen.getByTestId('request-textarea');
+    fireEvent.click(screen.getByRole('button', { name: /devam/i }));
+    fireEvent.change(textarea, { target: { value: 'geçici metin' } });
+    fireEvent.change(textarea, { target: { value: '   ' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /devam/i }));
+
+    expect(screen.getByText('Devam etmek için bir istek yazın.')).toBeVisible();
+  });
+});

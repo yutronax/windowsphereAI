@@ -202,4 +202,44 @@ test.describe('first-run folder onboarding', () => {
     await expect(textarea).toHaveValue('');
     await expect(textarea).toHaveAttribute('placeholder', 'Bu klasördeki PDF\'leri tarihe göre sırala');
   });
+
+  // AC-2 (bos-istek-engelleme / Saga #255): boş istekle Devam'a basınca #DC2626 kenarlık + hata mesajı görünmeli.
+  test('shows a red border and inline error when Continue is clicked with an empty request (AC-2)', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+        invoke: async (cmd: string) =>
+          cmd === 'plugin:dialog|open' ? 'C:\\Users\\Yusuf\\Documents\\Müvekkiller' : Promise.reject(new Error(`unmocked command: ${cmd}`)),
+      };
+    });
+    await page.goto('/');
+    await page.getByRole('button', { name: /klasör seç/i }).click();
+
+    await page.getByRole('button', { name: /devam/i }).click();
+
+    const textarea = page.getByTestId('request-textarea');
+    await expect(textarea).toHaveCSS('border-color', 'rgb(220, 38, 38)');
+    await expect(page.getByText('Devam etmek için bir istek yazın.')).toBeVisible();
+  });
+
+  // AC-4 (bos-istek-engelleme / Saga #255): hata gösterilirken yazmaya başlayınca kenarlık/mesaj anında kalkmalı.
+  test('clears the red border and error as soon as the user starts typing (AC-4)', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+        invoke: async (cmd: string) =>
+          cmd === 'plugin:dialog|open' ? 'C:\\Users\\Yusuf\\Documents\\Müvekkiller' : Promise.reject(new Error(`unmocked command: ${cmd}`)),
+      };
+    });
+    await page.goto('/');
+    await page.getByRole('button', { name: /klasör seç/i }).click();
+    await page.getByRole('button', { name: /devam/i }).click();
+
+    const textarea = page.getByTestId('request-textarea');
+    await expect(page.getByText('Devam etmek için bir istek yazın.')).toBeVisible();
+
+    await textarea.fill('bu klasördeki faturaları müşteriye göre grupla');
+
+    await expect(page.getByText('Devam etmek için bir istek yazın.')).toHaveCount(0);
+    // fill() bırakır textarea odaklı halde; odak kenarlığı (#2563EB) hâlâ geçerli, hata kenarlığı (#DC2626) değil.
+    await expect(textarea).toHaveCSS('border-color', 'rgb(37, 99, 235)');
+  });
 });

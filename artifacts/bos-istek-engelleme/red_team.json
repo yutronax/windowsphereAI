@@ -1,0 +1,31 @@
+{
+  "task_slug": "bos-istek-engelleme",
+  "saga_task_id": 255,
+  "reviewed_by": "obss-red-team subagent (bağımsız, Codex kotası dolu olduğu için Bölüm C override kapsamında çağrıldı)",
+  "reviewed_at": "2026-08-17",
+  "security_findings": [
+    {
+      "finding": "trim() zero-width Unicode karakterleri (örn. U+200B, U+FEFF) temizlemiyor; sadece bu tür karakterlerden oluşan bir istek görsel olarak boş görünse de geçerli sayılıp onContinue() tetikleyebilir.",
+      "severity": "low",
+      "scenario": "Kullanıcı zero-width space içeren bir metni yapıştırırsa (requestText = '\\u200B'), trim() !== '' olduğu için hata gösterilmez ve onContinue() çağrılır — görevin amacını (boş isteği engelleme) dolaylı olarak delen düşük olasılıklı bir durum."
+    },
+    {
+      "finding": "aria-live=\"polite\" container'ı sadece isRequestEmpty true olduğunda DOM'a ekleniyor (koşullu mount), her zaman DOM'da bulunan boş bir container'ın içeriğinin değişmesi yerine.",
+      "severity": "low",
+      "scenario": "Bazı ekran okuyucu/tarayıcı kombinasyonları (eski NVDA+Firefox, bazı JAWS sürümleri), içeriğiyle birlikte yeni eklenen bir aria-live node'unu güvenilir şekilde duyurmayabilir — container'ın önceden var olup sadece içeriğinin değişmesini bekler. Unit test (`.closest('[aria-live=\"polite\"]')` varlığı) bu farkı yakalayamıyor."
+    }
+  ],
+  "approved_points": [
+    "21/21 unit test, 16/16 e2e test, tsc --noEmit bağımsız olarak yeniden çalıştırılıp doğrulandı.",
+    "git status ile tam olarak 3 dosyanın değiştiği, App.tsx/package.json'a dokunulmadığı teyit edildi.",
+    "CSS özgüllük çözümü (.has-error:focus, 0,3,0) elle doğrulandı — gerçekten doğru ve deterministik.",
+    "onContinue çağrı mantığında race condition yok, senkron ve tutarlı.",
+    "Test/AC eşlemesi gerçek, anlamlı assertion'lara dayanıyor (rubber-stamp değil).",
+    "verify_report.md'deki node_deps FAIL değerlendirmesi (bu task'a ait değil) doğru."
+  ],
+  "overall_assessment": "code_diff.md/test_diff.md/verify_report.md iddiaları gerçek diff ve bağımsız test koşumlarıyla birebir örtüşüyor, abartı/eksik beyan yok. İki düşük öncelikli, engelleyici olmayan bulgu var (zero-width whitespace, aria-live mount şekli) — bu task'ın kapsamı (saf client-side, backend validasyonu yok) dışında kalan küçük iyileştirme önerileri.",
+  "ready_to_commit": {
+    "decision": "evet",
+    "gerekce": "Tüm iddialar bağımsız doğrulandı, kapsam taşması yok, testler yeşil. İki low-severity bulgu commit'i engellemiyor, kullanıcıya takip notu olarak iletildi."
+  }
+}

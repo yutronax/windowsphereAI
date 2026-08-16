@@ -44,3 +44,38 @@ ready_to_commit: true).
 olarak tekrarlanıyor (component, unit test, e2e test). Saga #257/#258 veya
 i18n bu ekrana dokunursa, ortak bir sabite (`PLACEHOLDER_TEXT` gibi)
 çıkarılması önerilir — bu task'ın dar kapsamı için gerekli görülmedi.
+
+## bos-istek-engelleme (Saga #255, epic #23)
+
+**Codex kotası hâlâ dolu (2026-09-15'e kadar).** #254'teki gibi, `saga` skill
+Bölüm C override'ı uygulandı: testler VE implementasyon Claude (ana asistan)
+tarafından doğrudan yazıldı, `test-copilot`/`code-copilot` (Codex) çağrılmadı.
+Bağımsız doğrulama yine `obss-red-team` subagent'ı ile yapıldı — gerçek
+`git diff`'i code_diff.md/test_diff.md iddialarıyla karşılaştırdı, 21 unit +
+16 e2e testi ve `tsc --noEmit`'i kendi bağlamında yeniden çalıştırıp PASS
+buldu (verdict: ready_to_commit: evet).
+
+**CSS özgüllük tuzağı önceden öngörüldü ve çözüldü.** `.onboarding-textarea:focus`
+(odak kenarlığı, mavi) ile yeni `.onboarding-textarea.has-error` (hata
+kenarlığı, kırmızı) aynı CSS özgüllüğüne (0,2,0) sahipti — hangisinin
+kazanacağı sadece stylesheet'teki tanım sırasına bağlı kalırdı (kırılgan).
+`.onboarding-textarea.has-error:focus` (0,3,0) eklenerek hata durumunun
+odaklanmışken de kırmızı kalması garanti edildi; red-team bunu elle
+doğrulayıp doğru bulduğunu teyit etti.
+
+**Codex vision-test de kota nedeniyle kullanılamadı.** Standart `vision-test`
+skill'i de Codex'e bağımlı olduğu için, görsel doğrulama Codex vision yerine
+gerçek Vite dev server + Playwright ile alınan bir ekran görüntüsünün
+(`artifacts/bos-istek-engelleme/empty_request_error_state.png`) Claude
+tarafından doğrudan incelenmesiyle yapıldı — bu istisna verify_report.md'de
+açıkça not edildi.
+
+**Kalıcı öneri (red-team'den, bu task'ta uygulanmadı — low severity).**
+(1) `trim()` zero-width Unicode karakterleri (ör. U+200B) temizlemiyor,
+sadece bu tür karakterlerden oluşan bir istek teknik olarak "boş değil"
+sayılabilir. (2) `aria-live="polite"` container'ı koşullu mount ediliyor
+(her zaman DOM'da olup sadece içeriği değişen bir container yerine) — bazı
+ekran okuyucu/tarayıcı kombinasyonlarında duyuru güvenilirliğini
+etkileyebilir. İkisi de bu task'ın dar kapsamı (client-side, backend
+validasyonu yok) için engelleyici değil, ayrı bir iyileştirme task'ı olarak
+değerlendirilebilir.

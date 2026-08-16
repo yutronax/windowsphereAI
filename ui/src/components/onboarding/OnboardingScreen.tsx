@@ -14,12 +14,26 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
   const [isFocused, setIsFocused] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [requestText, setRequestText] = useState('');
+  const [isRequestEmpty, setIsRequestEmpty] = useState(false);
   const isPathTooltipVisible = isFocused || isHovered;
   const isReady = backendStatus === 'ready';
 
   async function chooseFolder() {
     const folder = await open({ directory: true, multiple: false });
     if (typeof folder === 'string') setSelectedFolder(folder);
+  }
+
+  function handleRequestTextChange(value: string) {
+    setRequestText(value);
+    if (isRequestEmpty && value.trim() !== '') setIsRequestEmpty(false);
+  }
+
+  function handleContinueClick() {
+    if (requestText.trim() === '') {
+      setIsRequestEmpty(true);
+      return;
+    }
+    onContinue();
   }
 
   return (
@@ -77,6 +91,18 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
         .onboarding-textarea::placeholder {
           color: #9CA3AF;
         }
+        .onboarding-textarea.has-error {
+          border-color: #DC2626;
+        }
+        .onboarding-textarea.has-error:focus {
+          border-color: #DC2626;
+          box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.1);
+        }
+        .onboarding-error-message {
+          color: #DC2626;
+          font-size: 14px;
+          margin-top: 4px;
+        }
       `}</style>
       <button type="button" className="onboarding-primary-btn" onClick={chooseFolder} disabled={!isReady}>Klasör Seç</button>
       {selectedFolder && (
@@ -101,12 +127,17 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
       <textarea
         data-testid="request-textarea"
         aria-label="Dosya işlemi isteği"
-        className="onboarding-textarea"
+        className={isRequestEmpty ? 'onboarding-textarea has-error' : 'onboarding-textarea'}
         placeholder="Bu klasördeki PDF'leri tarihe göre sırala"
         value={requestText}
-        onChange={(e) => setRequestText(e.target.value)}
+        onChange={(e) => handleRequestTextChange(e.target.value)}
       />
-      <button type="button" onClick={onContinue} disabled={!isReady || !selectedFolder}>Devam</button>
+      {isRequestEmpty && (
+        <div aria-live="polite">
+          <p className="onboarding-error-message">Devam etmek için bir istek yazın.</p>
+        </div>
+      )}
+      <button type="button" onClick={handleContinueClick} disabled={!isReady || !selectedFolder}>Devam</button>
     </main>
   );
 }
