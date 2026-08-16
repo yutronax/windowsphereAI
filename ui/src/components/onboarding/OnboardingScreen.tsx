@@ -74,6 +74,9 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
           box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
           outline: none;
         }
+        .onboarding-textarea::placeholder {
+          color: #9CA3AF;
+        }
       `}</style>
       <button type="button" className="onboarding-primary-btn" onClick={chooseFolder} disabled={!isReady}>Klasör Seç</button>
       {selectedFolder && (
@@ -99,6 +102,7 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
         data-testid="request-textarea"
         aria-label="Dosya işlemi isteği"
         className="onboarding-textarea"
+        placeholder="Bu klasördeki PDF'leri tarihe göre sırala"
         value={requestText}
         onChange={(e) => setRequestText(e.target.value)}
       />

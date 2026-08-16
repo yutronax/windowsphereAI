@@ -141,6 +141,40 @@ describe('request textarea (onboarding-istek-metin-kutusu)', () => {
   });
 });
 
+// AC-1..AC-3 (onboarding-istek-placeholder / Saga #254): placeholder metni, rengi ve
+// yazınca kaybolma/silince geri gelme native davranışı.
+describe('request textarea placeholder (onboarding-istek-placeholder)', () => {
+  it('shows the guiding placeholder text with a muted #9CA3AF color when empty (AC-1)', () => {
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    const textarea = screen.getByTestId('request-textarea') as HTMLTextAreaElement;
+
+    expect(textarea.placeholder).toBe('Bu klasördeki PDF\'leri tarihe göre sırala');
+    expect(textarea.value).toBe('');
+  });
+
+  it('keeps the placeholder attribute intact while the user types — the browser hides it natively (AC-2)', () => {
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    const textarea = screen.getByTestId('request-textarea') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'bir istek yazıyorum' } });
+
+    expect(textarea.value).toBe('bir istek yazıyorum');
+    expect(textarea.placeholder).toBe('Bu klasördeki PDF\'leri tarihe göre sırala');
+  });
+
+  it('clears the typed value back to empty so the placeholder is visible again (AC-3)', () => {
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    const textarea = screen.getByTestId('request-textarea') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'bir istek' } });
+    fireEvent.change(textarea, { target: { value: '' } });
+
+    expect(textarea.value).toBe('');
+    expect(textarea.placeholder).toBe('Bu klasördeki PDF\'leri tarihe göre sırala');
+  });
+});
+
 // AC-1: uzun bir yol seçiliyken CSS tabanlı tek satır kesme uygulanmalı.
 describe('selected-folder-path CSS truncation (AC-1, AC-4)', () => {
   it('applies single-line CSS ellipsis truncation to a long selected folder path (AC-1)', async () => {

@@ -1,0 +1,35 @@
+{
+  "task": "onboarding-istek-placeholder (Saga #254)",
+  "reviewed_at": "2026-08-16",
+  "summary": "3 dosyalık, 72 satırlık (34+34+4) saf görsel değişiklik: request-textarea'ya placeholder attribute + düşük kontrast ::placeholder CSS kuralı eklendi. Kod, testler ve ATDD birebir örtüşüyor; kapsam taşması yok. Codex kotası nedeniyle test/kod Claude tarafından yazıldığı için bağımsız inceleme özellikle önemliydi; incelemede kritik/yüksek severity bulgu yok, sadece düşük seviyeli WCAG kontrast ve gelecekteki i18n/dublicated-literal notları var.",
+  "findings": [
+    {
+      "category": "accessibility",
+      "severity": "low",
+      "finding": "#9CA3AF placeholder rengi beyaz/açık arka plan üzerinde yaklaşık 2.5:1 kontrast oranı verir; WCAG 1.4.3 (AA, normal metin) 4.5:1 ister. Placeholder metni teknik olarak 'gerekli metin' sayılmadığı için tarayıcılar/araçlar genelde bunu zorunlu tutmaz, ancak bazı erişilebilirlik denetim araçları (axe, Lighthouse) yine de bunu 'incomplete/needs review' olarak işaretleyebilir.",
+      "scenario": "Az gören bir kullanıcı placeholder metnini okuyamayabilir; ancak bu risk kullanıcı onayıyla (atdd.md'de 'kullanıcı onayı alındı') bilinçli kabul edilmiş, aria-label ayrıca kalıcı erişilebilir isim sağlıyor, o yüzden fonksiyonel bir engel değil, kozmetik bir uyarı."
+    },
+    {
+      "category": "maintainability",
+      "severity": "low",
+      "finding": "Placeholder metni ('Bu klasördeki PDF'leri tarihe göre sırala') üç dosyada (component, unit test, e2e test) literal string olarak tekrarlanıyor; tek bir sabitte (ör. const PLACEHOLDER_TEXT) toplanmamış.",
+      "scenario": "Placeholder metni gelecekte değişirse (ör. i18n eklenirse) üç yerde senkron güncelleme unutulup testler yanlışlıkla eski metni doğrulamaya devam edebilir. Şu an tek task kapsamında risk düşük ama proje büyüdükçe (Saga #257/#258 gibi devam eden task'lar var) tekrarlanan literal sayısı artacak."
+    }
+  ],
+  "strengths": [
+    "code_diff.md'deki değişiklik gerçek git diff ile birebir örtüşüyor: sadece 1 attribute satırı + 3 satırlık CSS bloğu eklenmiş, state yönetimine dokunulmamış.",
+    "AC-2/AC-3 (yazınca kaybolma/silince tekrar görünme) için ekstra state kodu yazılmamış — native HTML placeholder davranışına güvenilmiş, bu doğru mühendislik kararı (gereksiz karmaşıklık eklenmemiş).",
+    "Test piramidi tutarlı: jsdom'un ::placeholder rengini getComputedStyle ile raporlamadığı bilinerek renk doğrulaması bilinçli olarak e2e katmanına (Playwright, gerçek tarayıcı) bırakılmış; unit testler sadece attribute/value doğruluyor. Bu ayrım plan.md'de açıkça gerekçelendirilmiş.",
+    "Scope tam olarak atdd.md'nin 'Etkilenen Dosyalar' bölümüyle örtüşüyor; git status'ta değişen 3 dosya dışında hiçbir dosyaya dokunulmamış.",
+    "verify_report.md'deki node_deps FAIL bulgusu bağımsız olarak doğrulandı: kök package.json'daki vite ^5.4.10 / vitest ^2.1.9 pinleri bu task'ın diff'inde yer almıyor, dolayısıyla pre-existing/bu task'la ilgisiz olduğu iddiası doğru.",
+    "aria-label korunmuş, placeholder erişilebilir isim olarak kullanılmamış (WCAG placeholder-as-label anti-pattern'inden kaçınılmış)."
+  ],
+  "risks": [
+    "Düşük — task tek component, tek CSS kuralı, native tarayıcı davranışına dayanıyor; rollback N/A olarak işaretlenmesi doğru çünkü kalıcı yan etki yok.",
+    "Codex olmadan Claude'un hem kodu hem testleri yazması, testlerin körlemesine implementasyona uydurulmuş olma riski taşır; ancak test_diff.md'de red→green sırası (testler önce fail, sonra implementasyon sonrası pass) belgelendiği ve bu red-team incelemesinde gerçek diff bağımsız doğrulandığı için risk azaltılmış."
+  ],
+  "caveman_review": "3 satırlık gerçek değişiklik (1 attribute + 1 CSS kuralı) için aşırı mühendislik yok: yeni state, yeni component, yeni abstraction yok. Testler de orantılı (3 unit + 3 e2e, yeni test dosyası açılmamış, mevcut describe bloklarına eklenmiş). Bu görev için en basit çözüm seçilmiş.",
+  "scope_review": "atdd.md'nin 'Etkilenen Dosyalar' listesiyle git diff birebir örtüşüyor. Kapsam Dışı bölümünde listelenenler (görünür label, boş istek engelleme, gerçek gönderim, klavye navigasyonu) koda hiç dokunulmamış. Scope taşması yok.",
+  "ready_to_commit": true,
+  "verdict": "approve"
+}

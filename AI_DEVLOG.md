@@ -23,3 +23,24 @@ integration coverage'ı artık gerçekten mock'suz karşılıyor.
 tarzı ikinci bir test klasörü bu task'tan bilinçli olarak çıkarıldı — bu task
 yalnızca `docs/DESIGN_DECISIONS.md`'nin frontend/backend katmanlarını
 gerçekten çalışır kılmayı hedefledi, native masaüstü paketleme ayrı bir task.
+
+## onboarding-istek-placeholder (Saga #254, epic #23)
+
+**Zorluk — Codex kotası task başlamadan önce tamamen doluydu.** #250'de
+kota task ortasında tükenmişti (yukarı bakınız); bu task'ta ise ilk
+`write_tests()` çağrısı anında `ERROR: You've hit your usage limit... try
+again at Sep 15th, 2026` ile başarısız oldu — hiç Codex bütçesi
+harcanamadı. Kullanıcıya soruldu (dar kapsam: tek dosya, ~5 satır
+implementasyon), kullanıcı onayıyla testler VE implementasyon istisnai
+olarak Claude (ana asistan) tarafından yazıldı — normal test-copilot/
+code-copilot kuralı ("her satır Codex'ten gelir") bu tek task için bilinçli
+olarak esnetildi. Riski azaltmak için: red-team incelemesi `obss-red-team`
+subagent'ı ile bağımsız çalıştırıldı ve gerçek `git diff`'i code_diff.md/
+test_diff.md iddialarıyla birebir karşılaştırdı (verdict: approve,
+ready_to_commit: true).
+
+**Kalıcı öneri (red-team'den, bu task'ta uygulanmadı).** Placeholder metni
+("Bu klasördeki PDF'leri tarihe göre sırala") 3 dosyada literal string
+olarak tekrarlanıyor (component, unit test, e2e test). Saga #257/#258 veya
+i18n bu ekrana dokunursa, ortak bir sabite (`PLACEHOLDER_TEXT` gibi)
+çıkarılması önerilir — bu task'ın dar kapsamı için gerekli görülmedi.

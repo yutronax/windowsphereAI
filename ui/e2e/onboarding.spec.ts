@@ -168,4 +168,38 @@ test.describe('first-run folder onboarding', () => {
     await expect(button).toHaveCSS('background-color', 'rgb(30, 64, 175)');
     await page.mouse.up();
   });
+
+  // AC-1 (onboarding-istek-placeholder / Saga #254): boş textarea örnek istek placeholder'ını gösterir.
+  test('shows the guiding placeholder text with a muted color on the empty request textarea (AC-1)', async ({ page }) => {
+    await page.goto('/');
+
+    const textarea = page.getByTestId('request-textarea');
+
+    await expect(textarea).toHaveAttribute('placeholder', 'Bu klasördeki PDF\'leri tarihe göre sırala');
+    const placeholderColor = await textarea.evaluate((el) => getComputedStyle(el, '::placeholder').color);
+    expect(placeholderColor).toBe('rgb(156, 163, 175)');
+  });
+
+  // AC-2 (onboarding-istek-placeholder): yazınca placeholder native olarak kaybolur, sadece yazılan metin görünür.
+  test('hides the placeholder once the user starts typing into the request textarea (AC-2)', async ({ page }) => {
+    await page.goto('/');
+
+    const textarea = page.getByTestId('request-textarea');
+    await textarea.fill('bu klasördeki faturaları müşteriye göre grupla');
+
+    await expect(textarea).toHaveValue('bu klasördeki faturaları müşteriye göre grupla');
+    await expect(textarea).toHaveAttribute('placeholder', 'Bu klasördeki PDF\'leri tarihe göre sırala');
+  });
+
+  // AC-3 (onboarding-istek-placeholder): yazılan metin tamamen silindiğinde placeholder tekrar görünür.
+  test('shows the placeholder again after the typed text is fully cleared (AC-3)', async ({ page }) => {
+    await page.goto('/');
+
+    const textarea = page.getByTestId('request-textarea');
+    await textarea.fill('geçici bir istek');
+    await textarea.fill('');
+
+    await expect(textarea).toHaveValue('');
+    await expect(textarea).toHaveAttribute('placeholder', 'Bu klasördeki PDF\'leri tarihe göre sırala');
+  });
 });
