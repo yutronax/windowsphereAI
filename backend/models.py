@@ -116,8 +116,14 @@ class PdfFileMetadata(BaseModel):
 
 
 class PlanRequest(BaseModel):
+    # Saga #285: pdfFiles istemciden ALINMAZ — backend, session'ın
+    # selectedFolder'ını kendisi tarar (backend/pdf_discovery.py). İstemcinin
+    # dosya listesi göndermesi (a) client'ın PDF içeriğine erişimini
+    # gerektirir (Tauri fs plugin, yeni native bağımlılık) ve (b) whitelist
+    # doğrulamasının güvendiği "kaynak dosya" listesini istemcinin
+    # kontrolüne bırakırdı — backend'in kendi taraması daha az güven
+    # sınırı taşır.
     sessionId: str
-    pdfFiles: list[PdfFileMetadata]
 
     @field_validator("sessionId")
     @classmethod

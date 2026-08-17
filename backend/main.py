@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import load_setup_config
 from backend.models import PlanRequest, PlanSkeleton, SessionContext, SessionRequest
+from backend.pdf_discovery import discover_pdf_files
 from backend.plan_generation import (
     LLMClient,
     OpenAICompatibleLLMClient,
@@ -69,13 +70,21 @@ def create_plan(payload: PlanRequest, client: LLMClient = Depends(get_llm_client
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Oturum bulunamadı")
 
+    allowed_root = Path(session.selectedFolder)
+    if not allowed_root.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Seçili klasör artık mevcut değil",
+        )
+    pdf_files = discover_pdf_files(allowed_root)
+
     try:
-        plan = generate_plan_skeleton(payload.pdfFiles, client)
+        plan = generate_plan_skeleton(pdf_files, client)
     except PlanGenerationError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     try:
-        validate_plan_paths(plan, payload.pdfFiles, Path(session.selectedFolder))
+        validate_plan_paths(plan, pdf_files, allowed_root)
     except PathWhitelistError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 

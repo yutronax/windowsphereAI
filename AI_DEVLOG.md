@@ -1,5 +1,44 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## gercek-pdf-kesfi-backend-tarama (Saga #285, epic #25)
+
+**`pdfFiles` istemciden kaldırıldı — backend `selectedFolder`'ı kendisi
+tarıyor.** Saga #273/#277 keşiflerinde bulunan boşluk: `PlanRequest.
+pdfFiles: list[PdfFileMetadata]` istemciden bekleniyordu ama bunu
+dolduracak hiçbir gerçek mekanizma yoktu (ne backend'de tarama, ne
+frontend'de native fs erişimi). Karar (a): backend kendi tarasın —
+yeni native bağımlılık gerektirmiyor, whitelist'in güvendiği "kaynak
+dosya" listesini istemcinin kontrolünden çıkarıyor. Yeni
+`backend/pdf_discovery.py: discover_pdf_files(folder)` — SADECE
+`folder`ın doğrudan altındaki `.pdf` dosyalarını (case-insensitive,
+recursive DEĞİL) listeler, `createdAt`'i `Path.stat().st_ctime`'dan
+türetir. `PlanRequest` artık sadece `sessionId` taşıyor.
+
+**Mimari boşluk bulundu, ayrı task'a bağlandı: `ChatScreen` controlled
+değil.** Backend tarafı tamamlandı ve test edildi ama gerçek uçtan uca
+wiring (`App.tsx`→`/api/plan`→sohbete yansıma) hâlâ MÜMKÜN DEĞİL —
+`ChatScreen.tsx` mesaj listesini tamamen kendi iç state'inde tutuyor,
+`initialMessages` sadece mount anında okunuyor. App.tsx'in sonradan
+asenkron bir plan yanıtı eklemesinin hiçbir yolu yok. Bu, backend
+taramasından bağımsız, ayrı bir frontend refactor'ü gerektiriyor — Saga
+#287'ye bağlandı (bu task'a `depends_on`). 94/94 backend test yeşil (7
+yeni: `test_pdf_discovery.py`; plan endpoint testleri gerçek `tmp_path`
+dosyalarıyla yeniden yazıldı — client-taraflı traversal testleri
+ARTIK GEÇERSİZ, çünkü filename artık gerçek dosya sisteminden geliyor,
+istemci kontrol edemiyor; yerine sistem-kök koruması + non-pdf/alt-klasör
+filtreleme testleri eklendi).
+
+**Red-team: 1 bulgu hemen düzeltildi (410 Gone), 1 bulgu docstring'de
+belgelendi.** (1) `selectedFolder` session oluşturulduktan sonra
+silinirse/taşınırsa, eskiden bu "0 PDF bulundu" ile aynı şekilde 200
+dönüyordu — kullanıcının görmesi gereken gerçek durum farklı
+("klasör bulunamadı" vs "klasör boş"). `main.py`'ye
+`allowed_root.is_dir()` kontrolü eklendi, 410 Gone dönüyor artık. (2)
+`st_ctime` sadece Windows'ta gerçek "oluşturulma zamanı"dır (POSIX'te
+"meta veri değişikliği zamanı") — proje Windows-only MVP kapsamında
+kabul edilebilir, ama sessizce yanlış davranma riski docstring'de
+açıkça belgelendi. 95/95 backend test yeşil.
+
 ## sonuc-karti-plan-tamamlanma-gosterimi (Saga #277, epic #25)
 
 **Yeni `ResultCard` component'i — `PlanCard`'ın onay sorumluluğuyla

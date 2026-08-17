@@ -154,7 +154,7 @@ def test_plan_endpoint_returns_503_when_no_llm_api_key_configured(monkeypatch):
     monkeypatch.delenv("PLAN_LLM_API_KEY", raising=False)
     session_id = _create_session()
 
-    response = client.post("/api/plan", json={"sessionId": session_id, "pdfFiles": [{"filename": "a.pdf", "createdAt": "2026-08-01"}]})
+    response = client.post("/api/plan", json={"sessionId": session_id})
 
     assert response.status_code == 503
 
@@ -162,24 +162,21 @@ def test_plan_endpoint_returns_503_when_no_llm_api_key_configured(monkeypatch):
 def test_plan_endpoint_returns_404_when_session_does_not_exist():
     app.dependency_overrides[get_llm_client] = lambda: _StubLLMClient(response=VALID_PLAN_JSON)
     try:
-        response = client.post(
-            "/api/plan",
-            json={"sessionId": str(uuid.uuid4()), "pdfFiles": [{"filename": "a.pdf", "createdAt": "2026-08-01"}]},
-        )
+        response = client.post("/api/plan", json={"sessionId": str(uuid.uuid4())})
     finally:
         app.dependency_overrides.clear()
 
     assert response.status_code == 404
 
 
-def test_plan_endpoint_returns_the_plan_skeleton_for_a_valid_llm_response():
-    session_id = _create_session()
+def test_plan_endpoint_discovers_real_pdf_files_from_selected_folder_and_returns_the_plan(tmp_path):
+    # Saga #285: pdfFiles artık istemciden gelmiyor — backend
+    # session.selectedFolder'ı kendisi tarıyor (backend/pdf_discovery.py).
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4 fake")
+    session_id = _create_session(selected_folder=str(tmp_path))
     app.dependency_overrides[get_llm_client] = lambda: _StubLLMClient(response=VALID_PLAN_JSON)
     try:
-        response = client.post(
-            "/api/plan",
-            json={"sessionId": session_id, "pdfFiles": [{"filename": "a.pdf", "createdAt": "2026-08-01"}]},
-        )
+        response = client.post("/api/plan", json={"sessionId": session_id})
     finally:
         app.dependency_overrides.clear()
 
@@ -187,14 +184,66 @@ def test_plan_endpoint_returns_the_plan_skeleton_for_a_valid_llm_response():
     assert response.json()["steps"][0]["targetFolder"] == "2026-08"
 
 
-def test_plan_endpoint_returns_502_when_plan_generation_fails():
-    session_id = _create_session()
+def test_plan_endpoint_returns_410_when_selected_folder_no_longer_exists(tmp_path):
+    # Saga #285 red-team bulgusu: klasör session olusturulduktan sonra
+    # silinirse/tasinirsa, bu "0 PDF bulundu" ile ayni sekilde 200
+    # donmemeli - kullanicinin gormesi gereken gercek durum farkli.
+    missing_folder = tmp_path / "silinmis-klasor"
+    session_id = _create_session(selected_folder=str(missing_folder))
+    app.dependency_overrides[get_llm_client] = lambda: _StubLLMClient(response=VALID_PLAN_JSON)
+    try:
+        response = client.post("/api/plan", json={"sessionId": session_id})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 410
+
+
+def test_plan_endpoint_returns_empty_plan_when_selected_folder_has_no_pdf_files(tmp_path):
+    session_id = _create_session(selected_folder=str(tmp_path))
+    app.dependency_overrides[get_llm_client] = lambda: _StubLLMClient(response=VALID_PLAN_JSON)
+    try:
+        response = client.post("/api/plan", json={"sessionId": session_id})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["steps"] == []
+
+
+def test_plan_endpoint_ignores_non_pdf_files_and_subfolders(tmp_path):
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "not-a-pdf.txt").write_text("merhaba")
+    subfolder = tmp_path / "alt-klasor"
+    subfolder.mkdir()
+    (subfolder / "b.pdf").write_bytes(b"%PDF-1.4 fake")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    captured_prompt: dict[str, str] = {}
+
+    class _CapturingStubLLMClient(_StubLLMClient):
+        def complete(self, *, model: str, system_prompt: str, user_prompt: str) -> str:
+            captured_prompt["user_prompt"] = user_prompt
+            return super().complete(model=model, system_prompt=system_prompt, user_prompt=user_prompt)
+
+    app.dependency_overrides[get_llm_client] = lambda: _CapturingStubLLMClient(response=VALID_PLAN_JSON)
+    try:
+        response = client.post("/api/plan", json={"sessionId": session_id})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert "a.pdf" in captured_prompt["user_prompt"]
+    assert "not-a-pdf.txt" not in captured_prompt["user_prompt"]
+    assert "b.pdf" not in captured_prompt["user_prompt"]
+
+
+def test_plan_endpoint_returns_502_when_plan_generation_fails(tmp_path):
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4 fake")
+    session_id = _create_session(selected_folder=str(tmp_path))
     app.dependency_overrides[get_llm_client] = lambda: _StubLLMClient(error=True)
     try:
-        response = client.post(
-            "/api/plan",
-            json={"sessionId": session_id, "pdfFiles": [{"filename": "a.pdf", "createdAt": "2026-08-01"}]},
-        )
+        response = client.post("/api/plan", json={"sessionId": session_id})
     finally:
         app.dependency_overrides.clear()
 
@@ -212,39 +261,18 @@ def test_plan_endpoint_returns_422_for_missing_fields():
     assert response.status_code == 422
 
 
-def test_plan_endpoint_returns_422_when_filename_contains_path_separators():
-    # Saga #272: PdfFileMetadata.filename artık şema seviyesinde ayraç
-    # içeremiyor — bu, çok-segmentli traversal/derinlik denemelerini
-    # runtime whitelist'e (403) hiç ulaşmadan erkenden reddediyor.
-    session_id = _create_session()
+def test_plan_endpoint_returns_403_when_a_discovered_pdf_sits_under_a_system_root(tmp_path, monkeypatch):
+    # allowed_root'un kendisi sistem korumalı DEĞİLSE bile, içindeki bir
+    # PDF gerçekten bir sistem kökü altına denk gelirse (ör. allowed_root
+    # ProgramData'nın kendisiyse) whitelist reddeder — Saga #272 koruması.
+    protected_root = tmp_path / "ProgramData"
+    protected_root.mkdir()
+    (protected_root / "a.pdf").write_bytes(b"%PDF-1.4 fake")
+    monkeypatch.setenv("ProgramData", str(protected_root))
+    session_id = _create_session(selected_folder=str(protected_root))
     app.dependency_overrides[get_llm_client] = lambda: _StubLLMClient(response=VALID_PLAN_JSON)
     try:
-        response = client.post(
-            "/api/plan",
-            json={
-                "sessionId": session_id,
-                "pdfFiles": [{"filename": r"..\..\Windows\evil.pdf", "createdAt": "2026-08-01"}],
-            },
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 422
-
-
-def test_plan_endpoint_returns_403_when_source_filename_escapes_allowed_root():
-    # Ayraçsız tek segment (".."), şema doğrulamasından geçer ama whitelist
-    # tarafından runtime'da reddedilir.
-    session_id = _create_session()
-    app.dependency_overrides[get_llm_client] = lambda: _StubLLMClient(response=VALID_PLAN_JSON)
-    try:
-        response = client.post(
-            "/api/plan",
-            json={
-                "sessionId": session_id,
-                "pdfFiles": [{"filename": "..", "createdAt": "2026-08-01"}],
-            },
-        )
+        response = client.post("/api/plan", json={"sessionId": session_id})
     finally:
         app.dependency_overrides.clear()
 
