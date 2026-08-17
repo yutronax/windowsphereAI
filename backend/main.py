@@ -1,3 +1,4 @@
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -15,6 +16,8 @@ from backend.plan_generation import (
     generate_plan_skeleton,
 )
 from backend.security import PathWhitelistError, validate_plan_paths
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -64,12 +67,23 @@ def get_llm_client() -> LLMClient:
     return OpenAICompatibleLLMClient(api_key=api_key, base_url=base_url)
 
 
-@app.post("/api/plan")
-def create_plan(payload: PlanRequest, client: LLMClient = Depends(get_llm_client)) -> PlanSkeleton:
+def get_session_or_404(payload: PlanRequest) -> SessionContext:
+    """Saga #283: dosya-dokunan HER endpoint'in tekrar tekrar yazması
+    gerekmeyen, yeniden kullanılabilir bir session-lookup dependency'si —
+    `/api/plan` şu an TEK kullanıcısı, ama gelecekte eklenecek bir
+    apply/execute endpoint'i de aynı `Depends(get_session_or_404)`'u
+    kullanabilir."""
     session = _sessions.get(payload.sessionId)
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Oturum bulunamadı")
+    return session
 
+
+@app.post("/api/plan")
+def create_plan(
+    session: SessionContext = Depends(get_session_or_404),
+    client: LLMClient = Depends(get_llm_client),
+) -> PlanSkeleton:
     allowed_root = Path(session.selectedFolder)
     if not allowed_root.is_dir():
         raise HTTPException(
@@ -86,6 +100,17 @@ def create_plan(payload: PlanRequest, client: LLMClient = Depends(get_llm_client
     try:
         validate_plan_paths(plan, pdf_files, allowed_root)
     except PathWhitelistError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        # Saga #283: tam mutlak path (`exc.offending_path`/`exc.allowed_root`)
+        # istemciye SIZDIRILMAZ (red-team bulgusu: bu, sunucunun dosya
+        # sistemi yapısı hakkında keşif bilgisi verirdi) — sadece kısa
+        # `reason` (ör. "izin verilen kök dışında") 403 detail'e konur, tam
+        # path'ler sadece sunucu logunda kalır.
+        logger.warning(
+            "Whitelist ihlali: %s %s (allowed_root=%s)",
+            exc.description,
+            exc.offending_path,
+            exc.allowed_root,
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"{exc.description} {exc.reason}") from exc
 
     return plan

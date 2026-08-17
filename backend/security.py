@@ -61,7 +61,19 @@ def _warn_if_protected_roots_missing() -> None:
 
 
 class PathWhitelistError(Exception):
-    """Raised when a planned operation's source or target path resolves outside the allowed root."""
+    """Raised when a planned operation's source or target path resolves
+    outside the allowed root, hits a system-protected root, or exceeds the
+    max depth. Carries structured fields (Saga #283) so a caller (ör.
+    backend/main.py) can decide INDEPENDENTLY how much detail to expose to
+    the client — `str(exc)` hâlâ eski okunabilir mesaj formatını üretir,
+    geriye dönük uyumluluk için."""
+
+    def __init__(self, *, offending_path: str, allowed_root: str, reason: str, description: str) -> None:
+        self.offending_path = offending_path
+        self.allowed_root = allowed_root
+        self.reason = reason
+        self.description = description
+        super().__init__(f"{description} {reason}: {offending_path}")
 
 
 def is_path_allowed(path: Path, allowed_root: Path) -> bool:
@@ -88,11 +100,26 @@ def is_system_protected(path: Path) -> bool:
 
 def _validate_single_path(path: Path, allowed_root: Path, description: str) -> None:
     if not is_path_allowed(path, allowed_root):
-        raise PathWhitelistError(f"{description} izin verilen kök dışında: {path}")
+        raise PathWhitelistError(
+            offending_path=str(path),
+            allowed_root=str(allowed_root),
+            reason="izin verilen kök dışında",
+            description=description,
+        )
     if is_system_protected(path):
-        raise PathWhitelistError(f"{description} korunan bir sistem klasörüne değiyor: {path}")
+        raise PathWhitelistError(
+            offending_path=str(path),
+            allowed_root=str(allowed_root),
+            reason="korunan bir sistem klasörüne değiyor",
+            description=description,
+        )
     if is_path_too_deep(path, allowed_root):
-        raise PathWhitelistError(f"{description} izin verilen azami derinliği aşıyor: {path}")
+        raise PathWhitelistError(
+            offending_path=str(path),
+            allowed_root=str(allowed_root),
+            reason="izin verilen azami derinliği aşıyor",
+            description=description,
+        )
 
 
 def validate_plan_paths(

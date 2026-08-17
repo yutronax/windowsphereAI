@@ -277,3 +277,6 @@ def test_plan_endpoint_returns_403_when_a_discovered_pdf_sits_under_a_system_roo
         app.dependency_overrides.clear()
 
     assert response.status_code == 403
+    # Saga #283 red-team bulgusu: tam mutlak path istemciye SIZDIRILMAMALI
+    # (sunucunun dosya sistemi yapısı hakkında keşif bilgisi verirdi).
+    assert str(protected_root) not in response.json()["detail"]

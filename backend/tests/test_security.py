@@ -66,6 +66,20 @@ def test_validate_plan_paths_rejects_entire_plan_when_one_source_file_escapes_ro
         validate_plan_paths(_plan(), pdf_files, tmp_path)
 
 
+def test_path_whitelist_error_carries_structured_fields(tmp_path):
+    pdf_files = [PdfFileMetadata(filename="..", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError) as exc_info:
+        validate_plan_paths(_plan(), pdf_files, tmp_path)
+
+    error = exc_info.value
+    assert error.description == "Kaynak dosya"
+    assert error.reason == "izin verilen kök dışında"
+    assert error.allowed_root == str(tmp_path)
+    assert str(tmp_path.parent) in error.offending_path
+    assert str(error) == f"{error.description} {error.reason}: {error.offending_path}"
+
+
 def test_validate_plan_paths_passes_for_empty_steps_and_no_pdf_files(tmp_path):
     empty_plan = PlanSkeleton(steps=[], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
 

@@ -1,5 +1,42 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## security-gate-reusable-dependency (Saga #283, epic #25)
+
+**Epic 25'in son task'ı — Security Gate yeniden kullanılabilir hale
+getirildi.** `backend/main.py`'ye `get_session_or_404(payload:
+PlanRequest) -> SessionContext` FastAPI `Depends`'i çıkarıldı — `/api/plan`
+artık `session = _sessions.get(...)` + 404 kontrolünü elle tekrarlamıyor,
+`Depends(get_session_or_404)` kullanıyor. Saga #285'ten sonra
+`PlanRequest`'in sadece `sessionId` taşıması sayesinde endpoint artık
+`payload`'a hiç ihtiyaç duymuyor — bu, dependency'nin body'yi kendi
+başına parse edip sadece çözümlenmiş `SessionContext`'i vermesini
+mümkün kıldı.
+
+`PathWhitelistError` artık `offending_path`/`allowed_root`/`reason`/
+`description` alanlarını taşıyor (`str(exc)` eski okunabilir formatı
+aynen üretmeye devam ediyor — geriye dönük uyumlu).
+
+**Red-team: "yapı var ama hiç kullanılmıyor" bulgusu hemen düzeltildi.**
+İlk implementasyonda `main.py` hâlâ `str(exc)`'i (tam mutlak path dahil)
+403 detail'e koyuyordu — yeni structured field'lar YAPI olarak vardı
+ama gerçek bir davranış değişikliği getirmiyordu (YAGNI riski,
+kullanılmayan soyutlama). Düzeltme: 403 yanıtı artık SADECE kısa
+`exc.reason`'ı (`f"{description} {reason}"`, ör. "Kaynak dosya izin
+verilen kök dışında") içeriyor — tam mutlak path'ler (`offending_path`/
+`allowed_root`, sunucunun dosya sistemi yapısı hakkında keşif bilgisi
+verebilir) artık istemciye SIZDIRILMIYOR, sadece sunucu logunda
+(`logger.warning`) kalıyor. 106/106 test yeşil (2 yeni: structured
+field'lar + 403 yanıtının tam path içermediğini doğrulayan regresyon
+testi).
+
+**Epic 25 (MVP: PDF'leri tarihe göre sıralama) TAMAMLANDI** — 271-277 +
+283-287 (17 task, 14'ü orijinal backlog + 3'ü red-team'in bulduğu
+mimari boşluklardan doğan takip task'ı) hepsi `done`.
+
+**Epic 25 (MVP: PDF'leri tarihe göre sıralama) TAMAMLANDI** — 271-277 +
+283-287 (17 task, 14'ü orijinal backlog + 3'ü red-team'in bulduğu
+mimari boşluklardan doğan takip task'ı) hepsi `done`.
+
 ## chatscreen-controlled-app-wiring (Saga #287, epic #25)
 
 **Epic 25'in uçtan uca hedefi ilk kez gerçekten çalışır hale geldi.**
