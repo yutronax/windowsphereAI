@@ -1,5 +1,35 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## appdb-sema-goc-shimi (Saga #284, epic #25)
+
+**alembic yerine minimal "eksik kolon varsa ALTER TABLE" shim'i.** Saga
+#275 red-team bulgusu: `create_db_engine`'in `Base.metadata.create_all`'ı
+yeni tablo eklemede idempotent ama VAR OLAN bir tabloya yeni kolon
+eklendiğinde sessizce hiçbir şey yapmıyordu — gerçek kullanıcı
+makinelerinde `app.db` oluştuktan sonra bu, sessiz veri kaybına/
+`sqlite3.OperationalError: no such column` hatalarına yol açardı.
+`backend/db.py: _add_missing_columns(engine)` eklendi — `create_all`den
+hemen sonra her tabloyu `inspect()` ile gerçek DB şemasıyla karşılaştırıp
+eksik kolonları `ALTER TABLE ADD COLUMN` ile ekliyor. alembic KASITLI
+OLARAK seçilmedi — proje henüz hiç Python bağımlılık dosyasına sahip
+değil (task_0ab06e5e olarak flaglenmişti), yeni ağır bir bağımlılık
+eklemek dar kapsam ilkesiyle çelişirdi; kolon silme/tip değiştirme
+(SQLite'ta tablo yeniden oluşturmayı gerektirir) MVP'de ihtiyaç
+olmadığı için desteklenmiyor.
+
+**Red-team: sessiz şema sürüklenmesi bulundu, hemen düzeltildi.**
+`_add_missing_columns` kolon eklerken SADECE tipi üretiyordu, `NOT NULL`
+kısıtını hiç emin etmiyordu — bu, taze kurulumlarda (`create_all`: NOT
+NULL doğru uygulanır) ile yükseltilmiş kurulumlarda (bu ALTER yolu: NOT
+NULL sessizce kaybolurdu) arasında SESSİZ bir şema sürüklenmesine yol
+açardı (bugün hiçbir NOT NULL kolon yok, ama gelecekte biri eklerse
+fark edilmeden gerçekleşirdi). Düzeltme: varsayılan değeri olmayan NOT
+NULL bir kolon eklenmeye çalışılırsa shim artık GÜRÜLTÜLÜ bir
+`RuntimeError` ile başarısız oluyor (sessizce nullable'a düşmek yerine)
+— "gerçek bir migration aracı gerekiyor" mesajıyla. 105/105 test yeşil
+(4 yeni: sıfırdan oluşturma, eksik kolon ekleme + veri korunumu,
+idempotentlik, NOT NULL guard).
+
 ## orchestrator-planstep-dosya-listesi-ve-kurtarma (Saga #286, epic #25)
 
 **Kırılgan pozisyonel dağıtım kaldırıldı — `PlanStep.fileNames`
