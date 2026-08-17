@@ -1,6 +1,7 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
+import PlanCard, { type Plan } from './PlanCard';
 
-export type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string };
+export type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string; plan?: Plan };
 
 type Props = {
   initialMessages?: ChatMessage[];
@@ -86,6 +87,7 @@ export default function ChatScreen({ initialMessages = [], onSendMessage }: Prop
             data-role={message.role}
           >
             {message.text}
+            {message.plan && <PlanCard plan={message.plan} />}
           </li>
         ))}
       </ul>

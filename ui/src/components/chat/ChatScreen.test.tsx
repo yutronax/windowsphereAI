@@ -70,6 +70,30 @@ describe('ChatScreen (dikey-mesaj-akisi / Saga #259)', () => {
     expect(screen.getByTestId('chat-message-list').children).toHaveLength(0);
   });
 
+  it('renders a PlanCard alongside an assistant message that carries a plan (Saga #262 integration)', () => {
+    render(
+      <ChatScreen
+        initialMessages={[
+          {
+            id: 'p1',
+            role: 'assistant',
+            text: 'Önerilen plan:',
+            plan: { steps: [{ order: 1, operationType: 'Taşı', targetFolder: 'X', affectedFileCount: 2 }] },
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId('plan-card')).toBeVisible();
+    expect(screen.getByText('Taşı')).toBeVisible();
+  });
+
+  it('does not render a PlanCard when a message has no plan (Saga #262 integration)', () => {
+    render(<ChatScreen initialMessages={[{ id: 'm1', role: 'assistant', text: 'sade metin' }]} />);
+
+    expect(screen.queryByTestId('plan-card')).not.toBeInTheDocument();
+  });
+
   it('keeps multiple sent messages selectable and in sequential order (AC-1)', () => {
     render(<ChatScreen />);
     const textarea = screen.getByTestId('chat-input-textarea');
