@@ -1,5 +1,28 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## plan-skeleton-sinir-sema-dogrulamasi (Saga #280, epic #24)
+
+**LLM plan-skeleton yanıtı için boundary şema doğrulaması eklendi (yeni
+bağımlılık yok).** Saga #262'nin red-team bulgusuna (PlanCard'ın
+backend verisini doğrulamadan render etmesi) cevaben `validatePlanResponse`
+saf fonksiyonu eklendi (`ui/src/components/chat/planValidation.ts`). zod
+gibi bir kütüphane KULLANILMADI — proje zaten böyle bir bağımlılığa sahip
+değil, tek bir fonksiyon için yeni bağımlılık eklemek dar-kapsam ilkesiyle
+çelişirdi; el yazımı, 14 test case'le kapsanan bir doğrulayıcı yazıldı.
+`order` (negatif olmayan tamsayı + tekil), `operationType` (sabit enum),
+`targetFolder` (boş olmayan string), `affectedFileCount` (negatif olmayan
+tamsayı) fail-closed doğrulanıyor.
+
+**Red-team: MEDIUM bulgu — fonksiyon henüz hiçbir yere bağlı değil,
+takip task'ı açıldı (bloke edilmedi).** Doğrulayıcının kendisi güvenli
+(prototype pollution yok, NaN/Infinity doğru reddediliyor, hata mesajları
+saldırgan girdisini yansıtmıyor) ama gerçek bir backend/fetch entegrasyon
+noktası projede henüz olmadığı için bağlanamıyor — #264-267 ile aynı
+"henüz bağlanmamış prop" deseni. Saga #281 açıldı: gerçek backend
+entegrasyonu geldiğinde `validatePlanResponse` ChatScreen'e bağlanacak
+ve `PlanCard`'ın `operationType` tipi enum'a sıkılaştırılacak. 96/96 test
++ `tsc --noEmit` temiz.
+
 ## sohbet-hata-durumu-tekrar-dene (Saga #267, epic #24)
 
 **Hata durumu + "Tekrar dene" eklendi, epic #24 (MVP: Ana sohbet arayüzü)
