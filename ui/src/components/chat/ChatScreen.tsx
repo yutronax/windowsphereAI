@@ -117,10 +117,15 @@ export default function ChatScreen({
           border-radius: 14px;
           max-width: 65ch;
           overflow-wrap: break-word;
+          line-height: 1.5;
         }
         .chat-message-item[data-role="user"] .chat-message-bubble {
           background-color: #1E3A8A;
           color: #fff;
+        }
+        .chat-message-item[data-role="assistant"] .chat-message-bubble {
+          background-color: #F3F4F6;
+          color: #111827;
         }
         .chat-scroll-to-latest-button {
           align-self: center;

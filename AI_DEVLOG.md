@@ -1,5 +1,21 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## asistan-mesaj-balonu-stili (Saga #261, epic #24) — Epic #24 tamamlandı
+
+**Asistan mesaj balonu stillendirildi, epic #24 (MVP: Ana sohbet arayüzü)
+"todo"daki tüm task'lar bitti.** Nötr yüzey (`#F3F4F6` arka plan + `#111827`
+metin, ~16:1 kontrast) eklendi, paralel yapı Saga #260 ile aynı desende.
+`line-height: 1.5` ortak `chat-message-bubble` sınıfına eklendi (her iki
+rol için okunabilirlik iyileştirmesi).
+
+**Bilinçli kapsam daraltması: markdown/başlık yapısı ertelendi, takip
+task'ı açıldı.** Task açıklamasındaki "taranabilir başlıklar ve kısa
+paragraflar" gereksinimi markdown ayrıştırma gerektirir (yeni bağımlılık,
+dar-kapsam ilkesiyle çelişir) — asistan mesajları şu an sadece test
+fixture'ı, gerçek backend entegrasyonu yok. Red-team bu kararı onayladı
+ama gerçek LLM entegrasyonu gelmeden ÖNCE bunun izlenmesini istedi; Saga
+#282 açıldı. 100/100 test yeşil.
+
 ## kullanici-mesaj-balonu-stili (Saga #260, epic #24)
 
 **Kullanıcı mesaj balonu stillendirildi.** Mesaj metni artık ayrı bir
