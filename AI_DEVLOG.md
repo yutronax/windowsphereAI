@@ -79,3 +79,48 @@ ekran okuyucu/tarayıcı kombinasyonlarında duyuru güvenilirliğini
 etkileyebilir. İkisi de bu task'ın dar kapsamı (client-side, backend
 validasyonu yok) için engelleyici değil, ayrı bir iyileştirme task'ı olarak
 değerlendirilebilir.
+
+## gecersiz-klasor-reddi (Saga #256, epic #23)
+
+**Codex kotası hâlâ dolu — aynı override deseni devam ediyor.** Testler ve
+implementasyon yine Claude tarafından doğrudan yazıldı, bağımsız doğrulama
+`obss-red-team` subagent'ı ile yapıldı.
+
+**Mimari keşif — src-tauri/ ve @tauri-apps/plugin-fs hiç yok.** Bu görev
+"klasörün erişilebilir olduğunu doğrula" istiyordu, ama projede gerçek bir
+Tauri native kabuğu (`src-tauri/`) veya dosya sistemi plugin'i henüz
+scaffold edilmemiş (#250'de bilinçli olarak dışarıda bırakılmıştı).
+Kullanıcıya soruldu, kullanıcı "mock'lanabilir Tauri invoke ile ilerle"
+seçeneğini onayladı: yeni kod `invoke('plugin:fs|exists', {path})`
+çağırıyor ama bu şu an sadece testlerde (`__TAURI_INTERNALS__` / vi.mock)
+karşılık buluyor, gerçek bir dosya sistemi kontrolü yok.
+
+**Bulunan risk — HIGH, red-team'den (bu task'ın kendi hatası değil, proje
+geneli bir eksiklik).** Eğer uygulama gerçek `plugin-fs` bağlanmadan
+paketlenip (`tauri build`) kullanıcıya ulaşırsa, `invoke` reddedilir ve kod
+bunu "erişilemez" sayıp HER klasörü reddeder — onboarding kalıcı bir çıkmaz
+sokak olur, hiçbir testte görünmez çünkü tüm testler mock'lanmış IPC
+katmanını kullanıyor. Bu, 2026-08-16'daki Codex "success:True ama hiçbir
+şey yapmadı" olayıyla aynı sınıftan bir risk — sadece test zamanında değil,
+paketleme zamanında ortaya çıkıyor. **Aksiyon:** Saga task #279
+("RELEASE-BLOCKER: Gerçek @tauri-apps/plugin-fs entegrasyonu", critical,
+#256'ya `depends_on`) oluşturuldu — bu task tamamlanmadan `.exe`/installer
+paketleme yapılmamalı.
+
+**Bulunan ve düzeltilen bug — TOCTOU boşluğu (red-team, MEDIUM).** İlk
+implementasyonda, kullanıcı zaten geçerli bir klasör seçmişken (Devam
+aktif) yeni bir klasör seçtiğinde, yeni `exists` kontrolü sonuçlanana kadar
+geçen asenkron pencerede eski `isFolderInvalid=false` durumu geçerli
+kalıyordu — "Devam" doğrulanmamış yeni bir klasörle tıklanabilir kalıyordu,
+tam da bu task'ın önlemeye çalıştığı senaryonun bir zamanlama varyantı.
+Düzeltme: `isValidatingFolder` state'i eklenip "Devam"ın `disabled`
+koşuluna dahil edildi; bunu doğrulayan test eklenirken mevcut bir testte
+(AC-5) senkron `isFolderInvalid(false)` sıfırlamasının yarattığı stale-DOM
+eşleşme yarışı da ortaya çıktı ve `waitFor` sıralaması düzeltilerek
+giderildi.
+
+**Bilinçli kapsam kararı.** "Yok" ile "izinsiz" hata nedenleri ayrı ele
+alınmadı (tek "erişilemez" mesajı), kapsamlı path normalization (case,
+symlink) yapılmadı — sadece trailing slash/backslash temizlendi. Red-team
+kök sürücü path'lerinde (`C:\` → `C:`) bu minimal normalize'ın bir edge
+case'i kaçırdığını (low severity) not etti, düzeltilmedi.

@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
 
 type BackendStatus = 'ready' | 'starting' | 'backend_timeout';
 
@@ -15,12 +16,32 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
   const [isHovered, setIsHovered] = useState(false);
   const [requestText, setRequestText] = useState('');
   const [isRequestEmpty, setIsRequestEmpty] = useState(false);
+  const [isFolderInvalid, setIsFolderInvalid] = useState(false);
+  const [isValidatingFolder, setIsValidatingFolder] = useState(false);
+  const latestRequestedPathRef = useRef<string | null>(null);
   const isPathTooltipVisible = isFocused || isHovered;
   const isReady = backendStatus === 'ready';
 
   async function chooseFolder() {
     const folder = await open({ directory: true, multiple: false });
-    if (typeof folder === 'string') setSelectedFolder(folder);
+    if (typeof folder !== 'string') return;
+
+    const normalizedPath = folder.replace(/[\\/]+$/, '');
+    latestRequestedPathRef.current = normalizedPath;
+    setSelectedFolder(normalizedPath);
+    setIsFolderInvalid(false);
+    setIsValidatingFolder(true);
+
+    let isAccessible: boolean;
+    try {
+      isAccessible = await invoke<boolean>('plugin:fs|exists', { path: normalizedPath });
+    } catch {
+      isAccessible = false;
+    }
+
+    if (latestRequestedPathRef.current !== normalizedPath) return;
+    setIsFolderInvalid(!isAccessible);
+    setIsValidatingFolder(false);
   }
 
   function handleRequestTextChange(value: string) {
@@ -124,6 +145,11 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
           )}
         </>
       )}
+      {isFolderInvalid && (
+        <div aria-live="polite">
+          <p className="onboarding-error-message">Seçilen klasöre erişilemiyor. Lütfen başka bir klasör seçin.</p>
+        </div>
+      )}
       <textarea
         data-testid="request-textarea"
         aria-label="Dosya işlemi isteği"
@@ -137,7 +163,7 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
           <p className="onboarding-error-message">Devam etmek için bir istek yazın.</p>
         </div>
       )}
-      <button type="button" onClick={handleContinueClick} disabled={!isReady || !selectedFolder}>Devam</button>
+      <button type="button" onClick={handleContinueClick} disabled={!isReady || !selectedFolder || isFolderInvalid || isValidatingFolder}>Devam</button>
     </main>
   );
 }

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { open } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
 
 import OnboardingScreen from './OnboardingScreen';
 
@@ -8,11 +9,18 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn(),
 }));
 
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(),
+}));
+
 const openFolderDialog = vi.mocked(open);
+const invokeTauriCommand = vi.mocked(invoke);
 
 describe('OnboardingScreen', () => {
   beforeEach(() => {
     openFolderDialog.mockReset();
+    invokeTauriCommand.mockReset();
+    invokeTauriCommand.mockResolvedValue(true);
   });
 
   it('renders the first-run folder chooser within 500ms when the backend is ready', () => {
@@ -281,5 +289,118 @@ describe('empty request validation (bos-istek-engelleme)', () => {
     fireEvent.click(screen.getByRole('button', { name: /devam/i }));
 
     expect(screen.getByText('Devam etmek için bir istek yazın.')).toBeVisible();
+  });
+});
+
+// AC-1..AC-5 (gecersiz-klasor-reddi / Saga #256): geçersiz/erişilemeyen klasör
+// seçimi reddedilmeli, seçim korunmalı, alan içi hata mesajı gösterilmeli.
+describe('invalid folder rejection (gecersiz-klasor-reddi)', () => {
+  it('shows no error and enables Continue when the selected folder is accessible (AC-1)', async () => {
+    invokeTauriCommand.mockResolvedValue(true);
+    openFolderDialog.mockResolvedValue('C:\\Users\\Yusuf\\Documents\\Müvekkiller');
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+
+    expect(await screen.findByTestId('selected-folder-path')).toHaveTextContent('C:\\Users\\Yusuf\\Documents\\Müvekkiller');
+    expect(invokeTauriCommand).toHaveBeenCalledWith('plugin:fs|exists', { path: 'C:\\Users\\Yusuf\\Documents\\Müvekkiller' });
+    expect(screen.queryByText('Seçilen klasöre erişilemiyor. Lütfen başka bir klasör seçin.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /devam/i })).toBeEnabled();
+  });
+
+  it('disables Continue while a newly-selected folder\'s accessibility check is still pending, even if the previous folder was valid (TOCTOU koruması)', async () => {
+    invokeTauriCommand.mockResolvedValue(true);
+    openFolderDialog.mockResolvedValue('C:\\Geçerli1');
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /devam/i })).toBeEnabled());
+
+    let resolveExists: (value: boolean) => void = () => {};
+    invokeTauriCommand.mockReturnValue(new Promise((resolve) => { resolveExists = resolve; }));
+    openFolderDialog.mockResolvedValue('C:\\YavaşAğPaylaşımı');
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-folder-path')).toHaveTextContent('C:\\YavaşAğPaylaşımı');
+    });
+    expect(screen.getByRole('button', { name: /devam/i })).toBeDisabled();
+
+    resolveExists(true);
+    await waitFor(() => expect(screen.getByRole('button', { name: /devam/i })).toBeEnabled());
+  });
+
+  it('keeps the path visible, shows a red error, and disables Continue when the folder is inaccessible (AC-2)', async () => {
+    invokeTauriCommand.mockResolvedValue(false);
+    openFolderDialog.mockResolvedValue('C:\\Users\\Yusuf\\Documents\\Silinmiş');
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+
+    const pathElement = await screen.findByTestId('selected-folder-path');
+    expect(pathElement).toHaveTextContent('C:\\Users\\Yusuf\\Documents\\Silinmiş');
+    const message = await screen.findByText('Seçilen klasöre erişilemiyor. Lütfen başka bir klasör seçin.');
+    expect(getComputedStyle(message).color).toBe('rgb(220, 38, 38)');
+    expect(screen.getByRole('button', { name: /devam/i })).toBeDisabled();
+  });
+
+  it('clears the error and re-enables Continue after selecting a valid folder (AC-3)', async () => {
+    invokeTauriCommand.mockResolvedValue(false);
+    openFolderDialog.mockResolvedValue('C:\\Geçersiz');
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+    await screen.findByText('Seçilen klasöre erişilemiyor. Lütfen başka bir klasör seçin.');
+
+    invokeTauriCommand.mockResolvedValue(true);
+    openFolderDialog.mockResolvedValue('C:\\Geçerli');
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Seçilen klasöre erişilemiyor. Lütfen başka bir klasör seçin.')).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('selected-folder-path')).toHaveTextContent('C:\\Geçerli');
+    expect(screen.getByRole('button', { name: /devam/i })).toBeEnabled();
+  });
+
+  it('strips a trailing slash/backslash from the selected path (AC-4)', async () => {
+    invokeTauriCommand.mockResolvedValue(true);
+    openFolderDialog.mockResolvedValue('C:\\Users\\Yusuf\\Belgeler\\');
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+
+    expect(await screen.findByTestId('selected-folder-path')).toHaveTextContent('C:\\Users\\Yusuf\\Belgeler');
+    expect(invokeTauriCommand).toHaveBeenCalledWith('plugin:fs|exists', { path: 'C:\\Users\\Yusuf\\Belgeler' });
+  });
+
+  it('re-shows the error on each consecutive inaccessible folder selection (AC-5)', async () => {
+    invokeTauriCommand.mockResolvedValue(false);
+    openFolderDialog.mockResolvedValue('C:\\Geçersiz1');
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+    await screen.findByText('Seçilen klasöre erişilemiyor. Lütfen başka bir klasör seçin.');
+
+    openFolderDialog.mockResolvedValue('C:\\Geçersiz2');
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+
+    // Yeni seçimde hata anlık olarak temizlenip doğrulama tamamlanınca yeniden gösterilir
+    // (TOCTOU koruması) — önce path güncellemesini bekleyip stale element'i eleyerek
+    // hatanın gerçekten YENİDEN göründüğünü doğruluyoruz, ilk (eski) eşleşmeyi değil.
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-folder-path')).toHaveTextContent('C:\\Geçersiz2');
+    });
+    await waitFor(() => {
+      expect(screen.getByText('Seçilen klasöre erişilemiyor. Lütfen başka bir klasör seçin.')).toBeVisible();
+    });
+  });
+
+  it('treats a rejected invoke call as inaccessible instead of failing silently (behavior contract row 8)', async () => {
+    invokeTauriCommand.mockRejectedValue(new Error('IPC hatası'));
+    openFolderDialog.mockResolvedValue('C:\\Beklenmedik');
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+
+    expect(await screen.findByText('Seçilen klasöre erişilemiyor. Lütfen başka bir klasör seçin.')).toBeVisible();
+    expect(screen.getByRole('button', { name: /devam/i })).toBeDisabled();
   });
 });

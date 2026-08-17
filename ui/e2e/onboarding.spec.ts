@@ -23,8 +23,11 @@ test.describe('first-run folder onboarding', () => {
   test('shows the chosen native-dialog folder and enables Continue', async ({ page }) => {
     await page.addInitScript(() => {
       (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
-        invoke: async (cmd: string) =>
-          cmd === 'plugin:dialog|open' ? 'C:\\Users\\Yusuf\\Documents\\Müvekkiller' : Promise.reject(new Error(`unmocked command: ${cmd}`)),
+        invoke: async (cmd: string) => {
+          if (cmd === 'plugin:dialog|open') return 'C:\\Users\\Yusuf\\Documents\\Müvekkiller';
+          if (cmd === 'plugin:fs|exists') return true;
+          return Promise.reject(new Error(`unmocked command: ${cmd}`));
+        },
       };
     });
     await page.goto('/');
@@ -93,8 +96,11 @@ test.describe('first-run folder onboarding', () => {
   test('shows a full-path tooltip when tabbing focus to the selected folder path (AC-2)', async ({ page }) => {
     await page.addInitScript(() => {
       (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
-        invoke: async (cmd: string) =>
-          cmd === 'plugin:dialog|open' ? 'C:\\Users\\Yusuf\\Documents\\Müvekkiller' : Promise.reject(new Error(`unmocked command: ${cmd}`)),
+        invoke: async (cmd: string) => {
+          if (cmd === 'plugin:dialog|open') return 'C:\\Users\\Yusuf\\Documents\\Müvekkiller';
+          if (cmd === 'plugin:fs|exists') return true;
+          return Promise.reject(new Error(`unmocked command: ${cmd}`));
+        },
       };
     });
     await page.goto('/');
@@ -113,8 +119,11 @@ test.describe('first-run folder onboarding', () => {
   test('shows the same full-path tooltip on mouse hover over the selected folder path (AC-3)', async ({ page }) => {
     await page.addInitScript(() => {
       (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
-        invoke: async (cmd: string) =>
-          cmd === 'plugin:dialog|open' ? 'C:\\Users\\Yusuf\\Documents\\Müvekkiller' : Promise.reject(new Error(`unmocked command: ${cmd}`)),
+        invoke: async (cmd: string) => {
+          if (cmd === 'plugin:dialog|open') return 'C:\\Users\\Yusuf\\Documents\\Müvekkiller';
+          if (cmd === 'plugin:fs|exists') return true;
+          return Promise.reject(new Error(`unmocked command: ${cmd}`));
+        },
       };
     });
     await page.goto('/');
@@ -207,8 +216,11 @@ test.describe('first-run folder onboarding', () => {
   test('shows a red border and inline error when Continue is clicked with an empty request (AC-2)', async ({ page }) => {
     await page.addInitScript(() => {
       (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
-        invoke: async (cmd: string) =>
-          cmd === 'plugin:dialog|open' ? 'C:\\Users\\Yusuf\\Documents\\Müvekkiller' : Promise.reject(new Error(`unmocked command: ${cmd}`)),
+        invoke: async (cmd: string) => {
+          if (cmd === 'plugin:dialog|open') return 'C:\\Users\\Yusuf\\Documents\\Müvekkiller';
+          if (cmd === 'plugin:fs|exists') return true;
+          return Promise.reject(new Error(`unmocked command: ${cmd}`));
+        },
       };
     });
     await page.goto('/');
@@ -225,8 +237,11 @@ test.describe('first-run folder onboarding', () => {
   test('clears the red border and error as soon as the user starts typing (AC-4)', async ({ page }) => {
     await page.addInitScript(() => {
       (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
-        invoke: async (cmd: string) =>
-          cmd === 'plugin:dialog|open' ? 'C:\\Users\\Yusuf\\Documents\\Müvekkiller' : Promise.reject(new Error(`unmocked command: ${cmd}`)),
+        invoke: async (cmd: string) => {
+          if (cmd === 'plugin:dialog|open') return 'C:\\Users\\Yusuf\\Documents\\Müvekkiller';
+          if (cmd === 'plugin:fs|exists') return true;
+          return Promise.reject(new Error(`unmocked command: ${cmd}`));
+        },
       };
     });
     await page.goto('/');
@@ -241,5 +256,70 @@ test.describe('first-run folder onboarding', () => {
     await expect(page.getByText('Devam etmek için bir istek yazın.')).toHaveCount(0);
     // fill() bırakır textarea odaklı halde; odak kenarlığı (#2563EB) hâlâ geçerli, hata kenarlığı (#DC2626) değil.
     await expect(textarea).toHaveCSS('border-color', 'rgb(37, 99, 235)');
+  });
+
+  // AC-2 (gecersiz-klasor-reddi / Saga #256): erişilemeyen klasör seçilince path korunur + hata mesajı görünür + Devam disabled.
+  test('keeps the path visible and disables Continue when the selected folder is inaccessible (AC-2)', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+        invoke: async (cmd: string) => {
+          if (cmd === 'plugin:dialog|open') return 'C:\\Users\\Yusuf\\Documents\\Silinmiş';
+          if (cmd === 'plugin:fs|exists') return false;
+          return Promise.reject(new Error(`unmocked command: ${cmd}`));
+        },
+      };
+    });
+    await page.goto('/');
+
+    await page.getByRole('button', { name: /klasör seç/i }).click();
+
+    await expect(page.getByTestId('selected-folder-path')).toHaveText('C:\\Users\\Yusuf\\Documents\\Silinmiş');
+    await expect(page.getByText('Seçilen klasöre erişilemiyor. Lütfen başka bir klasör seçin.')).toBeVisible();
+    await expect(page.getByRole('button', { name: /devam/i })).toBeDisabled();
+  });
+
+  // AC-3 (gecersiz-klasor-reddi / Saga #256): geçerli bir klasör yeniden seçilince hata kalkar, Devam aktifleşir.
+  test('clears the folder error and enables Continue after re-selecting a valid folder (AC-3)', async ({ page }) => {
+    await page.addInitScript(() => {
+      let dialogCallCount = 0;
+      (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+        invoke: async (cmd: string) => {
+          if (cmd === 'plugin:dialog|open') {
+            dialogCallCount += 1;
+            return dialogCallCount === 1 ? 'C:\\Geçersiz' : 'C:\\Geçerli';
+          }
+          if (cmd === 'plugin:fs|exists') return dialogCallCount === 1 ? false : true;
+          return Promise.reject(new Error(`unmocked command: ${cmd}`));
+        },
+      };
+    });
+    await page.goto('/');
+
+    await page.getByRole('button', { name: /klasör seç/i }).click();
+    await expect(page.getByText('Seçilen klasöre erişilemiyor. Lütfen başka bir klasör seçin.')).toBeVisible();
+
+    await page.getByRole('button', { name: /klasör seç/i }).click();
+
+    await expect(page.getByText('Seçilen klasöre erişilemiyor. Lütfen başka bir klasör seçin.')).toHaveCount(0);
+    await expect(page.getByTestId('selected-folder-path')).toHaveText('C:\\Geçerli');
+    await expect(page.getByRole('button', { name: /devam/i })).toBeEnabled();
+  });
+
+  // AC-4 (gecersiz-klasor-reddi / Saga #256): trailing backslash normalize edilip gösterilen path'ten temizlenmeli.
+  test('strips a trailing backslash from the displayed folder path (AC-4)', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+        invoke: async (cmd: string) => {
+          if (cmd === 'plugin:dialog|open') return 'C:\\Users\\Yusuf\\Belgeler\\';
+          if (cmd === 'plugin:fs|exists') return true;
+          return Promise.reject(new Error(`unmocked command: ${cmd}`));
+        },
+      };
+    });
+    await page.goto('/');
+
+    await page.getByRole('button', { name: /klasör seç/i }).click();
+
+    await expect(page.getByTestId('selected-folder-path')).toHaveText('C:\\Users\\Yusuf\\Belgeler');
   });
 });

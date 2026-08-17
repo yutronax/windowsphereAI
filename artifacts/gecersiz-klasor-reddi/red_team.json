@@ -1,0 +1,45 @@
+{
+  "task_slug": "gecersiz-klasor-reddi",
+  "saga_task_id": 256,
+  "reviewed_by": "obss-red-team subagent (bağımsız, Codex kotası dolu olduğu için Bölüm C override kapsamında çağrıldı)",
+  "reviewed_at": "2026-08-17",
+  "security_findings": [
+    {
+      "finding": "Mimari boşluk: gerçek @tauri-apps/plugin-fs/src-tauri olmadan bu özellik paketlenip gerçek kullanıcıya ulaşırsa, invoke('plugin:fs|exists', ...) reddedilir ve kod bunu 'erişilemez' olarak yorumlayıp HER klasörü reddeder — onboarding kalıcı çıkmaz sokak olur, testler yeşil kaldığı için hiçbir CI sinyalinde görünmez.",
+      "severity": "high",
+      "scenario": "Ekip bu özelliği src-tauri/plugin-fs bağlanmadan tauri build ile paketleyip beta sürüme koyarsa, her yeni kullanıcı onboarding'in ilk adımında tıkanır, hiçbir tanılama sinyali olmadan.",
+      "status": "kabul edildi, commit engellenmedi — bilinçli kapsam kararı zaten atdd.md'de kayıtlıydı. Aksiyon: Saga task #279 (RELEASE-BLOCKER, critical, #256'ya depends_on) oluşturuldu, paketleme öncesi zorunlu."
+    },
+    {
+      "finding": "TOCTOU boşluğu: kullanıcı zaten geçerli bir klasör seçmişken (Devam aktif) yeni bir klasör seçtiğinde, yeni exists kontrolü sonuçlanana kadarki asenkron pencerede eski isFolderInvalid=false değeri geçerli kalıyor, Devam yanlışlıkla tıklanabilir kalıyordu.",
+      "severity": "medium",
+      "scenario": "Kullanıcı geçerli klasör A'dan sonra yavaş bir ağ paylaşımındaki klasör B'yi seçer; exists(B) sonuçlanmadan Devam'a basarsa doğrulanmamış bir klasörle onContinue tetiklenebilirdi.",
+      "status": "düzeltildi — isValidatingFolder state'i eklendi, Devam butonunun disabled koşuluna dahil edildi, yeni bir unit testle doğrulandı (28. test). code_diff.md/test_diff.md güncellendi."
+    },
+    {
+      "finding": "Race condition guard path-string eşitliğine dayanıyor (latestRequestedPathRef), monotonic bir request-id değil; kullanıcı AYNI path'i art arda iki kez seçerse (örn. sabırsız çift tıklama) her iki invoke da ref-eşitlik kontrolünü geçer.",
+      "severity": "low",
+      "scenario": "Kullanıcı yeniden bağlanan bir ağ klasörünü bir saniye içinde iki kez seçerse, iki invoke arasında ağ durumu değişirse UI daha eski sonucu gösterebilir.",
+      "status": "kabul edildi, düzeltilmedi — bu task'ın dar kapsamı için düşük öncelikli, gerçek plugin-fs entegrasyonu (Saga #279) sırasında monotonic request-id'ye geçiş değerlendirilebilir."
+    },
+    {
+      "finding": "Trailing slash normalize regex'i (/[\\\\/]+$/) kök sürücü path'lerini (ör. 'C:\\\\') yanlış normalize ediyor ('C:' — Windows'ta farklı bir anlam taşır, cwd-on-C: vs drive root).",
+      "severity": "low",
+      "scenario": "Kullanıcı yeni takılan bir harici diskin kökünü (ör. 'E:\\\\') seçerse, 'E:' olarak normalize edilip gösterilir/gönderilir — kafa karıştırıcı ve gerçek plugin-fs ile farklı bir dosya sistemi varlığına çözümlenebilir.",
+      "status": "kabul edildi, düzeltilmedi — atdd.md'de normalize kapsamı bilinçli olarak minimal tutulmuştu (sadece trailing slash), bu edge case dar kapsamlı task için düşük öncelikli. Takip notu olarak kaydedildi."
+    }
+  ],
+  "approved_points": [
+    "code_diff.md/test_diff.md iddiaları gerçek git diff ile birebir örtüşüyor, App.tsx/backend/CSS'e taşma yok.",
+    "28 unit test ve 19 e2e test bağımsız olarak yeniden çalıştırılıp PASS bulundu.",
+    "invoke reddi (Promise rejection) doğru ele alınmış — sessiz başarı yok.",
+    "Reorder race condition (atdd.md Risks'te öngörülen, A sonra B seçilir, A'nın invoke'u geç döner senaryosu) latestRequestedPathRef ile doğru çözülmüş.",
+    "Devam butonunun disabled mantığı (isReady/selectedFolder/isFolderInvalid/isValidatingFolder) tüm temel durumları kapsıyor.",
+    "Scope disiplini iyi: package.json değişikliği minimal ve gerekçeli, yeni bir plugin değil."
+  ],
+  "overall_assessment": "Diff iddiaları gerçek ve testler yeşil. Task kendi dar kapsamı (mock invoke sözleşmesi) içinde doğru ve disiplinli. Bulunan HIGH bulgu bu task'ın kendisinin hatası değil, projenin daha büyük bir mimari eksikliği (gerçek Tauri fs backend yok) — bu artık ayrı, açıkça isimlendirilmiş bir release-blocker task'a (#279) bağlandı. TOCTOU boşluğu commit öncesi düzeltildi. İki düşük öncelikli bulgu (aynı-path race, kök sürücü normalize) kayıt altına alındı, bu task'ı engellemiyor.",
+  "ready_to_commit": {
+    "decision": "evet",
+    "gerekce": "Tüm iddialar bağımsız doğrulandı, kapsam taşması yok, testler yeşil (28 unit + 19 e2e). HIGH bulgu için release-blocker takip task'ı (#279) oluşturuldu ve #256'ya bağımlı kılındı — paketleme öncesi zorunlu hale getirildi. MEDIUM (TOCTOU) bulgusu commit öncesi düzeltildi ve test edildi. İki LOW bulgu kayıt altında, engelleyici değil."
+  }
+}
