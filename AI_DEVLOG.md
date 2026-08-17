@@ -1,5 +1,26 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## vite-vitest-guvenlik-guncellemesi (Saga #278, epic #23)
+
+**Saga #250'de ertelenen güvenlik borcu kapatıldı.** `npm audit fix --force`
+ile `vite` (5.4.10→8.2.1) ve `vitest` (2.1.9→4.1.10) yükseltildi (3+2 major
+sürüm); `npm audit` artık 0 zafiyet raporluyor (öncesi: 3 moderate, 1 high,
+1 critical, esbuild dev-server CORS zinciri). Hiçbir uygulama kodu
+değişmedi, tüm mevcut testler (13 pytest + 42 vitest + 26 playwright)
+yeşil kaldı.
+
+**Red-team'in bulduğu — ifşa edilmesi gereken, ama düzeltilmesi gerekmeyen
+iki boşluk.** (1) `npm ls`, `@vitejs/plugin-react@4.7.0`'ın `vite@8`'i
+henüz resmi peer aralığında desteklemediğini gösteriyor (`ELSPROBLEMS`/
+`invalid`) — kurulum çalışıyor ve testler yeşil ama npm'in kendi
+çözümleyicisi ağacı geçersiz sayıyor. (2) Bu proje bir Tauri masaüstü
+uygulaması ama `src-tauri/` henüz yok (Saga #279); mevcut test paketi
+(jsdom + tarayıcı-içi Playwright) gerçek native webview runtime'ını hiç
+egzersiz etmiyor, dolayısıyla bu yükseltmenin paketlenmiş uygulamada
+sorunsuz çalıştığı test EDİLEMEDİ. İkisi de kod değişikliği gerektirmiyor
+— `verify_report.md`'ye açıkça ifşa edildi, ikincisi ayrıca #279'un
+açıklamasına ("gerçek Tauri build adımında bunu da doğrula") not düşüldü.
+
 ## ilk-istek-oturum-baglami (Saga #258, epic #23)
 
 **İlk `saga-oto` (tam otonom, çok-task'lı) koşusu.** Bu task, yeni
