@@ -134,10 +134,26 @@ def test_generate_plan_skeleton_uses_the_env_model_when_none_passed(monkeypatch)
 
 
 def test_build_metadata_prompt_includes_only_filename_and_date_not_content():
-    prompt = build_metadata_prompt([PdfFileMetadata(filename="fatura.pdf", createdAt="2026-08-01")])
+    prompt = build_metadata_prompt([PdfFileMetadata(filename="fatura.pdf", createdAt="2026-08-01")], "PDF'leri sırala")
 
     assert "fatura.pdf" in prompt
     assert "2026-08-01" in prompt
+
+
+def test_build_metadata_prompt_includes_the_user_request_text():
+    # Saga #292: request_text olmadan LLM COPY/DELETE/RENAME/LIST arasindan
+    # dogru operationType'i secemiyordu - artik prompt'a dahil ediliyor.
+    prompt = build_metadata_prompt([PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")], "Bu dosyalari yedekle")
+
+    assert "Bu dosyalari yedekle" in prompt
+
+
+def test_generate_plan_skeleton_passes_the_request_text_to_the_llm_prompt():
+    client = FakeLLMClient(response=VALID_PLAN_JSON)
+
+    generate_plan_skeleton(ONE_PDF, client, request_text="Eski dosyalari sil")
+
+    assert "Eski dosyalari sil" in client.last_call["user_prompt"]
 
 
 def test_raises_plan_generation_error_when_date_source_is_missing():

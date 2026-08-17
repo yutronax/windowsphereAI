@@ -93,7 +93,7 @@ def create_plan(
     pdf_files = discover_pdf_files(allowed_root)
 
     try:
-        plan = generate_plan_skeleton(pdf_files, client)
+        plan = generate_plan_skeleton(pdf_files, client, request_text=session.requestText)
     except PlanGenerationError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 

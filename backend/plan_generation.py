@@ -10,21 +10,33 @@ DEFAULT_MODEL_ID = "gpt-4o-mini"
 MODEL_ID_ENV_VAR = "PLAN_LLM_MODEL_ID"
 
 PLAN_SYSTEM_PROMPT = (
-    "Sen bir dosya organizasyon asistanısın. Sana verilen PDF dosya adı ve "
-    "oluşturulma tarihi metadata'sından, dosyaları tarihe göre YYYY-MM "
-    "klasörlerine taşıyacak bir plan üret. Sadece şu JSON şemasında yanıt "
-    'ver: {"dateSource": "created_at", "sortOrder": "ascending"|"descending", '
+    "Sen bir dosya organizasyon asistanısın. Sana kullanıcının doğal dil "
+    "isteği ile birlikte PDF dosya adı ve oluşturulma tarihi metadata'sı "
+    "verilecek. Kullanıcının isteğine göre DOĞRU operationType'ı seç:\n"
+    '- "taşı", "sırala", "organize et", "düzenle" → "Taşı" (varsayılan, '
+    "istek belirsizse bunu kullan)\n"
+    '- "kopyala", "yedekle", "çoğalt" → "Kopyala"\n'
+    '- "sil", "temizle", "kaldır" → "Sil"\n'
+    '- "yeniden adlandır", "ismini değiştir" → "Yeniden Adlandır"\n'
+    '- "listele", "göster", "say" → "Listele"\n\n'
+    "Sadece şu JSON şemasında yanıt ver: "
+    '{"dateSource": "created_at", "sortOrder": "ascending"|"descending", '
     '"steps": [{"order": <negatif olmayan tamsayı>, "operationType": '
     '"Taşı"|"Kopyala"|"Sil"|"Yeniden Adlandır"|"Listele", "targetFolder": '
     '<"YYYY-MM" formatında string>, "affectedFileCount": <negatif olmayan '
-    'tamsayı>, "fileNames": [<bu step\'e ait TAM dosya adlarının listesi>]'
-    "}]}. dateSource ve sortOrder alanları AÇIKÇA belirtilmeli, her "
-    "targetFolder kesinlikle YYYY-MM formatında olmalı. `fileNames`, sana "
-    "verilen PDF dosya adları listesinden BİREBİR alınmalı (yeni bir isim "
-    "uydurma, hiçbirini atlamama, hiçbirini birden fazla step'e koyma); "
-    "her step'in `affectedFileCount`'u o step'in `fileNames` listesinin "
-    "uzunluğuna EŞİT olmalı. Başka hiçbir metin ekleme, sadece bu JSON'u "
-    "döndür."
+    'tamsayı>, "fileNames": [<bu step\'e ait TAM dosya adlarının listesi>], '
+    '"newFileNames": [<SADECE operationType "Yeniden Adlandır" ise, '
+    "fileNames ile AYNI sırada ve uzunlukta yeni dosya adları listesi; "
+    "başka HERHANGİ bir operationType'ta bu alanı TAMAMEN ATLA, JSON'a "
+    'hiç koyma>]}]}. dateSource ve sortOrder alanları AÇIKÇA belirtilmeli, '
+    "her targetFolder kesinlikle YYYY-MM formatında olmalı — 'Sil'/'Yeniden "
+    "Adlandır'/'Listele' için targetFolder GERÇEKTEN KULLANILMAZ ama şema "
+    "gereği yine de geçerli bir YYYY-MM string'i olmalı (ör. o step'teki "
+    "dosyaların oluşturulma ayı). `fileNames`, sana verilen PDF dosya "
+    "adları listesinden BİREBİR alınmalı (yeni bir isim uydurma, hiçbirini "
+    "atlamama, hiçbirini birden fazla step'e koyma); her step'in "
+    "`affectedFileCount`'u o step'in `fileNames` listesinin uzunluğuna "
+    "EŞİT olmalı. Başka hiçbir metin ekleme, sadece bu JSON'u döndür."
 )
 
 
@@ -40,23 +52,33 @@ def resolve_model_id() -> str:
     return os.environ.get(MODEL_ID_ENV_VAR, DEFAULT_MODEL_ID)
 
 
-def build_metadata_prompt(pdf_files: list[PdfFileMetadata]) -> str:
+def build_metadata_prompt(pdf_files: list[PdfFileMetadata], request_text: str) -> str:
     lines = [f"- {file.filename} (oluşturulma tarihi: {file.createdAt})" for file in pdf_files]
-    return "Aşağıdaki PDF dosyaları için bir plan üret:\n\n" + "\n".join(lines)
+    return (
+        f"Kullanıcının isteği: {request_text}\n\n"
+        "Aşağıdaki PDF dosyaları için bu isteğe uygun bir plan üret:\n\n" + "\n".join(lines)
+    )
 
 
 def generate_plan_skeleton(
     pdf_files: list[PdfFileMetadata],
     client: LLMClient,
+    request_text: str = "",
     model: str | None = None,
 ) -> PlanSkeleton:
+    # Saga #292: `request_text` olmadan LLM'in COPY/DELETE/RENAME/LIST
+    # (Saga #288-#291) arasından doğru operationType'ı seçmesi mümkün
+    # değildi — sadece dosya adı/tarih görüyordu, kullanıcının "sırala mı
+    # yedekle mi sil mi" istediğini bilemiyordu. Varsayılan boş string
+    # geriye dönük uyumluluk için (çağıran hiç geçmezse LLM "Taşı"
+    # varsayılanına düşer, prompt'taki eşleme rehberi gereği).
     if not pdf_files:
         # Taşınacak dosya yoksa LLM'e hiç istek atılmaz; dateSource/sortOrder
         # yine de şema tutarlılığı için sağlanır (fiilen kullanılmaz).
         return PlanSkeleton(steps=[], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
 
     resolved_model = model or resolve_model_id()
-    prompt = build_metadata_prompt(pdf_files)
+    prompt = build_metadata_prompt(pdf_files, request_text)
 
     try:
         raw_response = client.complete(

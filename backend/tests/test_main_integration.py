@@ -142,10 +142,10 @@ VALID_PLAN_JSON = json.dumps(
 )
 
 
-def _create_session(selected_folder: str = r"C:\Users\Yusuf\Documents") -> str:
+def _create_session(selected_folder: str = r"C:\Users\Yusuf\Documents", request_text: str = "bir istek") -> str:
     response = client.post(
         "/api/session",
-        json={"selectedFolder": selected_folder, "requestText": "bir istek"},
+        json={"selectedFolder": selected_folder, "requestText": request_text},
     )
     return response.json()["sessionId"]
 
@@ -182,6 +182,30 @@ def test_plan_endpoint_discovers_real_pdf_files_from_selected_folder_and_returns
 
     assert response.status_code == 200
     assert response.json()["steps"][0]["targetFolder"] == "2026-08"
+
+
+def test_plan_endpoint_passes_the_session_request_text_to_plan_generation(tmp_path):
+    # Saga #292: kullanicinin gercek istegi (session.requestText) LLM'e
+    # iletilmiyordu - COPY/DELETE/RENAME/LIST hicbir zaman gercek bir
+    # kullanici istegiyle tetiklenemezdi. Artik /api/plan bunu iletiyor.
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4 fake")
+    session_id = _create_session(selected_folder=str(tmp_path), request_text="Bu dosyalari yedekle")
+
+    captured_prompt: dict[str, str] = {}
+
+    class _CapturingStubLLMClient(_StubLLMClient):
+        def complete(self, *, model: str, system_prompt: str, user_prompt: str) -> str:
+            captured_prompt["user_prompt"] = user_prompt
+            return super().complete(model=model, system_prompt=system_prompt, user_prompt=user_prompt)
+
+    app.dependency_overrides[get_llm_client] = lambda: _CapturingStubLLMClient(response=VALID_PLAN_JSON)
+    try:
+        response = client.post("/api/plan", json={"sessionId": session_id})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert "Bu dosyalari yedekle" in captured_prompt["user_prompt"]
 
 
 def test_plan_endpoint_returns_410_when_selected_folder_no_longer_exists(tmp_path):

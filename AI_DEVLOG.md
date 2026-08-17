@@ -1,5 +1,32 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## plan-generation-coklu-operasyon-destegi (Saga #292, epic #26)
+
+**ATDD'de bulunan asıl boşluk task'ın kendi tanımından daha temeldi:**
+`generate_plan_skeleton` kullanıcının `requestText`'ini hiç almıyordu —
+session bu veriyi zaten taşıyordu (`SessionContext.requestText`) ama
+`main.py: create_plan` onu LLM'e hiç geçirmiyordu. Bu, epic 26'da
+eklenen COPY/DELETE/RENAME/LIST'in (Saga #288-291) gerçek bir kullanıcı
+isteğiyle ASLA tetiklenemeyeceği anlamına geliyordu — LLM sadece dosya
+adı+tarih görüyor, "sırala mı yedekle mi sil mi" istendiğini bilme
+imkânı yoktu.
+
+**Çözüm:** `generate_plan_skeleton`/`build_metadata_prompt`'a
+`request_text` parametresi eklendi, `main.py` `session.requestText`'i
+geçiriyor. `PLAN_SYSTEM_PROMPT`'a kaba bir doğal-dil→operationType
+eşleme rehberi ("sil/temizle/kaldır" → Sil, "kopyala/yedekle" → Kopyala
+vb.) ve `newFileNames` şema açıklaması eklendi. Katı bir regex/keyword
+eşleştirici YAZILMADI — LLM'in doğal dil anlama gücüne güvenildi.
+
+**Canlı DeepSeek doğrulaması yapıldı (kullanıcı API ödemesini yaptı,
+oturum içinde talep etti).** İki gerçek istekle test edildi: "Bu eski
+PDF dosyalarini sil" → doğru şekilde `operationType: "Sil"` seçti;
+"Bu dosyalarin ismini X ve Y olarak degistir" → doğru şekilde
+`operationType: "Yeniden Adlandır"` + doğru sırada/uzunlukta
+`newFileNames` üretti. Yeni prompt rehberinin gerçek bir LLM'le
+çalıştığı uçtan uca doğrulandı (ATDD'deki "bilinmeyen" riski kapatıldı).
+139/139 test yeşil.
+
 ## orchestrator-list-operasyonu (Saga #291, epic #26)
 
 **LIST tamamen salt okunur/inert — epic 26'nın en dar kapsamlı task'ı.**
