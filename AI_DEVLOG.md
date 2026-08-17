@@ -1,5 +1,20 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## kullanici-mesaj-balonu-stili (Saga #260, epic #24)
+
+**Kullanıcı mesaj balonu stillendirildi.** Mesaj metni artık ayrı bir
+`chat-message-bubble` div'ine sarmalanıyor (PlanCard balonun dışında,
+konumu değişmedi); kullanıcı rolü için koyu mavi (`#1E3A8A`) arka plan +
+beyaz metin, 16px padding, 14px köşe yarıçapı, `max-width: 65ch`. Asistan
+mesajları bu task'ta görsel olarak değişmedi (Saga #261'e bırakıldı, dar
+kapsam), sadece aynı yapısal sınıfı paylaşıyor.
+
+**Red-team: temiz geçti.** Kontrast oranı hesaplandı (~10.36:1, AAA
+seviyesinin bile üzerinde). PlanCard/hint/loading/error göstergelerinde
+regresyon yok (özel bir regresyon testiyle doğrulandı). Tek not: inline
+`<style>` bloğu büyüyor, ileride bir CSS modülüne/token dosyasına
+taşınması önerildi (bu task için gerekli değil). 99/99 test yeşil.
+
 ## plan-skeleton-sinir-sema-dogrulamasi (Saga #280, epic #24)
 
 **LLM plan-skeleton yanıtı için boundary şema doğrulaması eklendi (yeni
