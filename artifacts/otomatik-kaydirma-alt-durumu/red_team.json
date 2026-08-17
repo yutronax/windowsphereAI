@@ -1,0 +1,37 @@
+{
+  "security_findings": [
+    {
+      "finding": "useEffect only depended on messages.length; a message content mutation (e.g. plan.securityStatus flipping approved/rejected) at the same array length would not re-trigger auto-scroll for a user at the bottom.",
+      "severity": "medium",
+      "status": "fixed",
+      "fix": "Replaced the [messages.length] dependency with a derived scrollTriggerKey covering message count + last message id + plan.securityStatus + text length, so in-place content changes on the last message also trigger auto-scroll-if-at-bottom. Dormant today (no in-place mutation exists yet) but closes the gap before it becomes a real bug once plan-status streaming lands."
+    },
+    {
+      "finding": "Mount-time effect with isAtBottom=true default scrolls to bottom immediately when initialMessages is non-empty.",
+      "severity": "low",
+      "status": "accepted_risk",
+      "note": "This is the desired 'land at bottom of history' behavior for a chat app, not a defect."
+    },
+    {
+      "finding": "handleScroll fires on every native scroll event without debounce/throttle.",
+      "severity": "low",
+      "status": "accepted_risk",
+      "note": "Cheap boolean setState, React bails on same-value updates; not a correctness issue at current scope."
+    },
+    {
+      "finding": "The 'En yeni mesaja dön' button has no aria-live announcement when it appears — a screen-reader user scrolled away from bottom isn't told a new message arrived.",
+      "severity": "low",
+      "status": "accepted_risk",
+      "note": "Minor accessibility enhancement, not blocking; noted for a future a11y pass."
+    }
+  ],
+  "approved_points": [
+    "24px BOTTOM_THRESHOLD_PX + distanceFromBottom formula matches standard 'is user at bottom' pattern and AC-2 exactly.",
+    "scrollToBottom() falls back to direct scrollTop assignment when list.scrollTo is unavailable (jsdom), avoiding crashes in tests while using smooth scrollTo in real browsers.",
+    "'En yeni mesaja dön' button correctly unmounts (not just hides) when isAtBottom, keeping assertions unambiguous.",
+    "No conflict found between scroll state and isGeneratingPlan/editingPlanMessageId (Saga #264/#265) — fully independent.",
+    "77/77 tests green, diff matches code_diff.md/test_diff.md claims."
+  ],
+  "overall_assessment": "Implementation satisfies all 5 ATDD acceptance criteria. One real medium-severity gap (length-only scroll trigger) fixed immediately with a low-cost content-aware key, since the task's own scenario explicitly anticipated plan-status changes. Three low-severity items accepted as out-of-scope polish.",
+  "ready_to_commit": true
+}

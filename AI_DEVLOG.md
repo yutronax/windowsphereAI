@@ -1,5 +1,22 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## otomatik-kaydirma-alt-durumu (Saga #266, epic #24)
+
+**Otomatik kaydırma + "En yeni mesaja dön" düğmesi eklendi.** Mesaj listesine
+scroll takibi eklendi (24px eşik ile "en altta mı" tespiti); kullanıcı en
+alttaysa yeni mesajlarda liste otomatik en alta kayıyor, değilse otomatik
+kaydırma yapılmıyor ve bunun yerine bir "En yeni mesaja dön" düğmesi
+görünüyor.
+
+**Red-team: MEDIUM bulgu bulundu ve hemen düzeltildi (dormant risk).**
+Auto-scroll tetikleyicisi sadece `messages.length`'e bakıyordu — bir mesajın
+İÇERİĞİ (ör. plan `securityStatus`'u approved/rejected'e dönerse) aynı
+uzunlukta güncellenirse tetiklenmiyordu. Bugün hiçbir kod bu şekilde
+mesaj mutasyonu yapmadığı için "uykuda" bir risktir, ama ucuz bir düzeltme
+olduğu için hemen kapatıldı: tetikleyici artık mesaj sayısı + son mesajın
+id/plan.securityStatus/metin uzunluğunu içeren bir "parmak izi"ne bağlı
+(77/77 test yeşil).
+
 ## plan-hazirlaniyor-yukleniyor-durumu (Saga #265, epic #24)
 
 **Yükleniyor göstergesi + çift-gönderim kilidi eklendi.** `ChatScreen`'e
