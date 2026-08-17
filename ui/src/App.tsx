@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import ChatScreen from './components/chat/ChatScreen';
 import OnboardingScreen from './components/onboarding/OnboardingScreen';
 import { waitForBackendHealth } from './lib/backendHealth';
 
@@ -23,7 +24,7 @@ export default function App() {
   }, []);
 
   if (config === undefined) return null;
-  if (config || sessionId) return <main data-testid="main-chat-screen">Ana sohbet ekranı</main>;
+  if (config || sessionId) return <ChatScreen />;
 
   return <OnboardingScreen backendStatus={backendStatus} onContinue={setSessionId} onRetry={checkBackend} />;
 }
