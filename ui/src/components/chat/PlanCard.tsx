@@ -13,13 +13,14 @@ export type Plan = {
   rejectionReason?: string;
 };
 
-type Props = { plan: Plan; onApprove?: () => void };
+type Props = { plan: Plan; onApprove?: () => void; onChangePlan?: () => void; stale?: boolean };
 
 const DEFAULT_REJECTION_MESSAGE = 'Bu plan güvenlik kontrolünden geçemedi.';
 const PENDING_MESSAGE = 'Güvenlik kontrolü bekleniyor…';
+const STALE_MESSAGE = 'Bu plan artık geçerli değil, yeni plan bekleniyor.';
 const STATUS_TEXT_ID = 'plan-approve-status';
 
-export default function PlanCard({ plan, onApprove }: Props) {
+export default function PlanCard({ plan, onApprove, onChangePlan, stale = false }: Props) {
   const [hasApproved, setHasApproved] = useState(false);
   const sortedSteps = [...plan.steps]
     .map((step, index) => ({ step, index }))
@@ -31,8 +32,14 @@ export default function PlanCard({ plan, onApprove }: Props) {
   // etkinleşir. `securityStatus` henüz gelmemişken (undefined) veya "rejected"
   // ise devre dışı kalır — kontrol edilmemiş bir plan asla onaylanabilir
   // durumda gösterilmez (bağımsız red-team bulgusu, 2026-08-17).
-  const canApprove = isApproved && !hasApproved;
-  const statusText = isRejected ? plan.rejectionReason || DEFAULT_REJECTION_MESSAGE : !isApproved ? PENDING_MESSAGE : null;
+  const canApprove = isApproved && !hasApproved && !stale;
+  const statusText = stale
+    ? STALE_MESSAGE
+    : isRejected
+      ? plan.rejectionReason || DEFAULT_REJECTION_MESSAGE
+      : !isApproved
+        ? PENDING_MESSAGE
+        : null;
 
   function handleApprove() {
     if (!canApprove) return;
@@ -96,6 +103,17 @@ export default function PlanCard({ plan, onApprove }: Props) {
         .plan-card-status-text.is-rejected {
           color: #DC2626;
         }
+        .plan-card-change-btn {
+          margin-top: 12px;
+          margin-left: 8px;
+          height: 44px;
+          padding: 0 20px;
+          border-radius: 8px;
+          background-color: #fff;
+          color: #374151;
+          border: 1px solid #D1D5DB;
+          font-size: 16px;
+        }
       `}</style>
       <ol className="plan-card-list">
         {sortedSteps.map(({ step, index }) => (
@@ -118,12 +136,20 @@ export default function PlanCard({ plan, onApprove }: Props) {
       >
         Planı onayla
       </button>
+      <button
+        type="button"
+        className="plan-card-change-btn"
+        data-testid="plan-change-button"
+        onClick={() => onChangePlan?.()}
+      >
+        Planı değiştir
+      </button>
       {statusText && (
         <div aria-live="polite">
           <p
             id={STATUS_TEXT_ID}
-            className={isRejected ? 'plan-card-status-text is-rejected' : 'plan-card-status-text'}
-            data-testid={isRejected ? 'plan-rejection-reason' : 'plan-pending-status'}
+            className={isRejected && !stale ? 'plan-card-status-text is-rejected' : 'plan-card-status-text'}
+            data-testid={stale ? 'plan-stale-status' : isRejected ? 'plan-rejection-reason' : 'plan-pending-status'}
           >
             {statusText}
           </p>

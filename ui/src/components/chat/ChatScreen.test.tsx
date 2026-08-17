@@ -108,4 +108,59 @@ describe('ChatScreen (dikey-mesaj-akisi / Saga #259)', () => {
     expect(items[0]).toHaveTextContent('birinci');
     expect(items[1]).toHaveTextContent('ikinci');
   });
+
+  it('focuses the textarea and shows an editing hint when "Planı değiştir" is clicked, without approving (Saga #264 AC-1, AC-2, AC-3)', () => {
+    render(
+      <ChatScreen
+        initialMessages={[
+          { id: 'p1', role: 'assistant', text: 'Önerilen plan:', plan: { steps: [{ order: 1, operationType: 'Taşı', targetFolder: 'X', affectedFileCount: 2 }], securityStatus: 'approved' } },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByTestId('chat-edit-plan-hint')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('plan-change-button'));
+
+    expect(screen.getByTestId('chat-edit-plan-hint')).toBeVisible();
+    expect(screen.getByTestId('chat-input-textarea')).toHaveFocus();
+    expect(screen.getByTestId('plan-approve-button')).toBeEnabled();
+  });
+
+  it('marks the edited plan as stale and clears the hint once the new message is sent (Saga #264 AC-4, AC-5)', () => {
+    const onSendMessage = vi.fn();
+    render(
+      <ChatScreen
+        onSendMessage={onSendMessage}
+        initialMessages={[
+          { id: 'p1', role: 'assistant', text: 'Önerilen plan:', plan: { steps: [{ order: 1, operationType: 'Taşı', targetFolder: 'X', affectedFileCount: 2 }], securityStatus: 'approved' } },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('plan-change-button'));
+    const textarea = screen.getByTestId('chat-input-textarea');
+    fireEvent.change(textarea, { target: { value: 'başka bir klasöre taşı' } });
+    fireEvent.click(screen.getByText('Gönder'));
+
+    expect(screen.queryByTestId('chat-edit-plan-hint')).not.toBeInTheDocument();
+    expect(screen.getByTestId('plan-stale-status')).toHaveTextContent('Bu plan artık geçerli değil, yeni plan bekleniyor.');
+    expect(screen.getByTestId('plan-approve-button')).toBeDisabled();
+    expect(onSendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: 'başka bir klasöre taşı' }));
+  });
+
+  it('does not mark a plan stale when the user sends an empty message while editing (behaviour contract)', () => {
+    render(
+      <ChatScreen
+        initialMessages={[
+          { id: 'p1', role: 'assistant', text: 'Önerilen plan:', plan: { steps: [{ order: 1, operationType: 'Taşı', targetFolder: 'X', affectedFileCount: 2 }], securityStatus: 'approved' } },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('plan-change-button'));
+    fireEvent.keyDown(screen.getByTestId('chat-input-textarea'), { key: 'Enter' });
+
+    expect(screen.getByTestId('chat-edit-plan-hint')).toBeVisible();
+    expect(screen.getByTestId('plan-approve-button')).toBeEnabled();
+  });
 });

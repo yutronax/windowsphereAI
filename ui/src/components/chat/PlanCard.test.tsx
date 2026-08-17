@@ -117,4 +117,26 @@ describe('PlanCard (plan-adimlari-kart / Saga #262)', () => {
 
     expect(screen.getByTestId('plan-approve-button')).toHaveClass('plan-card-approve-btn');
   });
+
+  it('calls onChangePlan and NOT onApprove when "Planı değiştir" is clicked (Saga #264 AC-1)', () => {
+    const onApprove = vi.fn();
+    const onChangePlan = vi.fn();
+    render(<PlanCard plan={{ ...onePlan, securityStatus: 'approved' }} onApprove={onApprove} onChangePlan={onChangePlan} />);
+
+    fireEvent.click(screen.getByTestId('plan-change-button'));
+
+    expect(onChangePlan).toHaveBeenCalledOnce();
+    expect(onApprove).not.toHaveBeenCalled();
+  });
+
+  it('permanently disables approval and shows a stale message when stale=true (Saga #264 AC-4)', () => {
+    const onApprove = vi.fn();
+    render(<PlanCard plan={{ ...onePlan, securityStatus: 'approved' }} onApprove={onApprove} stale />);
+
+    const button = screen.getByTestId('plan-approve-button');
+    expect(button).toBeDisabled();
+    expect(screen.getByTestId('plan-stale-status')).toHaveTextContent('Bu plan artık geçerli değil, yeni plan bekleniyor.');
+    fireEvent.click(button);
+    expect(onApprove).not.toHaveBeenCalled();
+  });
 });

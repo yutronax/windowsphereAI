@@ -11,7 +11,15 @@ type Props = {
 export default function ChatScreen({ initialMessages = [], onSendMessage }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [draft, setDraft] = useState('');
+  const [editingPlanMessageId, setEditingPlanMessageId] = useState<string | null>(null);
+  const [staleMessageIds, setStaleMessageIds] = useState<Set<string>>(new Set());
   const nextMessageIdRef = useRef(0);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  function handleChangePlan(messageId: string) {
+    setEditingPlanMessageId(messageId);
+    textareaRef.current?.focus();
+  }
 
   function sendDraft() {
     const trimmed = draft.trim();
@@ -19,6 +27,10 @@ export default function ChatScreen({ initialMessages = [], onSendMessage }: Prop
     const message: ChatMessage = { id: `msg-${nextMessageIdRef.current++}`, role: 'user', text: trimmed };
     setMessages((current) => [...current, message]);
     setDraft('');
+    if (editingPlanMessageId !== null) {
+      setStaleMessageIds((current) => new Set(current).add(editingPlanMessageId));
+      setEditingPlanMessageId(null);
+    }
     onSendMessage?.(message);
   }
 
@@ -52,6 +64,12 @@ export default function ChatScreen({ initialMessages = [], onSendMessage }: Prop
         }
         .chat-message-item[data-role="user"] {
           margin-left: auto;
+        }
+        .chat-edit-plan-hint {
+          margin: 0;
+          padding: 4px 16px 0;
+          font-size: 13px;
+          color: #4B5563;
         }
         .chat-input-area {
           flex: 0 0 auto;
@@ -87,12 +105,24 @@ export default function ChatScreen({ initialMessages = [], onSendMessage }: Prop
             data-role={message.role}
           >
             {message.text}
-            {message.plan && <PlanCard plan={message.plan} />}
+            {message.plan && (
+              <PlanCard
+                plan={message.plan}
+                onChangePlan={() => handleChangePlan(message.id)}
+                stale={staleMessageIds.has(message.id)}
+              />
+            )}
           </li>
         ))}
       </ul>
+      {editingPlanMessageId !== null && (
+        <p className="chat-edit-plan-hint" data-testid="chat-edit-plan-hint" aria-live="polite">
+          Planı değiştirmek için ne yapmak istediğinizi yazın.
+        </p>
+      )}
       <div className="chat-input-area">
         <textarea
+          ref={textareaRef}
           data-testid="chat-input-textarea"
           aria-label="Mesaj yaz"
           className="chat-input-textarea"

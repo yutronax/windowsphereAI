@@ -1,5 +1,22 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## plani-degistir-duzenleme-baglami (Saga #264, epic #24)
+
+**"Planı değiştir" düğmesi eklendi, onaydan tamamen izole.** `PlanCard`'a
+yeni bir düğme eklendi; tıklanınca sadece `onChangePlan` çağrılıyor,
+`onApprove` ile hiçbir kod yolu paylaşmıyor. `ChatScreen` textarea'yı
+focus'luyor ve kısa bir düzenleme ipucu gösteriyor; kullanıcı yeni mesaj
+gönderdiğinde ilgili plan `staleMessageIds`'e eklenip o planın onay
+düğmesi kalıcı olarak disabled kalıyor.
+
+**Red-team: iki düşük-önemli, zaten kapsam-dışı bırakılmış bulgu.**
+(1) Stale işaretleme sadece istemci-taraflı state — backend entegrasyonu
+henüz yok, atdd.md'de zaten açık risk olarak not düşülmüştü. (2)
+`editingPlanMessageId` tekil bir skaler — aynı anda iki farklı plan
+"değiştir" beklerse ikincisi birincinin üzerine yazar. İkisi de atdd.md
+"Risks/Assumptions" bölümünde önceden kabul edilmiş dar-kapsam kararları,
+düzeltme gerektirmedi (ready_to_commit: evet).
+
 ## vite-vitest-guvenlik-guncellemesi (Saga #278, epic #23)
 
 **Saga #250'de ertelenen güvenlik borcu kapatıldı.** `npm audit fix --force`
