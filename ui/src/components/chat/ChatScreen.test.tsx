@@ -381,6 +381,48 @@ describe('ChatScreen (dikey-mesaj-akisi / Saga #259)', () => {
     expect(() => fireEvent.click(screen.getByTestId('plan-approve-button'))).not.toThrow();
   });
 
+  it('renders a ResultCard alongside a message that carries a result (Saga #277 AC-1)', () => {
+    render(
+      <ChatScreen
+        initialMessages={[
+          {
+            id: 'r1',
+            role: 'assistant',
+            text: 'İşlem tamamlandı:',
+            result: { fileCount: 2, destinationFolders: ['2026-08'], status: 'completed' },
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId('result-card')).toBeVisible();
+    expect(screen.getByTestId('result-file-count')).toHaveTextContent('2 dosya işlendi');
+  });
+
+  it('does not render a ResultCard when a message has no result (Saga #277 AC-1, regression)', () => {
+    render(<ChatScreen initialMessages={[{ id: 'm1', role: 'assistant', text: 'sade metin' }]} />);
+
+    expect(screen.queryByTestId('result-card')).not.toBeInTheDocument();
+  });
+
+  it('keeps the chat input enabled while a ResultCard is shown (Saga #277 AC-5)', () => {
+    render(
+      <ChatScreen
+        initialMessages={[
+          {
+            id: 'r1',
+            role: 'assistant',
+            text: 'İşlem tamamlandı:',
+            result: { fileCount: 2, destinationFolders: ['2026-08'], status: 'completed' },
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId('chat-input-textarea')).toBeEnabled();
+    expect(screen.getByText('Gönder')).toBeDisabled(); // draft boş olduğu için, ResultCard'dan bağımsız
+  });
+
   it('renders PlanCard outside the message bubble, after it (Saga #260 AC-6, regression)', () => {
     render(
       <ChatScreen

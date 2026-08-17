@@ -1,5 +1,39 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## sonuc-karti-plan-tamamlanma-gosterimi (Saga #277, epic #25)
+
+**Yeni `ResultCard` component'i — `PlanCard`'ın onay sorumluluğuyla
+karıştırılmadı.** `ChatMessage`'a ayrı bir `result?: TransactionResult`
+alanı eklendi (`{ fileCount, destinationFolders, status }`) — `Plan`
+tipini genişletmek yerine ayrı tutuldu, çünkü `PlanCard` zaten
+fail-closed onay mantığıyla (Saga #265/#266/#273) yüklü; sonuç göstermek
+anlamsal olarak farklı bir sorumluluk. Boş `destinationFolders` durumu
+çökmeden net bir metinle gösteriliyor (AC-6).
+
+**Bu görevden itibaren skill'in artifact disiplinine (atdd.md/plan.md/
+verify_report.md) dönüldü** — önceki 5 task'ta (271-276) bu dosyalar
+yazılmamıştı, kullanıcı fark edip sordu; kararlaştırılan: geçmiş
+task'lar için geriye dönük yazılmayacak, bundan sonrakiler için
+`artifacts/<task-slug>/` altına gerçekten yazılacak.
+
+**Bilinçli kapsam kararı: HTTP wiring yok, sadece izole component
+testleri.** Saga #273/#274/#276'daki aynı önkoşul burada da geçerli —
+`App.tsx` gerçek bir backend çağrısı yapmıyor (Saga #285), bu yüzden
+`ResultCard` mock/örnek `TransactionResult` props'uyla test edildi,
+uçtan uca doğrulanamadı.
+
+**Red-team: backend↔frontend eşleşme boşluğu hemen kapatıldı.**
+`TransactionResult.destinationFolders`'ın backend'in TAM dosya yolu
+taşıyan `destination_path` alanından nasıl türetileceği (klasör
+çıkarma + tekilleştirme) ve `status` alanının backend'in
+`"pending"|"committed"|"rolled_back"` değerleriyle nasıl eşleşeceği hiç
+belirtilmemişti — bu, #285 wiring'i sırasında zaman baskısı altında
+test edilmeden yazılma riski taşıyordu. `ui/src/lib/transactionResult.ts:
+toTransactionResult()` ile bu eşleme saf bir fonksiyon olarak yazıldı ve
+test edildi (`"rolled_back"→"failed"`, fileCount=0 — Saga #274/#276'nın
+hep-ya-da-hiç atomik geri alma garantisi nedeniyle "partial" DEĞİL).
+116/116 frontend test yeşil (10 yeni test).
+
 ## kismi-hatada-ters-sirali-geri-alma (Saga #276, epic #25)
 
 **Rollback artık kaydedilen alanlardan okuyor, paralel bir bellek-içi

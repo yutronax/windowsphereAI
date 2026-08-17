@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type UIEvent } from 'react';
 import PlanCard, { type Plan } from './PlanCard';
+import ResultCard, { type TransactionResult } from './ResultCard';
 
-export type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string; plan?: Plan };
+export type ChatMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  plan?: Plan;
+  result?: TransactionResult;
+};
 
 type Props = {
   initialMessages?: ChatMessage[];
@@ -257,6 +264,7 @@ export default function ChatScreen({
                 isGeneratingPlan={isGeneratingPlan}
               />
             )}
+            {message.result && <ResultCard result={message.result} />}
           </li>
         ))}
       </ul>
