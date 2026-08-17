@@ -1,5 +1,26 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## asistan-mesaji-markdown-degerlendirmesi (Saga #282, epic #24)
+
+**Yeniden değerlendirildi, kod değişikliği YAPILMADI — öncül hâlâ
+geçerli değil.** Bu task'ın önkoşulu ("gerçek bir backend/LLM
+entegrasyon task'ı tamamlandığında ele alınmalı") Saga #287 ile
+teknik olarak sağlandı (App.tsx artık gerçekten `/api/plan`'a
+bağlı). Ama gerçek entegrasyonu inceleyince görülen: asistan
+mesaj metni HÂLÂ LLM'in serbest metni DEĞİL — `App.tsx: requestPlan`
+sadece iki sabit, tek satırlık string üretiyor ("Önerilen plan:" /
+"Seçili klasörde işlenecek PDF bulunamadı."). Backend'in LLM'i sadece
+YAPISAL `PlanSkeleton` JSON'u (steps) üretiyor, hiçbir zaman sohbet
+balonuna akan serbest metin üretmiyor — `PlanCard`/`ResultCard` da
+yapısal veriyi render ediyor, uzun paragraf yok. Red-team'in
+öngördüğü risk ("uzun yapısal olmayan paragraflar") mimari olarak
+HÂLÂ ORTAYA ÇIKMIYOR. Bir markdown parser bağımlılığı eklemek şu an
+sıfır gerçek karşılığı olan spekülatif bir iş olurdu (YAGNI). Bu
+değerlendirme belgelendi — eğer ileride backend'in LLM'i doğrudan
+serbest metin üretip sohbete akıtan bir özellik eklenirse (bugün
+planlı değil), bu task o zaman gerçek bir kod değişikliğiyle yeniden
+açılmalı.
+
 ## plan-validation-wiring (Saga #281, epic #24)
 
 **Yazılmış ama hiç bağlanmamış bir güvenlik kontrolü nihayet
