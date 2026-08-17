@@ -1,5 +1,42 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## delete-backup-retention-politikasi (Saga #300, epic #28)
+
+**Kod keşfinde task'ın kendi açıklamasından daha kritik bir bulgu
+ortaya çıktı:** yedek fiziksel olarak silinip `Transaction.status`
+`"committed"` bırakılsaydı, `revert_transaction`in
+`_rollback_completed_operations`i "hedef fiziksel olarak yok → zaten
+geri alınmış" kısayolunu (Saga #293) kullanıp bunu SESSİZCE
+`"rolled_back"` işaretlerdi — kullanıcı "geri aldım" sanır ama dosya
+GERÇEKTE SONSUZA DEK KAYBOLMUŞ olurdu. Çözüm: purge edilen
+transaction'lar YENİ bir `"backup_purged"` durumuna geçiriliyor —
+`revert_transaction`in ZATEN VAR OLAN "sadece committed transaction'lar
+geri alınabilir" guard'ı (Saga #293) bunu hiçbir kod değişikliği
+gerekmeden OTOMATİK OLARAK reddediyor.
+
+**Politika: otomatik, 30 gün, SADECE saf-DELETE transaction'lar.**
+Karışık operasyonlu (DELETE + MOVE gibi) transaction'lar PURGE
+EDİLMİYOR — MOVE/RENAME adımlarının backup_path'i gizli klasör DEĞİL
+orijinal konum, bunları da purge etmek hâlâ geri alınabilir adımları
+haksız yere kilitlerdi (dar kapsam kararı, kısmi-purge desteklenmiyor).
+
+**`recover_incomplete_transactions`in (Saga #286/#287) AYNI deseni:**
+`purge_expired_delete_backups` saf bir çağrılabilir fonksiyon, henüz
+hiçbir zamanlayıcı/startup event'ine BAĞLANMADI — projenin hiçbir
+yerinde gerçek bir zamanlama mekanizması yok, icat etmek bu task'ın
+kapsamını aşardı.
+
+**Red-team GERÇEK bir HIGH bulgu buldu ve HEMEN düzeltildi:** DB
+sorgusu TÜM köklerdeki committed transaction'ları döndürüyordu, ama
+fiziksel silme SADECE tek bir `allowed_root` altında kontrol
+ediliyordu — çok-kök bir kurulumda başka bir köke ait bir transaction
+hiçbir şey silinmeden `"backup_purged"` işaretlenip SONSUZA DEK geri
+alınamaz hale gelirdi (asıl güvenlik mekanizmasının kendisini tersine
+çeviren bir bug). Düzeltme: sadece GERÇEKTEN silinen transaction'lar
+durumunu değiştiriyor. Medium-önem bir eşzamanlılık bulgusu (fonksiyon
+henüz scheduler'a bağlı olmadığı için bloklamadı) Saga #302 olarak
+takip task'ına açıldı. 5 yeni test, 159/159 yeşil.
+
 ## son-islemi-geri-al-ui (Saga #295, epic #28)
 
 **Task'ın kendi varsaydığı "backend'in yeni revert-transaction

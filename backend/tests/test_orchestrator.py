@@ -7,10 +7,13 @@ from sqlalchemy.orm import Session
 from backend.db import create_db_engine, create_session_factory
 from backend.db_models import Base, Transaction
 from backend.models import DateSource, OperationType, PdfFileMetadata, PlanSkeleton, PlanStep, SortOrder
+import datetime as dt
+
 from backend.orchestrator import (
     PlanApplicationError,
     TransactionRevertError,
     apply_plan,
+    purge_expired_delete_backups,
     recover_incomplete_transactions,
     revert_transaction,
 )
@@ -786,3 +789,107 @@ def test_revert_transaction_ignores_operations_outside_the_allowed_root(session,
 
     assert transaction.status == "revert_failed"
     assert not outside_root.exists()
+
+
+def _apply_a_delete_plan(session, tmp_path, filename: str = "a.pdf"):
+    _write_pdf(tmp_path, filename)
+    pdf_files = [PdfFileMetadata(filename=filename, createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", [filename], operation_type=OperationType.DELETE)])
+    return apply_plan(session, plan, pdf_files, tmp_path)
+
+
+def test_purge_expired_delete_backups_deletes_the_backup_folder_and_marks_the_transaction_purged(session, tmp_path):
+    transaction = _apply_a_delete_plan(session, tmp_path)
+    backup_dir = tmp_path / ".windows-ai-files-backup" / str(transaction.id)
+    assert backup_dir.exists()
+    transaction.created_at = dt.datetime.utcnow() - dt.timedelta(days=31)
+    session.commit()
+
+    purged_ids = purge_expired_delete_backups(session, tmp_path, older_than_days=30)
+
+    assert purged_ids == [transaction.id]
+    assert not backup_dir.exists()
+    assert transaction.status == "backup_purged"
+
+
+def test_purge_expired_delete_backups_ignores_transactions_newer_than_the_cutoff(session, tmp_path):
+    transaction = _apply_a_delete_plan(session, tmp_path)
+    backup_dir = tmp_path / ".windows-ai-files-backup" / str(transaction.id)
+
+    purged_ids = purge_expired_delete_backups(session, tmp_path, older_than_days=30)
+
+    assert purged_ids == []
+    assert backup_dir.exists()
+    assert transaction.status == "committed"
+
+
+def test_purge_expired_delete_backups_skips_mixed_operation_transactions(session, tmp_path):
+    _write_pdf(tmp_path, "a.pdf")
+    _write_pdf(tmp_path, "b.pdf")
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+    plan = _plan(
+        [
+            _step(0, "2026-08", ["a.pdf"], operation_type=OperationType.DELETE),
+            _step(1, "2026-08", ["b.pdf"], operation_type=OperationType.MOVE),
+        ]
+    )
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+    backup_dir = tmp_path / ".windows-ai-files-backup" / str(transaction.id)
+    assert backup_dir.exists()
+    transaction.created_at = dt.datetime.utcnow() - dt.timedelta(days=31)
+    session.commit()
+
+    purged_ids = purge_expired_delete_backups(session, tmp_path, older_than_days=30)
+
+    assert purged_ids == []
+    assert backup_dir.exists()
+    assert transaction.status == "committed"
+
+
+def test_purge_expired_delete_backups_does_not_touch_a_transaction_belonging_to_a_different_root(
+    session, tmp_path
+):
+    # Red-team bulgusu (HIGH): `Transaction` hangi `allowed_root`a ait
+    # olduğunu bilmiyor — DB sorgusu TÜM köklerdeki committed transaction'ları
+    # döndürür. Başka bir köke ait bir transaction için bu fonksiyona YANLIŞ
+    # bir `allowed_root` verilirse (çok-kök senaryosu), o transaction'a
+    # DOKUNULMAMALI (durumu `"committed"` kalmalı, backup'ı olduğu gibi
+    # durmalı) — aksi halde hiçbir şey fiziksel olarak silinmeden geri
+    # alınamaz hale gelirdi.
+    other_root = tmp_path / "baska-bir-kok"
+    other_root.mkdir()
+    transaction = _apply_a_delete_plan(session, other_root)
+    transaction.created_at = dt.datetime.utcnow() - dt.timedelta(days=31)
+    session.commit()
+
+    wrong_root = tmp_path / "yanlis-kok"
+    wrong_root.mkdir()
+    purged_ids = purge_expired_delete_backups(session, wrong_root, older_than_days=30)
+
+    assert purged_ids == []
+    assert transaction.status == "committed"
+    assert (other_root / ".windows-ai-files-backup" / str(transaction.id)).exists()
+
+
+def test_purge_expired_delete_backups_result_is_rejected_by_revert_transaction_without_any_code_change(
+    session, tmp_path
+):
+    # Saga #300'ün asıl güvenlik gerekçesi: purge edilmiş bir transaction
+    # `revert_transaction`e verilirse, `_rollback_completed_operations`in
+    # "hedef fiziksel olarak yoksa zaten geri alınmış" kısayolu SESSİZCE
+    # "başarılı" görünürdü — `"backup_purged"` durumu bunu `revert_transaction`in
+    # ZATEN VAR OLAN committed-only guard'ıyla (Saga #293) engelliyor.
+    transaction = _apply_a_delete_plan(session, tmp_path)
+    transaction.created_at = dt.datetime.utcnow() - dt.timedelta(days=31)
+    session.commit()
+    purge_expired_delete_backups(session, tmp_path, older_than_days=30)
+
+    with pytest.raises(TransactionRevertError):
+        revert_transaction(session, transaction, tmp_path)
+
+    # Reddedilince hiçbir "başarılı geri alma" görünümü yok, dosya
+    # gerçekten kaybolmuş durumda kalıyor (bu testin amacı budur).
+    assert not (tmp_path / "a.pdf").exists()

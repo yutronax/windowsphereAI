@@ -1,3 +1,4 @@
+import datetime as dt
 import shutil
 from pathlib import Path
 
@@ -398,3 +399,85 @@ def recover_incomplete_transactions(session: Session) -> list[Transaction]:
 
     session.commit()
     return recovered
+
+
+DEFAULT_DELETE_BACKUP_RETENTION_DAYS = 30
+
+
+def purge_expired_delete_backups(
+    session: Session,
+    allowed_root: Path,
+    *,
+    older_than_days: int = DEFAULT_DELETE_BACKUP_RETENTION_DAYS,
+    now: dt.datetime | None = None,
+) -> list[int]:
+    """Saga #300: `_delete_backup_path`in oluşturduğu gizli yedek klasörü
+    (`allowed_root/.windows-ai-files-backup/<txn_id>/`) DELETE
+    işlemlerinin fiziksel yedeklerini SONSUZA DEK saklıyordu — hiçbir
+    temizlik mekanizması yoktu (Saga #289 red-team bulgusu). Bu fonksiyon
+    `created_at`i `now - older_than_days`ten ESKİ, `status == "committed"`
+    VE TÜM operasyonları DELETE olan ("saf DELETE") transaction'ların
+    gizli yedek klasörünü fiziksel olarak siler.
+
+    KRİTİK (kod keşfinde bulunan güvenlik gerekliliği): purge edilen
+    transaction `"backup_purged"` YENİ durumuna geçirilir — `"committed"`
+    OLARAK BIRAKILMAZ. Aksi halde `revert_transaction`in
+    `_rollback_completed_operations`i, artık fiziksel olarak VAR OLMAYAN
+    yedek dosyasını "zaten geri alınmış" sanıp SESSİZCE `"rolled_back"`
+    işaretlerdi (bkz. o fonksiyonun `destination_path.exists()` kısayolu)
+    — kullanıcı "geri aldım" sanır ama dosya GERÇEKTE SONSUZA DEK
+    KAYBOLMUŞ olurdu. `"backup_purged"` durumu, `revert_transaction`in
+    ZATEN VAR OLAN "sadece committed transaction'lar geri alınabilir"
+    guard'ı (Saga #293) tarafından OTOMATİK OLARAK reddedilir — bu
+    fonksiyon o guard'a hiçbir yeni kod eklemeden güvenir.
+
+    KARIŞIK operasyonlu (DELETE + başka bir tür) transaction'lar PURGE
+    EDİLMEZ — MOVE/COPY/RENAME adımlarının backup_path'i gizli klasör
+    DEĞİL, orijinal konumdur; bunları da `"backup_purged"` yapmak hâlâ
+    geri alınabilir adımları haksız yere kilitlerdi (dar kapsam kararı,
+    bkz. ATDD S3).
+
+    RED-TEAM BULGUSU (HIGH, hemen düzeltildi): `Transaction` tablosunda
+    hangi `allowed_root`a ait olduğunu belirten bir kolon YOK (Saga #294/
+    #295'teki AYNI dar-kapsam kararı) — bu fonksiyonun DB sorgusu TÜM
+    köklerdeki committed transaction'ları döndürür, ama `backup_dir` SADECE
+    çağıranın verdiği TEK `allowed_root` altında hesaplanır. Birden fazla
+    kök/session kullanan bir kurulumda, BAŞKA bir köke ait bir transaction
+    için `backup_dir.exists()` YANLIŞ olur (o kökte hiç yok) — eski kod
+    yine de `"backup_purged"` işaretlerdi, bu da hiçbir şey fiziksel olarak
+    silinmeden o transaction'ı SONSUZA DEK geri-alınamaz kılardı. Düzeltme:
+    `backup_dir.exists()` KONTROLÜ ARTIK ŞARTI — sadece GERÇEKTEN bir şey
+    silinen (bu `allowed_root` altında gerçekten var olan) transaction'lar
+    `"backup_purged"` olur; başka bir köke ait adaylar DOKUNULMADAN atlanır
+    (tekrar deneme fırsatı kalır, hiçbir revertible transaction sessizce
+    kilitlenmez).
+
+    Henüz bir zamanlayıcıya/FastAPI startup event'ine BAĞLANMADI
+    (`recover_incomplete_transactions` ile AYNI emsal, Saga #286/#287) —
+    bu saf, çağrılabilir bir fonksiyon."""
+    cutoff = (now or dt.datetime.utcnow()) - dt.timedelta(days=older_than_days)
+    candidates = session.scalars(
+        select(Transaction).where(Transaction.status == "committed", Transaction.created_at < cutoff)
+    ).all()
+
+    purged_ids: list[int] = []
+    for transaction in candidates:
+        operations = transaction.operations
+        if not operations:
+            continue
+        if not all(operation.operation_type == OperationType.DELETE.value for operation in operations):
+            continue
+        backup_dir = allowed_root / _DELETE_BACKUP_DIRNAME / str(transaction.id)
+        if not backup_dir.exists():
+            # Bu `allowed_root` altında hiç yok — ya BAŞKA bir köke ait
+            # (çok-kök senaryosu, red-team bulgusu) ya da daha önce zaten
+            # temizlenmiş. Her iki durumda da DOKUNMA: durumu değiştirip
+            # hâlâ geçerli olabilecek bir transaction'ı YANLIŞLIKLA
+            # kilitlemektense hiçbir şey yapmamak daha güvenli.
+            continue
+        shutil.rmtree(backup_dir)
+        transaction.status = "backup_purged"
+        purged_ids.append(transaction.id)
+
+    session.commit()
+    return purged_ids
