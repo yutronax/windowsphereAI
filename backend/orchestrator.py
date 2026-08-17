@@ -29,7 +29,13 @@ class PlanApplicationError(Exception):
 # DELETE için destination=gizli yedek konumu/backup=orijinal kaynak konumu.
 # Bu ortak sözleşme sayesinde rollback döngüsü HİÇBİR operationType'a özel
 # dallanma gerektirmeden çalışır.
-_SUPPORTED_OPERATION_TYPES = {OperationType.MOVE, OperationType.COPY, OperationType.DELETE, OperationType.RENAME}
+_SUPPORTED_OPERATION_TYPES = {
+    OperationType.MOVE,
+    OperationType.COPY,
+    OperationType.DELETE,
+    OperationType.RENAME,
+    OperationType.LIST,
+}
 
 # DELETE'in fiziksel yedeklerinin saklandığı, `allowed_root` altında gizli
 # klasör. transaction.id ile ayrıştırılır (farklı transaction'lardaki aynı
@@ -149,9 +155,11 @@ def apply_plan(
     `FileOperation`ın nihai durumu (`rolled_back`/`rollback_failed`) DB'ye
     yazılır.
 
-    `OperationType.MOVE`, `OperationType.COPY`, `OperationType.DELETE` ve
-    `OperationType.RENAME` destekler (Saga #288/#289/#290); başka bir
-    operationType görürse hiçbir dosyaya dokunmadan reddeder."""
+    `OperationType.MOVE`, `OperationType.COPY`, `OperationType.DELETE`,
+    `OperationType.RENAME` ve `OperationType.LIST` destekler (Saga
+    #288/#289/#290/#291) — `LIST` tamamen salt okunur/inert'tir, hiçbir
+    dosya sistemi çağrısı/kaydı yapmaz. Başka bir operationType görürse
+    hiçbir dosyaya dokunmadan reddeder."""
     validate_plan_paths(plan, pdf_files, allowed_root)
 
     for step in plan.steps:
@@ -170,6 +178,14 @@ def apply_plan(
     applied: list[FileOperation] = []
     try:
         for step, files in step_files:
+            # Saga #291: LIST tamamen salt okunur/inert — hiçbir dosya
+            # sistemi çağrısı yapılmaz, hiçbir FileOperation kaydı
+            # oluşturulmaz (kaydedilecek bir "dosyaya ne oldu" yok,
+            # dosyaya HİÇBİR ŞEY olmuyor). Gerçek listeleme zaten
+            # `/api/plan` sırasında (discover_pdf_files + PlanCard
+            # gösterimi) oluyor — bkz. ATDD.
+            if step.operationType == OperationType.LIST:
+                continue
             # Saga #289/#290: DELETE ve RENAME'in gerçek bir hedef klasörü
             # yok — targetFolder (YYYY-MM) şema gereği hâlâ zorunlu ama
             # ikisinde de kullanılmıyor (bkz. ATDD "bilinen sınırlama").

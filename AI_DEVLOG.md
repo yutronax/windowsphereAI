@@ -1,5 +1,37 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## orchestrator-list-operasyonu (Saga #291, epic #26)
+
+**LIST tamamen salt okunur/inert — epic 26'nın en dar kapsamlı task'ı.**
+ATDD'de netleştirilen karar: "listeleme" zaten `/api/plan` sırasında
+oluyor (backend `discover_pdf_files` ile tarıyor, `PlanCard` gösteriyor,
+Saga #262/#277) — `OperationType.LIST`'in `apply_plan`'da (onaydan
+SONRA çalışan, dosya sistemini mutasyona uğratan katman) yapması
+gereken TEK şey hiçbir şey yapmamak. Ayrı bir "envanter" DB kaydı ya da
+özel bir sohbet gösterimi icat edilmedi (YAGNI) — LIST step'leri ana
+döngüde `continue` ile tamamen atlanıyor: hiçbir dosya sistemi çağrısı,
+hiçbir `FileOperation` kaydı.
+
+`OperationType` enum'undaki tüm 5 değer (MOVE/COPY/DELETE/RENAME/LIST)
+artık destekleniyor — "desteklenmeyen operationType" test senaryosu
+(önceden LIST örnek olarak kullanılıyordu) artık anlamsız hale geldi,
+kaldırıldı.
+
+**Red-team: 2 bulgu belgelendi, biri test-kapsamı boşluğu hemen
+kapatıldı.** (1) `_SUPPORTED_OPERATION_TYPES` kontrolü artık ölü kod —
+enum'daki tüm değerler destekleniyor, gerçek bir enum değeriyle
+tetiklenemiyor. Bu, gelecekte enum'a yeni bir tür eklenip bu set'in
+güncellenmesi UNUTULURSA devreye girecek meşru bir defense-in-depth
+guard'ı — silinmedi, ama testsiz kalmıştı; `_SUPPORTED_OPERATION_TYPES`'ı
+monkeypatch ile daraltan bir regresyon testi eklendi. (2) LIST'in
+`_distribute_files_to_steps`'in "dosya başına tek step" münhasırlığına
+tabi olması, "şu dosyaları listele VE taşı" gibi tek bir meşru isteği
+(aynı dosya hem LIST hem MOVE'da) reddediyor — mimari bir sınırlama
+olarak belgelendi (LIST'i transaction akışından TAMAMEN çıkarmak daha
+temiz olurdu ama bu task'ın dar kapsamını aşıyor, kapsam dışı bırakıldı).
+136/136 test yeşil (3 yeni: LIST-only plan, karışık LIST+MOVE planı,
+dead-code guard regresyonu).
+
 ## orchestrator-rename-operasyonu (Saga #290, epic #26)
 
 **Gerçek şema boşluğu kapatıldı: `PlanStep.newFileNames`.**

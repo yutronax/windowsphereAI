@@ -135,10 +135,59 @@ def test_apply_plan_rejects_whole_plan_when_a_source_file_escapes_the_whitelist(
     assert not (tmp_path / "2026-08").exists()
 
 
-def test_apply_plan_rejects_non_move_operation_types_without_touching_files(session, tmp_path):
+def test_apply_plan_does_not_touch_any_file_for_a_list_only_plan(session, tmp_path):
+    # Saga #291: LIST tamamen salt okunur/inert - hicbir dosya sistemi
+    # cagrisi yapilmaz, hicbir FileOperation kaydi olusturulmaz. Bu test
+    # onceden "desteklenmeyen operationType" ornegi olarak LIST kullanan
+    # bir testin yerini aldi - artik OperationType enum'undaki TUM 5
+    # deger destekleniyor, "desteklenmeyen tip" senaryosu artik yok.
     _write_pdf(tmp_path, "a.pdf")
     pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
     plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.LIST)])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert (tmp_path / "a.pdf").exists()
+    assert not (tmp_path / "2026-08").exists()
+    assert transaction.status == "committed"
+    assert transaction.operations == []
+
+
+def test_apply_plan_only_processes_the_move_step_in_a_mixed_list_and_move_plan(session, tmp_path):
+    _write_pdf(tmp_path, "a.pdf")
+    _write_pdf(tmp_path, "b.pdf")
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+    plan = _plan(
+        [
+            _step(0, "2026-08", ["a.pdf"], operation_type=OperationType.LIST),
+            _step(1, "2026-08", ["b.pdf"], operation_type=OperationType.MOVE),
+        ]
+    )
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert (tmp_path / "a.pdf").exists()  # LIST dokunmadi
+    assert not (tmp_path / "b.pdf").exists()  # MOVE tasidi
+    assert (tmp_path / "2026-08" / "b.pdf").exists()
+    assert len(transaction.operations) == 1  # sadece MOVE icin kayit var
+
+
+def test_apply_plan_rejects_an_operation_type_missing_from_supported_set(session, tmp_path, monkeypatch):
+    # Red-team bulgusu (Saga #291): OperationType enum'undaki TUM 5
+    # deger artik destekleniyor, bu yuzden _SUPPORTED_OPERATION_TYPES
+    # kontrolu su an olu kod - gercek bir enum degeriyle tetiklenemiyor.
+    # Gelecekte enum'a yeni bir deger eklenip _SUPPORTED_OPERATION_TYPES
+    # guncellenmesi UNUTULURSA bu guard'in hala calistigini dogrulamak
+    # icin _SUPPORTED_OPERATION_TYPES'i monkeypatch ile daraltiyoruz.
+    import backend.orchestrator as orchestrator_module
+
+    monkeypatch.setattr(orchestrator_module, "_SUPPORTED_OPERATION_TYPES", {OperationType.MOVE})
+    _write_pdf(tmp_path, "a.pdf")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.COPY)])
 
     with pytest.raises(PlanApplicationError):
         apply_plan(session, plan, pdf_files, tmp_path)
