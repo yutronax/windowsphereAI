@@ -1,5 +1,78 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## orchestrator-rename-operasyonu (Saga #290, epic #26)
+
+**Gerçek şema boşluğu kapatıldı: `PlanStep.newFileNames`.**
+`targetFolder` (YYYY-MM'e kilitli) RENAME için tamamen anlamsızdı — yeni
+dosya adını taşıyacak hiçbir alan yoktu. `PlanStep`e `newFileNames:
+list[str] | None = None` eklendi — `fileNames` ile PARALEL bir liste
+(Saga #286'nın "isimle eşleştirme" desenini genişletiyor). Şema
+seviyesinde sıkı kurallar: `operationType==RENAME` ise ZORUNLU +
+uzunluk eşleşmesi + tekillik (iki dosya aynı yeni isme çakışmasın —
+aksi halde dosya sistemi seviyesinde sessiz veri kaybı olurdu) +
+path-separator-free (Saga #272 defense-in-depth deseni); başka bir
+operationType'ta `None` OLMALI (şema netliği).
+
+**Orchestrator tarafı: RENAME, MOVE'un fiziksel ikizi.** `_forward_move`/
+`_rollback_move` AYNEN paylaşılıyor — tek fark `destination_path`'in
+NASIL hesaplandığı: MOVE için `target_dir/dosya`, RENAME için
+`allowed_root/yeni_isim` (aynı klasör, farklı isim). DELETE'teki gibi
+`targetFolder` RENAME için de kullanılmıyor (bilinen sınırlama, Saga
+#292'ye bırakıldı).
+
+**Red-team: HIGH severity gerçek veri kaybı bug'u bulundu ve deneysel
+olarak doğrulandı — commit DURDURULDU, hemen düzeltildi.** İlk
+implementasyon üç gerçek boşluk taşıyordu: (1) `shutil.move`, RENAME
+hedefinde ZATEN VAR OLAN bir dosyayı (planın hiç dokunmadığı, ör.
+kullanıcının önemli bir dosyası) hiçbir hata vermeden SESSİZCE üzerine
+yazıyordu — red-team bunu gerçekten deneyerek kanıtladı. Düzeltme:
+`backend/security.py: validate_rename_destinations()` eklendi
+(`validate_plan_paths` içinden otomatik çağrılıyor) — hedef isim
+`allowed_root`'ta zaten varsa VE planın bilmediği bir dosyaysa tüm plan
+reddedilir. (2) Aynı step'in `fileNames`'i içinde tekrar eden bir isim
+(`["a.pdf","a.pdf"]`) `dict(zip(fileNames, newFileNames))`'in bir
+eşlemeyi sessizce kaybetmesine yol açardı — `PlanStep`e
+`file_names_have_no_duplicates` validator'ı eklendi. (3) `newFileNames`
+aynı step'in `fileNames`'iyle (kaynaklarla) ÇAKIŞABİLİYORDU (ör.
+a.pdf→b.pdf VE b.pdf→c.pdf aynı step'te) — "zincirleme rename",
+b.pdf'in orijinal içeriğinin sessizce kaybolmasına yol açardı; bu artık
+şema seviyesinde tamamen yasak.
+
+**Red-team devam etti: 2 tur daha, 2 ayrı HIGH severity bug daha
+deneysel kanıtlandı — toplam 4 tur, 3 HIGH severity gerçek veri kaybı
+bug'u.** Bu, projenin şimdiye kadarki en yoğun red-team döngüsüydü.
+- **Tur 2:** Yukarıdaki (3) numaralı düzeltme SADECE aynı step İÇİNDE
+  çalışıyordu — FARKLI step'ler arasında zincir hâlâ mümkündü (step 0:
+  a.pdf→b.pdf, step 1: b.pdf→c.pdf). `apply_plan` uçtan uca gerçek
+  dosyalarla çalıştırılıp DENEYSEL OLARAK kanıtlandı: b.pdf'in orijinal
+  içeriği hiçbir yerde iz bırakmadan kayboluyordu. Kök neden:
+  `_distribute_files_to_steps`'in çapraz-step tekillik kontrolü bunu
+  YAKALAMIYORDU çünkü b.pdf gerçekten `pdf_files`'ta (disk taramasından)
+  var — sadece AYNI ZAMANDA başka bir step'in YAZDIĞI isimle çakışıyor.
+  → `validate_rename_destinations`'a PLAN GENELİNDE "bir isim hem
+  RENAME kaynağı hem RENAME hedefi olamaz" kontrolü eklendi.
+- **Tur 3:** Tur 2'nin düzeltmesi CASE-SENSITIVE'ti — Windows
+  case-insensitive olduğu için `a.pdf→B.PDF` + `b.pdf→c.pdf` zinciri
+  (sadece harf farkı) hâlâ kaçıyordu (deneysel kanıtlandı). AYRICA bu
+  düzeltme kendisi yeni bir false-positive yarattı: meşru bir "sadece
+  harf büyüklüğü değiştir" rename'i (`a.pdf`→`A.pdf`) da yanlışlıkla
+  reddetmeye başlamıştı. → `os.path.normcase` ile TÜM isim
+  karşılaştırmaları normalize edildi (hem `security.py` hem
+  `models.py`), ÇİFT-bazlı (pair-exclusion, `dest_index !=
+  source_index`) mantıkla kendi-kendine rename ile gerçek zincir ayırt
+  edildi.
+- **Tur 4 (doğrulama):** Pair-exclusion mantığının kendisi yeni bir
+  regresyon açıp açmadığı (3'lü rotasyon senaryosu — a→b→c→a — dahil)
+  deneysel olarak doğrulandı, açık bulunmadı, `ready_to_commit: true`,
+  döngü kapatıldı.
+
+Kök neden deseni (3 turun ortak paydası): dosya adı karşılaştırmaları
+Python string eşitliğiyle yapılıyordu ama gerçek çakışma kararını
+işletim sisteminin (Windows) dosya sistemi semantiği veriyordu. 134/134
+test yeşil (25 yeni test toplamda). Mevcut bir test
+(`test_apply_plan_rejects_non_move...`) artık RENAME yerine LIST'i
+"desteklenmeyen" örneği olarak kullanıyor.
+
 ## orchestrator-delete-operasyonu (Saga #289, epic #26)
 
 **DELETE eklendi — mevcut MOVE/COPY sözleşmesi hiç değiştirilmeden.**

@@ -29,7 +29,7 @@ class PlanApplicationError(Exception):
 # DELETE için destination=gizli yedek konumu/backup=orijinal kaynak konumu.
 # Bu ortak sözleşme sayesinde rollback döngüsü HİÇBİR operationType'a özel
 # dallanma gerektirmeden çalışır.
-_SUPPORTED_OPERATION_TYPES = {OperationType.MOVE, OperationType.COPY, OperationType.DELETE}
+_SUPPORTED_OPERATION_TYPES = {OperationType.MOVE, OperationType.COPY, OperationType.DELETE, OperationType.RENAME}
 
 # DELETE'in fiziksel yedeklerinin saklandığı, `allowed_root` altında gizli
 # klasör. transaction.id ile ayrıştırılır (farklı transaction'lardaki aynı
@@ -63,6 +63,11 @@ _FORWARD_OPERATIONS = {
     OperationType.MOVE: _forward_move,
     OperationType.COPY: _forward_copy,
     OperationType.DELETE: _forward_delete,
+    # Saga #290: RENAME fiziksel olarak MOVE ile AYNI ("kaynağı hedefe
+    # taşı") — tek fark hedefin farklı bir klasörde değil, AYNI klasörde
+    # farklı bir isimde olması, bu da sadece `destination_path`'in NASIL
+    # hesaplandığında (apply_plan'ın ana döngüsü) fark yaratır.
+    OperationType.RENAME: _forward_move,
 }
 
 
@@ -83,6 +88,9 @@ _ROLLBACK_OPERATIONS = {
     # orijinal konuma geri taşı" — _rollback_move zaten tam olarak bunu
     # yapıyor, ayrı bir fonksiyona gerek yok.
     OperationType.DELETE: _rollback_move,
+    # RENAME rollback'i de MOVE ile aynı: hedefi (yeni isim) kaynağa
+    # (eski isim, backup_path) geri taşı.
+    OperationType.RENAME: _rollback_move,
 }
 
 
@@ -141,9 +149,9 @@ def apply_plan(
     `FileOperation`ın nihai durumu (`rolled_back`/`rollback_failed`) DB'ye
     yazılır.
 
-    `OperationType.MOVE`, `OperationType.COPY` ve `OperationType.DELETE`
-    destekler (Saga #288/#289); başka bir operationType görürse hiçbir
-    dosyaya dokunmadan reddeder."""
+    `OperationType.MOVE`, `OperationType.COPY`, `OperationType.DELETE` ve
+    `OperationType.RENAME` destekler (Saga #288/#289/#290); başka bir
+    operationType görürse hiçbir dosyaya dokunmadan reddeder."""
     validate_plan_paths(plan, pdf_files, allowed_root)
 
     for step in plan.steps:
@@ -162,17 +170,26 @@ def apply_plan(
     applied: list[FileOperation] = []
     try:
         for step, files in step_files:
-            # Saga #289: DELETE'in gerçek bir hedef klasörü yok — targetFolder
-            # (YYYY-MM) şema gereği hâlâ zorunlu ama DELETE için hiç
-            # kullanılmıyor (bkz. ATDD "bilinen sınırlama"). Sadece
-            # MOVE/COPY için gerçek hedef klasör oluşturulur.
-            if step.operationType != OperationType.DELETE:
+            # Saga #289/#290: DELETE ve RENAME'in gerçek bir hedef klasörü
+            # yok — targetFolder (YYYY-MM) şema gereği hâlâ zorunlu ama
+            # ikisinde de kullanılmıyor (bkz. ATDD "bilinen sınırlama").
+            # Sadece MOVE/COPY için gerçek hedef klasör oluşturulur.
+            if step.operationType not in (OperationType.DELETE, OperationType.RENAME):
                 target_dir = allowed_root / step.targetFolder
                 target_dir.mkdir(parents=True, exist_ok=True)
+            # RENAME: fileNames[i] -> newFileNames[i] eşleşmesi (Saga #290).
+            new_name_by_old_name = (
+                dict(zip(step.fileNames, step.newFileNames))
+                if step.operationType == OperationType.RENAME
+                else {}
+            )
             for pdf_file in files:
                 source_path = allowed_root / pdf_file.filename
                 if step.operationType == OperationType.DELETE:
                     destination_path = _delete_backup_path(allowed_root, transaction.id, pdf_file.filename)
+                    backup_path = source_path
+                elif step.operationType == OperationType.RENAME:
+                    destination_path = allowed_root / new_name_by_old_name[pdf_file.filename]
                     backup_path = source_path
                 else:
                     destination_path = target_dir / pdf_file.filename

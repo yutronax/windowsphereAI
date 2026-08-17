@@ -10,6 +10,7 @@ from backend.security import (
     is_path_too_deep,
     is_system_protected,
     validate_plan_paths,
+    validate_rename_destinations,
 )
 
 
@@ -152,3 +153,118 @@ def test_validate_plan_paths_rejects_entire_plan_when_source_file_path_is_too_de
 
     with pytest.raises(PathWhitelistError):
         validate_plan_paths(_plan(), pdf_files, tmp_path)
+
+
+def _rename_plan(new_file_name: str) -> PlanSkeleton:
+    step = PlanStep(
+        order=0,
+        operationType=OperationType.RENAME,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["kaynak.pdf"],
+        newFileNames=[new_file_name],
+    )
+    return PlanSkeleton(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+
+
+def test_validate_rename_destinations_rejects_collision_with_an_existing_unrelated_file(tmp_path):
+    # Red-team bulgusu (Saga #290, HIGH severity, deneysel dogrulandi):
+    # shutil.move hedefte zaten var olan bir dosyayi sessizce uzerine yazar.
+    (tmp_path / "kaynak.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "onemli_dosya.pdf").write_bytes(b"%PDF-1.4 onemli veri")
+    pdf_files = [PdfFileMetadata(filename="kaynak.pdf", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(_rename_plan("onemli_dosya.pdf"), pdf_files, tmp_path)
+
+
+def test_validate_rename_destinations_allows_a_target_name_that_is_itself_a_known_pdf_file(tmp_path):
+    # Hedef isim planin bildigi (pdf_files'taki) bir dosyaysa - ornegin o
+    # dosya da planin baska bir yerinde ele aliniyorsa - engellenmemeli.
+    (tmp_path / "kaynak.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "b.pdf").write_bytes(b"%PDF-1.4 fake")
+    pdf_files = [
+        PdfFileMetadata(filename="kaynak.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+
+    validate_rename_destinations(_rename_plan("b.pdf"), pdf_files, tmp_path)
+
+
+def test_validate_rename_destinations_passes_when_target_name_does_not_exist_yet(tmp_path):
+    pdf_files = [PdfFileMetadata(filename="kaynak.pdf", createdAt="2026-08-01")]
+
+    validate_rename_destinations(_rename_plan("hic-olmayan.pdf"), pdf_files, tmp_path)
+
+
+def test_validate_rename_destinations_rejects_cross_step_chained_renames(tmp_path):
+    # 2. red-team turu bulgusu (deneysel dogrulandi, HIGH): step 0
+    # a.pdf->b.pdf, step 1 b.pdf->c.pdf - b.pdf hem bir RENAME'in hedefi
+    # hem baska bir RENAME'in kaynagi. Sira ne olursa olsun, b.pdf'in
+    # orijinal icerigi sessizce kaybolur (apply_plan uctan uca test
+    # edilerek kanitlandi). Plan genelinde bu artik tamamen yasak.
+    step0 = PlanStep(
+        order=0,
+        operationType=OperationType.RENAME,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["a.pdf"],
+        newFileNames=["b.pdf"],
+    )
+    step1 = PlanStep(
+        order=1,
+        operationType=OperationType.RENAME,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["b.pdf"],
+        newFileNames=["c.pdf"],
+    )
+    plan = PlanSkeleton(steps=[step0, step1], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(plan, pdf_files, tmp_path)
+
+
+def test_validate_rename_destinations_rejects_case_variant_cross_step_chained_renames(tmp_path):
+    # 3. red-team turu bulgusu (deneysel dogrulandi, HIGH): zincir tespiti
+    # ilk halinde case-sensitive'ti - a.pdf->B.PDF (step 0) ve b.pdf->c.pdf
+    # (step 1) Windows'ta AYNI zincir olmasina ragmen (B.PDF == b.pdf)
+    # yakalanmiyordu.
+    step0 = PlanStep(
+        order=0,
+        operationType=OperationType.RENAME,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["a.pdf"],
+        newFileNames=["B.PDF"],
+    )
+    step1 = PlanStep(
+        order=1,
+        operationType=OperationType.RENAME,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["b.pdf"],
+        newFileNames=["c.pdf"],
+    )
+    plan = PlanSkeleton(steps=[step0, step1], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(plan, pdf_files, tmp_path)
+
+
+def test_validate_rename_destinations_allows_a_case_only_self_rename(tmp_path):
+    # 3. red-team turu bulgusu: kaynak.pdf -> KAYNAK.pdf (ayni dosyanin
+    # sadece harf buyuklugu degisikligi) MESRU bir tek-dosya islemidir,
+    # "zincir" DEGILDIR - reddedilmemeli.
+    (tmp_path / "kaynak.pdf").write_bytes(b"%PDF-1.4 fake")
+    pdf_files = [PdfFileMetadata(filename="kaynak.pdf", createdAt="2026-08-01")]
+
+    validate_plan_paths(_rename_plan("KAYNAK.pdf"), pdf_files, tmp_path)

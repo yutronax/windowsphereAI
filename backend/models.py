@@ -1,3 +1,4 @@
+import os
 import re
 from enum import Enum
 
@@ -50,6 +51,12 @@ class PlanStep(BaseModel):
     # step'e taşınabilirdi). Artık her step kendi dosyalarını AÇIKÇA
     # taşıyor.
     fileNames: list[str]
+    # Saga #290: RENAME için yeni dosya adları — fileNames ile PARALEL
+    # bir liste (aynı sıra, aynı uzunluk). SADECE operationType==RENAME
+    # olduğunda dolu olmalı; diğer operationType'larda None kalmalı (bu
+    # alanın MOVE/COPY/DELETE'te anlamı yok — şema netliği için
+    # kısıtlandı).
+    newFileNames: list[str] | None = None
 
     @field_validator("order", "affectedFileCount")
     @classmethod
@@ -88,6 +95,61 @@ class PlanStep(BaseModel):
     def affected_file_count_matches_file_names(self) -> "PlanStep":
         if self.affectedFileCount != len(self.fileNames):
             raise ValueError("affectedFileCount must equal len(fileNames)")
+        return self
+
+    @model_validator(mode="after")
+    def file_names_have_no_duplicates(self) -> "PlanStep":
+        # Red-team bulgusu (Saga #290): çapraz-step tekrarı zaten
+        # orchestrator._distribute_files_to_steps'te engelleniyordu ama
+        # AYNI step İÇİNDE fileNames'in kendisi tekrar içerebiliyordu —
+        # RENAME için bu, `dict(zip(fileNames, newFileNames))`'in bir
+        # eşlemeyi SESSİZCE kaybetmesine yol açardı (ör. fileNames=
+        # ["a.pdf","a.pdf"], newFileNames=["x.pdf","y.pdf"] → sadece
+        # a.pdf->y.pdf uygulanır, x.pdf'e dönüştürme niyeti sessizce
+        # kaybolur). 3. red-team turunda (Windows case-insensitive dosya
+        # sistemi) `os.path.normcase` ile normalize edilerek genişletildi —
+        # "a.pdf" ve "A.pdf" de aynı gerçek dosyayı temsil eder.
+        normalized = [os.path.normcase(name) for name in self.fileNames]
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("fileNames must not contain duplicate entries (case-insensitive)")
+        return self
+
+    @model_validator(mode="after")
+    def new_file_names_only_for_rename(self) -> "PlanStep":
+        if self.operationType == OperationType.RENAME:
+            if self.newFileNames is None:
+                raise ValueError("newFileNames is required when operationType is RENAME")
+            if len(self.newFileNames) != len(self.fileNames):
+                raise ValueError("newFileNames must have the same length as fileNames")
+            if any(name.strip() == "" for name in self.newFileNames):
+                raise ValueError("newFileNames must not contain empty or whitespace-only entries")
+            if any("/" in name or "\\" in name for name in self.newFileNames):
+                raise ValueError("newFileNames entries must not contain path separators")
+            normalized_new = [os.path.normcase(name) for name in self.newFileNames]
+            if len(set(normalized_new)) != len(normalized_new):
+                raise ValueError("newFileNames must not contain duplicate entries (case-insensitive)")
+            # Red-team bulgusu (Saga #290): newFileNames, AYNI step'teki
+            # BAŞKA bir fileNames (kaynak) girdisiyle çakışırsa
+            # "zincirleme rename" oluşur — ör. a.pdf->b.pdf VE b.pdf->c.pdf
+            # aynı step'te olursa, b.pdf hem bir taşımanın hedefi hem
+            # başka bir taşımanın kaynağı olur; işlem sırasına göre
+            # b.pdf'in ORİJİNAL içeriği sessizce kaybolabilir. Bu tamamen
+            # yasaklanıyor. ÖNEMLİ: kendi kendine (AYNI index'teki)
+            # sadece-harf-büyüklüğü rename'i (a.pdf->A.pdf) İSTİSNA —
+            # bu güvenli bir tek-dosya işlemidir, "çakışma" DEĞİLDİR (3.
+            # red-team turu bulgusu — ilk saf normcase-set kesişimi bunu
+            # yanlışlıkla reddediyordu).
+            normalized_sources = [os.path.normcase(name) for name in self.fileNames]
+            for dest_index, dest in enumerate(normalized_new):
+                for source_index, source in enumerate(normalized_sources):
+                    if dest_index != source_index and dest == source:
+                        raise ValueError(
+                            f"newFileNames[{dest_index}] ('{self.newFileNames[dest_index]}') "
+                            f"collides with fileNames[{source_index}] ('{self.fileNames[source_index]}') "
+                            "(case-insensitive) — chained rename within a single step is not allowed"
+                        )
+        elif self.newFileNames is not None:
+            raise ValueError("newFileNames must be omitted unless operationType is RENAME")
         return self
 
 

@@ -2,7 +2,7 @@ import logging
 import os
 from pathlib import Path
 
-from backend.models import PdfFileMetadata, PlanSkeleton
+from backend.models import OperationType, PdfFileMetadata, PlanSkeleton
 
 logger = logging.getLogger(__name__)
 
@@ -137,3 +137,93 @@ def validate_plan_paths(
 
     for step in plan.steps:
         _validate_single_path(allowed_root / step.targetFolder, allowed_root, "Hedef klasör")
+
+    validate_rename_destinations(plan, pdf_files, allowed_root)
+
+
+def _normalize_filename(name: str) -> str:
+    # 3. red-team turu bulgusu (deneysel doğrulandı, HIGH): proje
+    # Windows-only hedefliyor (bkz. pdf_discovery.py'nin st_ctime notu) —
+    # Windows dosya sistemi CASE-INSENSITIVE'dir ("b.pdf" ve "B.PDF" AYNI
+    # dosyadır), ama Python `set`/`==` karşılaştırması case-SENSITIVE'dir.
+    # `os.path.normcase` Windows'ta küçük harfe çevirir (POSIX'te no-op) —
+    # bu fonksiyonun kullanılmadığı HER isim karşılaştırması, bir
+    # zincirleme rename'in sadece harf büyüklüğü farkıyla (ör.
+    # `a.pdf`→`B.PDF`, sonra `b.pdf`→`c.pdf`) fark edilmeden geçmesine
+    # yol açabilir — round 1/2'deki AYNI veri kaybı sınıfı.
+    return os.path.normcase(name)
+
+
+def validate_rename_destinations(
+    plan: PlanSkeleton,
+    pdf_files: list[PdfFileMetadata],
+    allowed_root: Path,
+) -> None:
+    """Saga #290 red-team bulgusu (deneysel doğrulandı, HIGH severity):
+    `shutil.move`, hedefte ZATEN VAR OLAN bir dosyayı hiçbir hata
+    vermeden SESSİZCE üzerine yazar. `PlanStep.newFileNames` şema
+    seviyesinde kendi içinde tutarlı olsa bile (tekil, fileNames ile
+    çakışmıyor), planın HİÇ dokunmadığı, `allowed_root`'ta ZATEN VAR
+    OLAN bir dosyayla (ör. kullanıcının önemli bir dosyasıyla) çakışabilir
+    — bu, Pydantic'in göremeyeceği bir dosya sistemi gerçeğidir, bu
+    yüzden ayrı bir runtime kontrolü olarak burada yapılır.
+    `pdf_files`'taki (planın bildiği/dokunabileceği) isimlerden biriyse
+    çakışma İZİN VERİLİR (o dosya zaten planın bir parçası); aksi halde
+    tüm plan reddedilir.
+
+    İKİNCİ KONTROL (2. red-team turu, deneysel doğrulandı, HIGH): tek bir
+    step İÇİNDE `newFileNames`/`fileNames` çakışması `models.py`'de
+    şema seviyesinde zaten yasak — ama PLAN GENELİNDE FARKLI step'ler
+    arasında hâlâ bir "zincirleme rename" mümkündü: step 0
+    `a.pdf`→`b.pdf`, step 1 `b.pdf`→`c.pdf` — `b.pdf` step 0'ın hedefi,
+    step 1'in kaynağı. `apply_plan` bunu SIRAYLA uyguladığında, step 0
+    `b.pdf`yi (varsa) SESSİZCE üzerine yazar (`shutil.move` semantiği),
+    ORİJİNAL `b.pdf`'in içeriği hiçbir yerde kalmadan kaybolur — SIRA
+    ÖNEMLİ DEĞİL, herhangi bir isim planda hem bir RENAME kaynağı hem
+    bir RENAME hedefi olamaz.
+
+    TÜM isim karşılaştırmaları `_normalize_filename` (Windows
+    case-insensitive) üzerinden yapılır (3. red-team turu, deneysel
+    doğrulandı, HIGH) — hem çakışma/zincir tespiti hem "planın bildiği
+    dosya" muafiyeti bu sayede `a.pdf`/`A.pdf` gibi sadece harf büyüklüğü
+    farklı adları AYNI dosya olarak doğru tanır.
+
+    Zincir tespiti ÇİFT-bazlıdır (kaynak, hedef) — SADECE aynı dosyanın
+    KENDİ çiftinin dışındaki bir çiftin kaynağıyla çakışırsa reddedilir.
+    Bu, `a.pdf`→`A.pdf` gibi kendi kendine sadece-harf-büyüklüğü
+    rename'inin (tek çift, başka hiçbir çiftle ilişkisi yok) yanlışlıkla
+    "zincir" sayılıp reddedilmesini ÖNLER — ilk saf küme-kesişimi
+    yaklaşımı bunu hatalı biçimde reddediyordu (3. red-team turu
+    bulgusu)."""
+    rename_pairs: list[tuple[str, str]] = []
+    for step in plan.steps:
+        if step.operationType != OperationType.RENAME:
+            continue
+        for source_name, dest_name in zip(step.fileNames, step.newFileNames or []):
+            rename_pairs.append((_normalize_filename(source_name), _normalize_filename(dest_name)))
+
+    for dest_index, (_, dest_norm) in enumerate(rename_pairs):
+        for source_index, (source_norm, _) in enumerate(rename_pairs):
+            if dest_index != source_index and dest_norm == source_norm:
+                raise PathWhitelistError(
+                    offending_path=dest_norm,
+                    allowed_root=str(allowed_root),
+                    reason="planda zincirleme yeniden adlandırmaya (bir dosya hem kaynak hem hedef) izin verilmiyor",
+                    description="Yeniden adlandırma zinciri",
+                )
+
+    known_filenames = {_normalize_filename(pdf_file.filename) for pdf_file in pdf_files}
+    for step in plan.steps:
+        if step.operationType != OperationType.RENAME:
+            continue
+        for new_name in step.newFileNames or []:
+            if _normalize_filename(new_name) in known_filenames:
+                continue
+            candidate = allowed_root / new_name
+            if candidate.exists():
+                raise PathWhitelistError(
+                    offending_path=str(candidate),
+                    allowed_root=str(allowed_root),
+                    reason="planın bilmediği, zaten var olan bir dosyayla çakışıyor",
+                    description="Yeniden adlandırma hedefi",
+                )

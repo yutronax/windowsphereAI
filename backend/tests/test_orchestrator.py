@@ -23,13 +23,20 @@ def _plan(steps: list[PlanStep]) -> PlanSkeleton:
     return PlanSkeleton(steps=steps, dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
 
 
-def _step(order: int, target_folder: str, file_names: list[str], operation_type: OperationType = OperationType.MOVE) -> PlanStep:
+def _step(
+    order: int,
+    target_folder: str,
+    file_names: list[str],
+    operation_type: OperationType = OperationType.MOVE,
+    new_file_names: list[str] | None = None,
+) -> PlanStep:
     return PlanStep(
         order=order,
         operationType=operation_type,
         targetFolder=target_folder,
         affectedFileCount=len(file_names),
         fileNames=file_names,
+        newFileNames=new_file_names,
     )
 
 
@@ -131,7 +138,7 @@ def test_apply_plan_rejects_whole_plan_when_a_source_file_escapes_the_whitelist(
 def test_apply_plan_rejects_non_move_operation_types_without_touching_files(session, tmp_path):
     _write_pdf(tmp_path, "a.pdf")
     pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
-    plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.RENAME)])
+    plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.LIST)])
 
     with pytest.raises(PlanApplicationError):
         apply_plan(session, plan, pdf_files, tmp_path)
@@ -392,6 +399,86 @@ def test_delete_backup_path_stays_within_max_path_depth(tmp_path):
     backup_path.parent.mkdir(parents=True)
     backup_path.touch()
     assert is_path_too_deep(backup_path, tmp_path, max_depth=MAX_PATH_DEPTH) is False
+
+
+def test_apply_plan_renames_a_file_in_place(session, tmp_path):
+    _write_pdf(tmp_path, "eski.pdf")
+    pdf_files = [PdfFileMetadata(filename="eski.pdf", createdAt="2026-08-01")]
+    plan = _plan(
+        [_step(0, "2026-08", ["eski.pdf"], operation_type=OperationType.RENAME, new_file_names=["yeni.pdf"])]
+    )
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "eski.pdf").exists()
+    assert (tmp_path / "yeni.pdf").exists()
+    assert transaction.status == "committed"
+
+
+def test_apply_plan_rolls_back_a_rename_by_restoring_the_old_name(session, tmp_path, monkeypatch):
+    _write_pdf(tmp_path, "a.pdf")
+    _write_pdf(tmp_path, "b.pdf")
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+    plan = _plan(
+        [
+            _step(
+                0,
+                "2026-08",
+                ["a.pdf", "b.pdf"],
+                operation_type=OperationType.RENAME,
+                new_file_names=["a2.pdf", "b2.pdf"],
+            )
+        ]
+    )
+
+    real_move = shutil.move
+    call_count = {"n": 0}
+
+    def flaky_move(src, dst):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise OSError("simulated disk failure")
+        return real_move(src, dst)
+
+    monkeypatch.setattr("backend.orchestrator.shutil.move", flaky_move)
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert (tmp_path / "a.pdf").exists()  # eski ismine geri geldi
+    assert not (tmp_path / "a2.pdf").exists()
+    assert (tmp_path / "b.pdf").exists()  # hic yeniden adlandirilmadi
+
+
+def test_apply_plan_rejects_cross_step_chained_renames_without_losing_data(session, tmp_path):
+    # 2. red-team turu bulgusu (deneysel dogrulandi, HIGH): apply_plan
+    # seviyesinde ucdan uca dogrulama - a.pdf->b.pdf (step 0) VE
+    # b.pdf->c.pdf (step 1) ayni planda olursa, b.pdf'in orijinal
+    # icerigi (bu testte ayirt edici bir icerikle yazilmis) sessizce
+    # kaybolmamali - plan hicbir dosyaya dokunmadan reddedilmeli.
+    (tmp_path / "a.pdf").write_bytes(b"A-icerik")
+    (tmp_path / "b.pdf").write_bytes(b"B-ORIJINAL-ONEMLI-VERI")
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+    plan = _plan(
+        [
+            _step(0, "2026-08", ["a.pdf"], operation_type=OperationType.RENAME, new_file_names=["b.pdf"]),
+            _step(1, "2026-08", ["b.pdf"], operation_type=OperationType.RENAME, new_file_names=["c.pdf"]),
+        ]
+    )
+
+    with pytest.raises(Exception):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    # Hicbir dosyaya dokunulmamis olmali - b.pdf'in orijinal icerigi korunuyor.
+    assert (tmp_path / "a.pdf").read_bytes() == b"A-icerik"
+    assert (tmp_path / "b.pdf").read_bytes() == b"B-ORIJINAL-ONEMLI-VERI"
+    assert not (tmp_path / "c.pdf").exists()
 
 
 def test_recover_incomplete_transactions_marks_physically_moved_files_as_completed(session, tmp_path):
