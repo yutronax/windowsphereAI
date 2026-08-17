@@ -1,5 +1,32 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## rollback-bagimsiz-fonksiyon (Saga #293, epic #28)
+
+**`apply_plan`'ın kendi hata-anı rollback mantığı `_rollback_completed_operations`
+paylaşılan yardımcısına çıkarıldı**, üstüne yeni bir `revert_transaction`
+public fonksiyonu eklendi — kullanıcının BAŞARIYLA TAMAMLANMIŞ
+("committed") bir transaction'ı SONRADAN manuel geri alabilmesinin
+önkoşulu (epic 28: Undo/Geri Alma UI'ının temel taşı).
+
+**Yeni durum sözlüğü:** `"reverted"` (tam başarılı manuel geri alma),
+`"revert_failed"` (kısmi/tam başarısız) — `apply_plan`'ın kendi
+`"rolled_back"` durumundan KASITLI OLARAK ayrı tutuldu, çünkü ikisi
+farklı olayları temsil ediyor ("plan hiç commit edilemedi" vs "commit
+edilmiş bir işlem sonradan geri alındı").
+
+**Savunma derinliği eklendi:** `revert_transaction`, DB'den okuduğu
+`destination_path`/`backup_path`'i doğrudan `shutil.move`'a vermeden
+ÖNCE `allowed_root` içinde kaldığını `is_path_allowed` ile tekrar
+doğruluyor — `apply_plan`'ın kendi çağrısı sırasındaki `validate_plan_paths`
+TAZE değil (DB satırları teorik olarak sonradan bozulmuş olabilir).
+Path kök dışındaysa operasyon hiç denenmeden `"rollback_failed"`.
+
+**Kısmi başarısız revert senaryosu testle doğrulandı:** hedef konuma
+bilinçli bir çakışma (klasör) yerleştirilip `shutil.move`'un OSError
+fırlatması sağlandı — transaction'ın `"revert_failed"` işaretlendiği
+VE daha önce başarıyla geri alınan operasyonların durumunun
+kaybolmadığı doğrulandı. 8 yeni test, 147/147 yeşil.
+
 ## plan-generation-coklu-operasyon-destegi (Saga #292, epic #26)
 
 **ATDD'de bulunan asıl boşluk task'ın kendi tanımından daha temeldi:**

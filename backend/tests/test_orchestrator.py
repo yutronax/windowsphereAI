@@ -7,7 +7,13 @@ from sqlalchemy.orm import Session
 from backend.db import create_db_engine, create_session_factory
 from backend.db_models import Base, Transaction
 from backend.models import DateSource, OperationType, PdfFileMetadata, PlanSkeleton, PlanStep, SortOrder
-from backend.orchestrator import PlanApplicationError, apply_plan, recover_incomplete_transactions
+from backend.orchestrator import (
+    PlanApplicationError,
+    TransactionRevertError,
+    apply_plan,
+    recover_incomplete_transactions,
+    revert_transaction,
+)
 
 
 @pytest.fixture
@@ -639,3 +645,144 @@ def test_recover_incomplete_transactions_ignores_already_terminal_transactions(s
     recovered = recover_incomplete_transactions(session)
 
     assert recovered == []
+
+
+def test_revert_transaction_moves_a_completed_move_back_to_its_original_location(session, tmp_path):
+    _write_pdf(tmp_path, "a.pdf")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", ["a.pdf"])])
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    reverted = revert_transaction(session, transaction, tmp_path)
+
+    assert (tmp_path / "a.pdf").exists()
+    assert not (tmp_path / "2026-08" / "a.pdf").exists()
+    assert reverted.status == "reverted"
+    assert all(op.status == "rolled_back" for op in reverted.operations)
+
+
+def test_revert_transaction_deletes_the_copy_and_leaves_the_original_intact(session, tmp_path):
+    _write_pdf(tmp_path, "a.pdf")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.COPY)])
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    revert_transaction(session, transaction, tmp_path)
+
+    assert (tmp_path / "a.pdf").exists()
+    assert not (tmp_path / "2026-08" / "a.pdf").exists()
+
+
+def test_revert_transaction_restores_a_deleted_file_from_its_backup(session, tmp_path):
+    _write_pdf(tmp_path, "a.pdf")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.DELETE)])
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+    assert not (tmp_path / "a.pdf").exists()
+
+    revert_transaction(session, transaction, tmp_path)
+
+    assert (tmp_path / "a.pdf").exists()
+
+
+def test_revert_transaction_restores_the_old_name_of_a_renamed_file(session, tmp_path):
+    _write_pdf(tmp_path, "a.pdf")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.RENAME, new_file_names=["b.pdf"])])
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    revert_transaction(session, transaction, tmp_path)
+
+    assert (tmp_path / "a.pdf").exists()
+    assert not (tmp_path / "b.pdf").exists()
+
+
+def test_revert_transaction_reverts_multiple_operations_in_reverse_order(session, tmp_path, monkeypatch):
+    _write_pdf(tmp_path, "a.pdf")
+    _write_pdf(tmp_path, "b.pdf")
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+    plan = _plan([_step(0, "2026-08", ["a.pdf", "b.pdf"])])
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    revert_order: list[str] = []
+    import backend.orchestrator as orchestrator_module
+
+    original = orchestrator_module._rollback_move
+
+    def _tracking_rollback_move(destination_path, backup_path):
+        revert_order.append(Path(destination_path).name)
+        original(destination_path, backup_path)
+
+    monkeypatch.setattr(orchestrator_module, "_rollback_move", _tracking_rollback_move)
+    monkeypatch.setitem(orchestrator_module._ROLLBACK_OPERATIONS, OperationType.MOVE, _tracking_rollback_move)
+
+    revert_transaction(session, transaction, tmp_path)
+
+    assert revert_order == ["b.pdf", "a.pdf"]
+
+
+def test_revert_transaction_rejects_a_transaction_that_is_not_committed(session, tmp_path):
+    _write_pdf(tmp_path, "a.pdf")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", ["a.pdf"])])
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+    transaction.status = "reverted"
+    session.commit()
+
+    with pytest.raises(TransactionRevertError):
+        revert_transaction(session, transaction, tmp_path)
+
+    # Reddedilince hiçbir dosyaya dokunulmaz — dosya hâlâ apply_plan'ın
+    # bıraktığı hedef klasörde, kök klasöre GERİ TAŞINMAMIŞ olmalı.
+    assert not (tmp_path / "a.pdf").exists()
+    assert (tmp_path / "2026-08" / "a.pdf").exists()
+
+
+def test_revert_transaction_marks_revert_failed_and_raises_when_a_step_cannot_be_reverted(session, tmp_path):
+    _write_pdf(tmp_path, "a.pdf")
+    _write_pdf(tmp_path, "b.pdf")
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+    plan = _plan([_step(0, "2026-08", ["a.pdf", "b.pdf"])])
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+    # b.pdf'in hedefteki kopyasını rollback'ten ÖNCE kaldırıp yerine bir
+    # KLASÖR koyuyoruz — shutil.move hedef zaten var olan bir klasörse
+    # OSError fırlatır, bu da rollback'in KENDİSİNİN başarısız olduğu
+    # senaryoyu gerçekçi şekilde tetikler.
+    b_destination = tmp_path / "2026-08" / "b.pdf"
+    b_destination.unlink()
+    b_destination.mkdir()
+    # b.pdf'in eski konumunda da bir dosya bırakıyoruz ki shutil.move hedefi
+    # zaten dolu bir konuma taşımaya çalışsın (Windows'ta bu OSError verir).
+    _write_pdf(tmp_path, "b.pdf")
+
+    with pytest.raises(TransactionRevertError):
+        revert_transaction(session, transaction, tmp_path)
+
+    assert transaction.status == "revert_failed"
+    # a.pdf başarıyla geri alındı (b.pdf'ten SONRA işlendiği için ters
+    # sırada a.pdf İLK geri alınır) — kısmi ilerleme kaybolmadı.
+    assert (tmp_path / "a.pdf").exists()
+
+
+def test_revert_transaction_ignores_operations_outside_the_allowed_root(session, tmp_path):
+    _write_pdf(tmp_path, "a.pdf")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", ["a.pdf"])])
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+    # DB'deki kaydı, allowed_root DIŞINDA bir yeri işaret edecek şekilde
+    # elle bozuyoruz (Saga #293 S4: savunma derinliği senaryosu).
+    outside_root = tmp_path.parent / "baska-bir-klasor"
+    transaction.operations[0].destination_path = str(outside_root / "a.pdf")
+    session.commit()
+
+    with pytest.raises(TransactionRevertError):
+        revert_transaction(session, transaction, tmp_path)
+
+    assert transaction.status == "revert_failed"
+    assert not outside_root.exists()
