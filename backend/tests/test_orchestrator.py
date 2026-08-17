@@ -1,4 +1,5 @@
 import shutil
+from pathlib import Path
 
 import pytest
 from sqlalchemy.orm import Session
@@ -130,7 +131,7 @@ def test_apply_plan_rejects_whole_plan_when_a_source_file_escapes_the_whitelist(
 def test_apply_plan_rejects_non_move_operation_types_without_touching_files(session, tmp_path):
     _write_pdf(tmp_path, "a.pdf")
     pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
-    plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.DELETE)])
+    plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.RENAME)])
 
     with pytest.raises(PlanApplicationError):
         apply_plan(session, plan, pdf_files, tmp_path)
@@ -336,6 +337,61 @@ def test_apply_plan_raises_original_error_not_a_masked_one_when_rollback_dispatc
     transaction = session.query(Transaction).one()
     assert transaction.status == "rolled_back"  # "pending" asili KALMADI
     assert transaction.operations[0].status == "rollback_failed"
+
+
+def test_apply_plan_deletes_files_after_backing_them_up(session, tmp_path):
+    _write_pdf(tmp_path, "a.pdf")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.DELETE)])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "a.pdf").exists()  # kaynak silindi
+    backup_path = tmp_path / ".windows-ai-files-backup" / str(transaction.id) / "a.pdf"
+    assert backup_path.exists()  # gercek fiziksel yedek olusturuldu
+    assert transaction.status == "committed"
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_rolls_back_a_delete_by_restoring_the_file_from_backup(session, tmp_path, monkeypatch):
+    _write_pdf(tmp_path, "a.pdf")
+    _write_pdf(tmp_path, "b.pdf")
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+    plan = _plan([_step(0, "2026-08", ["a.pdf", "b.pdf"], operation_type=OperationType.DELETE)])
+
+    real_unlink = Path.unlink
+    call_count = {"n": 0}
+
+    def flaky_unlink(self, *args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise OSError("simulated disk failure")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr("pathlib.Path.unlink", flaky_unlink)
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    # a.pdf silinip yedeklendi, sonra rollback ile orijinal konumuna geri geldi.
+    assert (tmp_path / "a.pdf").exists()
+    # b.pdf silme islemi hic basarili olmadi, zaten yerinde kalmali.
+    assert (tmp_path / "b.pdf").exists()
+
+
+def test_delete_backup_path_stays_within_max_path_depth(tmp_path):
+    from backend.orchestrator import _DELETE_BACKUP_DIRNAME, _delete_backup_path
+    from backend.security import MAX_PATH_DEPTH, is_path_too_deep
+
+    backup_path = _delete_backup_path(tmp_path, transaction_id=1, filename="a.pdf")
+
+    assert backup_path.parent.parent.name == _DELETE_BACKUP_DIRNAME
+    backup_path.parent.mkdir(parents=True)
+    backup_path.touch()
+    assert is_path_too_deep(backup_path, tmp_path, max_depth=MAX_PATH_DEPTH) is False
 
 
 def test_recover_incomplete_transactions_marks_physically_moved_files_as_completed(session, tmp_path):

@@ -18,14 +18,23 @@ def discover_pdf_files(folder: Path) -> list[PdfFileMetadata]:
     `folder` yoksa veya bir dizin değilse boş liste döner — bu fonksiyon
     seviyesinde bir hata SAYILMAZ (çağıran, ör. `/api/plan`, klasörün
     var olup olmadığını KENDİSİ ayrıca kontrol etmelidir; bkz.
-    backend/main.py'deki `allowed_root.is_dir()` kontrolü)."""
+    backend/main.py'deki `allowed_root.is_dir()` kontrolü).
+
+    Gizli (nokta ile başlayan) dosya/klasörler HER ZAMAN atlanır — ör.
+    `.windows-ai-files-backup/` (Saga #289'un DELETE fiziksel yedek
+    klasörü). Tarama zaten recursive olmadığı için bu klasörün İÇİNDEKİ
+    dosyalar (2 seviye derinde) yapısal olarak zaten taranamaz, ama bu
+    koruma AÇIKÇA/kendini belgeleyen şekilde kodda dursun istendi —
+    ileride tarama recursive hale getirilirse "silinmiş" dosyaların
+    yanlışlıkla yeni bir planın kaynağı olarak yeniden keşfedilmesini
+    yapısal olarak engeller (red-team bulgusu, Saga #289)."""
     if not folder.is_dir():
         return []
 
     pdf_files = [
         entry
         for entry in folder.iterdir()
-        if entry.is_file() and entry.suffix.lower() == ".pdf"
+        if entry.is_file() and entry.suffix.lower() == ".pdf" and not entry.name.startswith(".")
     ]
 
     return [

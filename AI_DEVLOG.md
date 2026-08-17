@@ -1,5 +1,46 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## orchestrator-delete-operasyonu (Saga #289, epic #26)
+
+**DELETE eklendi — mevcut MOVE/COPY sözleşmesi hiç değiştirilmeden.**
+Kritik tasarım kararı: `destination_path`/`backup_path` alanlarının
+anlamı TÜM operationType'larda AYNI kalıyor —
+`destination_path` = "forward işlem sonrası dosyanın fiziksel olarak
+bulunduğu yer", `backup_path` = "rollback'in geri yükleyeceği konum".
+DELETE için bu: `destination_path` = gizli yedek konumu
+(`allowed_root/.windows-ai-files-backup/<txn_id>/<dosya>`, derinlik 3,
+`MAX_PATH_DEPTH`'i aşmıyor), `backup_path` = orijinal kaynak konumu. Bu
+sözleşme sayesinde DELETE'in rollback'i AYRI bir fonksiyon YAZMADAN
+`_rollback_move`'u (zaten "hedefi backup_path'e taşı" yapıyor) doğrudan
+kullanabildi — Saga #288'in dispatch mimarisinin gerçekten yeniden
+kullanılabilir olduğu bu task'ta kanıtlandı.
+
+`_forward_delete` önce fiziksel yedeği alır (`shutil.copy2`), SONRA
+kaynağı siler — sıra bilinçli: yedekleme başarısız olursa kaynak hâlâ
+yerinde kalır, veri kaybı riski yok. DELETE'in gerçek bir hedef klasörü
+olmadığı için (`targetFolder` şema gereği hâlâ zorunlu ama kullanılmıyor
+— bilinen sınırlama, Saga #292'ye bırakıldı) `target_dir.mkdir` DELETE
+step'leri için atlanıyor.
+
+Mevcut bir test (`test_apply_plan_rejects_non_move_operation_types...`)
+artık geçersiz örnek kullanıyordu (DELETE'i "desteklenmeyen" örneği
+olarak kullanıyordu) — RENAME'e güncellendi.
+
+**Red-team: 2 bulgu.** (1) `.windows-ai-files-backup` klasörünün
+`discover_pdf_files` tarafından yanlışlıkla yeniden keşfedilmesi
+YAPISAL olarak zaten imkansızdı (tarama recursive değil, yedekler 2
+seviye derinde) ama bu koruma sadece "kaza eseri" doğruydu, kodda
+AÇIKÇA belgelenmiyordu — `pdf_discovery.py`'ye gizli (nokta ile
+başlayan) dosya/klasörleri atlayan açık bir guard + regresyon testi
+eklendi (ileride tarama recursive hale getirilirse "silinmiş"
+dosyaların yanlışlıkla yeniden keşfedilmesini yapısal olarak engelliyor).
+(2) `.windows-ai-files-backup` hiçbir zaman temizlenmiyor — disk
+kullanımı sınırsız büyüyebilir, "silinmiş" dosyalar aslında sonsuza dek
+diskte kalıyor (veri saklama riski). Bu, gerçek bir mimari karar
+(retention politikası) gerektiriyor — Saga #300 olarak Undo UI epic'ine
+(Saga #28) bağlı bir takip task'ı açıldı, bloklayıcı değil (henüz
+gerçek apply endpoint'i yok). 113/113 test yeşil.
+
 ## orchestrator-copy-operasyonu (Saga #288, epic #26)
 
 **Epic 26'nın ilk task'ı: COPY desteği eklendi — "tek tip rollback"

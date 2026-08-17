@@ -49,6 +49,23 @@ def test_discover_pdf_files_sets_created_at_as_a_non_blank_iso_timestamp(tmp_pat
     assert "T" in files[0].createdAt
 
 
+def test_discover_pdf_files_ignores_hidden_pdf_files_and_backup_folder_contents(tmp_path):
+    # Saga #289 red-team bulgusu: .windows-ai-files-backup/ (DELETE fiziksel
+    # yedek klasoru) tarama zaten recursive olmadigi icin yapisal olarak
+    # zaten atlaniyor, ama bu koruma ACIKCA da assert edilsin - ileride
+    # tarama recursive olursa "silinmis" dosyalar yanlislikla yeniden
+    # kesfedilmesin.
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / ".gizli.pdf").write_bytes(b"%PDF-1.4 fake")
+    backup_dir = tmp_path / ".windows-ai-files-backup" / "1"
+    backup_dir.mkdir(parents=True)
+    (backup_dir / "silinmis.pdf").write_bytes(b"%PDF-1.4 fake")
+
+    files = discover_pdf_files(tmp_path)
+
+    assert [f.filename for f in files] == ["a.pdf"]
+
+
 def test_discover_pdf_files_returns_results_sorted_by_filename(tmp_path):
     (tmp_path / "c.pdf").write_bytes(b"%PDF-1.4 fake")
     (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4 fake")
