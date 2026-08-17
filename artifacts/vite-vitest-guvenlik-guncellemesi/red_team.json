@@ -1,0 +1,37 @@
+{
+  "task_slug": "vite-vitest-guvenlik-guncellemesi",
+  "saga_task_id": 278,
+  "reviewed_by": "obss-red-team subagent (bağımsız, saga-oto skill'i altında)",
+  "reviewed_at": "2026-08-17",
+  "security_findings": [
+    {
+      "finding": "npm audit fix --force, npm'in kendisinin ELSPROBLEMS/invalid olarak işaretlediği bir bağımlılık ağacı kabul etti — @vitejs/plugin-react@4.7.0 vite@8'i henüz resmi peer aralığında desteklemiyor.",
+      "severity": "medium",
+      "scenario": "Temiz bir npm ci (CI/farklı makine/farklı npm sürümü) farklı sonuçlanabilir veya başarısız olabilir.",
+      "status": "kabul edildi, düzeltilmedi — verify_report.md'ye açıkça ifşa edildi, Saga #279'un açıklamasına (gerçek Tauri build adımında bu da doğrulanmalı) not olarak eklendi."
+    },
+    {
+      "finding": "Gerçek Tauri native runtime'da (webview) bu 3-major-sürüm yükseltmesinin sorunsuz çalıştığı doğrulanamadı — mevcut test paketi (jsdom + tarayıcı-içi Playwright) yapısal olarak bunu test edemiyor, proje henüz src-tauri/'ye sahip değil (Saga #279).",
+      "severity": "medium",
+      "scenario": "vite 8'in dev-server/production-build davranış değişiklikleri, gerçek paketlenmiş Tauri uygulamasında (invoke() çalışan gerçek webview) farklı davranabilir; bu, ne eski ne yeni bağımlılık setinde hiç test edilmedi.",
+      "status": "kabul edildi, kapsam dışı — zaten Saga #279 (release-blocker, gerçek Tauri build) tarafından kapsanacak, açıklamasına not düşüldü."
+    },
+    {
+      "finding": "npm audit fix --force'un kendisi npm'in normal güvenlik korumalarını devre dışı bırakan bir override — bu, 'testler yeşil kaldı' kanıtının aslında npm'in riskli bulduğu bir upgrade'i doğruladığı anlamına gelmiyor, sadece mevcut test kapsamının kırılmadığını gösteriyor.",
+      "severity": "low",
+      "scenario": "Gelecekte benzer bir --force upgrade, test kapsamı dışındaki bir kod yolunu (bu projede: Tauri runtime) sessizce bozabilir.",
+      "status": "kabul edildi — bu riskin doğası saga-oto'nun genel metodolojisiyle ilgili, bu tek task'ın kapsamında düzeltilecek bir şey değil, disclosure yeterli."
+    }
+  ],
+  "approved_points": [
+    "Bağımsız olarak yeniden çalıştırılan 6 komut (npm audit, tsc, vitest, build, playwright, pytest) code_diff.md'nin iddialarıyla birebir örtüşüyor.",
+    "git diff --stat, sadece package.json/package-lock.json'ın değiştiğini doğruladı — hiçbir uygulama kodu dokunulmadı.",
+    "package.json'daki sürüm numaraları (vite ^8.2.1, vitest ^4.1.10) doğru.",
+    "Playwright'taki 'Unhandled rejection: invoke' konsol mesajının bu yükseltmeden önce de var olan, ilgisiz bir durum olduğu değerlendirmesi doğru — test zaten geçiyor, upgrade'in getirdiği bir regresyon değil."
+  ],
+  "overall_assessment": "Task'ın olgusal iddiaları doğru ve bağımsız olarak yeniden üretilebilir. Ancak '42/42 + 26/26 + 13/13 yeşil' kanıtı, 3 major sürüm atlaması için düşünüldüğünden daha zayıf bir güvence sağlıyor — bu proje bir Tauri masaüstü uygulaması ve mevcut test paketi gerçek native runtime'ı hiç egzersiz etmiyor. İlk verify_report.md bu boşluğu açıkça ifşa etmiyordu; red-team incelemesi sonrası verify_report.md'ye 'Bilinen, Açıkça İfşa Edilen Boşluklar' bölümü eklendi ve Saga #279'un açıklamasına (gerçek Tauri build adımında bu da doğrulanmalı) not düşüldü — kod değişikliği gerektirmeyen, dürüst bir dokümantasyon düzeltmesi.",
+  "ready_to_commit": {
+    "decision": "evet",
+    "gerekce": "Olgusal iddialar doğrulandı, kapsam taşması yok (sadece 2 dosya). Red-team'in asıl talebi ('ifşa et, kör güven verme') verify_report.md güncellemesi ve #279'a not düşülmesiyle karşılandı — kod tarafında düzeltilecek bir şey yok, npm audit 0 zafiyet gösteriyor ve mevcut kapsamda tüm testler yeşil. Bilinen boşluklar (peer dep invalid state, Tauri runtime doğrulanmadı) düşük/orta öncelikli ve ayrı, zaten var olan bir task'a (#279) doğru şekilde bağlandı."
+  }
+}
