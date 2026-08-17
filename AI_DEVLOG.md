@@ -1,5 +1,27 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## sqlite-fileoperation-backup-kaydi (Saga #275, epic #25)
+
+**İlk persistence katmanı: SQLAlchemy ORM ile `Transaction`/`FileOperation`.**
+`backend/db_models.py`'ye iki tablo eklendi — `Transaction` (id, created_at,
+status: pending/committed/rolled_back) ve `FileOperation` (id,
+transaction_id FK, operation_type, source_path, destination_path,
+backup_path nullable, created_at, status). `backend/db.py`
+(`db_path()` → `%APPDATA%\windows-ai-files\app.db`, `config.py`'deki
+`config_path()` deseniyle tutarlı) ve `backend/file_operations.py`
+(`create_transaction`/`record_file_operation`/`list_file_operations`
+CRUD fonksiyonları) eklendi.
+
+**Bilinçli kapsam kararı: gerçek dosya I/O YOK.** Henüz plan-uygulama
+(apply/execute) endpoint'i projede yok (Saga #273/#274 hâlâ `todo`) — bu
+task SADECE veri modelini/persistence'ı kurdu, `FileOperation` kayıtları
+şimdilik hiçbir yerden gerçek bir taşıma sonrası oluşturulmuyor. Gerçek
+Orchestrator entegrasyonu Saga #274'e bırakıldı. SQLAlchemy proje
+ortamında zaten kuruluydu (2.0.49) ama hiçbir yerde pin'lenmemişti —
+requirements.txt eklemek bu task'ın kapsamı dışında tutuldu (projede hiç
+Python bağımlılık dosyası yok, bu ayrı ve daha büyük bir konu). 77/77
+test yeşil.
+
 ## path-derinlik-ve-sistem-klasoru-korumasi (Saga #272, epic #25)
 
 **Security Gate'e iki yeni kural: azami derinlik + kesin sistem kökleri.**
