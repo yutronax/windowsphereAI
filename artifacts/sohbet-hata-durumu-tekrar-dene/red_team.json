@@ -1,0 +1,27 @@
+{
+  "security_findings": [
+    {
+      "finding": "planError is rendered as a plain JSX text child, not via dangerouslySetInnerHTML.",
+      "severity": "low",
+      "status": "accepted_risk",
+      "note": "React escapes it to literal text; not exploitable as XSS. Flagged as a maintainability guardrail for future refactors, not an active vuln."
+    },
+    {
+      "finding": "No length/format cap on planError string.",
+      "severity": "low",
+      "status": "accepted_risk",
+      "note": "A very long backend error message could visually break layout on narrow viewports; not a security issue, needs CSS overflow handling if wired to a real backend later — out of scope."
+    }
+  ],
+  "approved_points": [
+    "Diff matches ATDD/code_diff claims: planError defaults to null, onRetry optional, no crash if omitted.",
+    "Priority rule planError && !isGeneratingPlan correctly implemented — no case where both indicators show simultaneously.",
+    "PlanCard rendering is structurally untouched by this diff — driven solely by messages/staleMessageIds/editingPlanMessageId, so 'approval never silently reopens due to an error' holds by construction.",
+    "Retry button only calls onRetry?.() and does not self-clear planError — matches AC-3 (no auto-dismiss).",
+    "role=\"alert\" correctly distinct from the polite aria-live loading/message-list regions.",
+    "Textarea/send button correctly left enabled during error state (AC-5).",
+    "82/82 tests passing including 5 new tests for this task."
+  ],
+  "overall_assessment": "Clean, narrowly-scoped, presentational addition consistent with #264-266's parent-controlled prop pattern. No XSS risk (React escaping). 'Approval never opens on error' invariant holds by construction since PlanCard's render path is independent of the new props.",
+  "ready_to_commit": true
+}

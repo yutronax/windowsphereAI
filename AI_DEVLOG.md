@@ -1,5 +1,22 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## sohbet-hata-durumu-tekrar-dene (Saga #267, epic #24)
+
+**Hata durumu + "Tekrar dene" eklendi, epic #24 (MVP: Ana sohbet arayüzü)
+"todo"daki tüm high-priority task'lar tamamlandı.** `ChatScreen`'e
+`planError`/`onRetry` prop'ları eklendi (yine dışarıdan kontrol edilen,
+dar kapsam deseni — #264/#265/#266 ile aynı). Hata görünürken `role="alert"`
+ile hemen duyuruluyor, "Tekrar dene" sadece `onRetry` çağırıyor, kendiliğinden
+kaybolmuyor; textarea/gönder düğmesi (yükleniyor durumundan farklı olarak)
+kilitlenmiyor. `isGeneratingPlan` true ise hata göstergesi bastırılıyor
+(yükleniyor önceliklidir, çelişkili UI önlenir).
+
+**Red-team: temiz geçti, bulgu yok (sadece 2 düşük-önemli ileriye dönük not).**
+PlanCard'ın render yolu bu prop'lardan tamamen bağımsız olduğu için "hata
+durumunda asla onay açılmaz" ilkesi tasarım gereği (convention değil,
+construction ile) korunuyor. React'ın JSX text escape'i XSS riskini
+otomatik kapatıyor. 82/82 test yeşil.
+
 ## otomatik-kaydirma-alt-durumu (Saga #266, epic #24)
 
 **Otomatik kaydırma + "En yeni mesaja dön" düğmesi eklendi.** Mesaj listesine
