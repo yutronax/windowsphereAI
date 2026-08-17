@@ -26,3 +26,104 @@ describe('App (ilk-istek-oturum-baglami / Saga #258)', () => {
     expect(await screen.findByTestId('main-chat-screen')).toBeVisible();
   });
 });
+
+describe('App — gerçek /api/plan bağlantısı (Saga #287)', () => {
+  async function renderChatScreen(fetchMock: ReturnType<typeof vi.fn>) {
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App />);
+    fireEvent.click(await screen.findByText('mock-onboarding-continue'));
+    await screen.findByTestId('main-chat-screen');
+    return fetchMock;
+  }
+
+  it('calls POST /api/plan with the sessionId and shows the returned plan (AC-3)', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/config')) return Promise.resolve({ ok: false });
+      if (url.endsWith('/api/plan')) {
+        expect(JSON.parse(init!.body as string)).toEqual({ sessionId: '11111111-1111-1111-1111-111111111111' });
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              steps: [{ order: 0, operationType: 'Taşı', targetFolder: '2026-08', affectedFileCount: 1 }],
+            }),
+        });
+      }
+      return Promise.resolve({ ok: false });
+    });
+    await renderChatScreen(fetchMock);
+
+    fireEvent.change(screen.getByTestId('chat-input-textarea'), { target: { value: 'PDF\'leri sırala' } });
+    fireEvent.click(screen.getByText('Gönder'));
+
+    expect(await screen.findByTestId('plan-card')).toBeVisible();
+    expect(screen.getByTestId('plan-approve-button')).toBeEnabled();
+  });
+
+  it('sets planError and shows the retry UI when /api/plan fails (AC-4)', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.endsWith('/api/config')) return Promise.resolve({ ok: false });
+      if (url.endsWith('/api/plan')) {
+        return Promise.resolve({ ok: false, json: () => Promise.resolve({ detail: 'Oturum bulunamadı' }) });
+      }
+      return Promise.resolve({ ok: false });
+    });
+    await renderChatScreen(fetchMock);
+
+    fireEvent.change(screen.getByTestId('chat-input-textarea'), { target: { value: 'PDF\'leri sırala' } });
+    fireEvent.click(screen.getByText('Gönder'));
+
+    const indicator = await screen.findByTestId('plan-error-indicator');
+    expect(indicator).toHaveTextContent('Oturum bulunamadı');
+  });
+
+  it('retries the same request when "Tekrar dene" is clicked after a failure (AC-4)', async () => {
+    let planCallCount = 0;
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.endsWith('/api/config')) return Promise.resolve({ ok: false });
+      if (url.endsWith('/api/plan')) {
+        planCallCount += 1;
+        if (planCallCount === 1) {
+          return Promise.resolve({ ok: false, json: () => Promise.resolve({ detail: 'geçici hata' }) });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ steps: [] }) });
+      }
+      return Promise.resolve({ ok: false });
+    });
+    await renderChatScreen(fetchMock);
+
+    fireEvent.change(screen.getByTestId('chat-input-textarea'), { target: { value: 'PDF\'leri sırala' } });
+    fireEvent.click(screen.getByText('Gönder'));
+    await screen.findByTestId('plan-error-indicator');
+
+    fireEvent.click(screen.getByTestId('plan-retry-button'));
+
+    await screen.findByText('Seçili klasörde işlenecek PDF bulunamadı.');
+    expect(planCallCount).toBe(2);
+  });
+
+  it('does not call any apply/orchestrator endpoint when a plan is approved (AC-5)', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.endsWith('/api/config')) return Promise.resolve({ ok: false });
+      if (url.endsWith('/api/plan')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              steps: [{ order: 0, operationType: 'Taşı', targetFolder: '2026-08', affectedFileCount: 1 }],
+            }),
+        });
+      }
+      return Promise.resolve({ ok: false });
+    });
+    await renderChatScreen(fetchMock);
+    fireEvent.change(screen.getByTestId('chat-input-textarea'), { target: { value: 'PDF\'leri sırala' } });
+    fireEvent.click(screen.getByText('Gönder'));
+    await screen.findByTestId('plan-approve-button');
+    fetchMock.mockClear();
+
+    fireEvent.click(screen.getByTestId('plan-approve-button'));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

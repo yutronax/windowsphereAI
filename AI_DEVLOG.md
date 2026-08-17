@@ -1,5 +1,36 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## chatscreen-controlled-app-wiring (Saga #287, epic #25)
+
+**Epic 25'in uçtan uca hedefi ilk kez gerçekten çalışır hale geldi.**
+`ChatScreen` dual-mode'a çevrildi: `messages`/`onMessagesChange`
+prop'ları VERİLİRSE controlled çalışır (App.tsx dışarıdan asenkron bir
+plan yanıtı ekleyebilir), verilmezse (mevcut 30+ test) davranış
+eskisiyle birebir aynı kalır — hiçbir mevcut test kırılmadı. `App.tsx`
+artık gerçekten `POST /api/plan(sessionId)` çağırıyor, başarılı yanıtı
+yeni bir assistant `ChatMessage.plan`'ına (`securityStatus: 'approved'`
+— backend zaten whitelist'ten geçirdiği için) yazıyor, hata durumunda
+mevcut `planError`/retry mekanizmasına (Saga #267) yönlendiriyor.
+`onApprovePlan` bilinçli olarak sadece loglar — gerçek bir apply/
+Orchestrator çağrısı yapmıyor (Saga #274 kasıtlı endpoint'siz).
+
+Bu task'ın tamamlanmasıyla Saga #273'ün onay UI'ı (PlanCard) ve Saga
+#277'nin ResultCard'ı (henüz sonuç göstermiyor — apply endpoint'i yok,
+ama mapping fonksiyonu hazır) ilk kez gerçek backend veriyle
+tetiklenebilir hale geldi.
+
+**Red-team: race-condition bulgusu hemen düzeltildi.** `requestPlan`in
+iki çakışan çağrısı (ör. bir istek sürerken "Tekrar dene"ye basılırsa)
+arasında hiçbir sıralama koruması yoktu — hangi yanıt önce gelirse o
+kazanıyordu, eski bir yanıt yeni/başarılı bir planı sessizce ezebilirdi.
+`latestRequestIdRef` ile her `requestPlan` çağrısı kendi isteğinin hâlâ
+"en son" olup olmadığını kontrol ediyor, değilse state güncellemesini
+atlıyor. (Bu senaryoyu gerçek UI üzerinden tetikleyen bir test
+YAZILAMADI — `Gönder` butonu zaten `isGeneratingPlan` sırasında disabled
+olduğu için normal kullanımda çakışma oluşmuyor; guard tamamen
+defansif/gelecekteki değişikliklere karşı.) 123/123 frontend test
+yeşil (7 yeni), `tsc --noEmit` temiz.
+
 ## appdb-sema-goc-shimi (Saga #284, epic #25)
 
 **alembic yerine minimal "eksik kolon varsa ALTER TABLE" shim'i.** Saga

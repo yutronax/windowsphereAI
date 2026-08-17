@@ -12,6 +12,15 @@ export type ChatMessage = {
 
 type Props = {
   initialMessages?: ChatMessage[];
+  // Saga #287: `messages`/`onMessagesChange` VERİLİRSE ChatScreen
+  // CONTROLLED çalışır (App.tsx'in asenkron bir /api/plan yanıtını
+  // sohbete yansıtabilmesi için — ChatScreen öncesinde mesaj listesini
+  // tamamen kendi iç state'inde tutuyordu, dışarıdan mesaj eklemenin
+  // hiçbir yolu yoktu). VERİLMEZSE (mevcut tüm testler) davranış
+  // uncontrolled ve eskisiyle birebir aynı kalır — dar kapsam, regresyon
+  // yok.
+  messages?: ChatMessage[];
+  onMessagesChange?: (messages: ChatMessage[]) => void;
   onSendMessage?: (message: ChatMessage) => void;
   isGeneratingPlan?: boolean;
   planError?: string | null;
@@ -28,13 +37,26 @@ const BOTTOM_THRESHOLD_PX = 24;
 
 export default function ChatScreen({
   initialMessages = [],
+  messages: controlledMessages,
+  onMessagesChange,
   onSendMessage,
   isGeneratingPlan = false,
   planError = null,
   onRetry,
   onApprovePlan,
 }: Props) {
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  const isControlled = controlledMessages !== undefined;
+  const [internalMessages, setInternalMessages] = useState<ChatMessage[]>(initialMessages);
+  const messages = isControlled ? controlledMessages : internalMessages;
+
+  function updateMessages(updater: (current: ChatMessage[]) => ChatMessage[]) {
+    if (isControlled) {
+      onMessagesChange?.(updater(messages));
+    } else {
+      setInternalMessages(updater);
+    }
+  }
+
   const [draft, setDraft] = useState('');
   const [editingPlanMessageId, setEditingPlanMessageId] = useState<string | null>(null);
   const [staleMessageIds, setStaleMessageIds] = useState<Set<string>>(new Set());
@@ -86,7 +108,7 @@ export default function ChatScreen({
     const trimmed = draft.trim();
     if (trimmed === '') return;
     const message: ChatMessage = { id: `msg-${nextMessageIdRef.current++}`, role: 'user', text: trimmed };
-    setMessages((current) => [...current, message]);
+    updateMessages((current) => [...current, message]);
     setDraft('');
     if (editingPlanMessageId !== null) {
       setStaleMessageIds((current) => new Set(current).add(editingPlanMessageId));

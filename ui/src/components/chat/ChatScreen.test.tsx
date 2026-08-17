@@ -423,6 +423,34 @@ describe('ChatScreen (dikey-mesaj-akisi / Saga #259)', () => {
     expect(screen.getByText('Gönder')).toBeDisabled(); // draft boş olduğu için, ResultCard'dan bağımsız
   });
 
+  it('renders messages from the controlled "messages" prop instead of internal state (Saga #287 AC-1)', () => {
+    render(<ChatScreen messages={[{ id: 'c1', role: 'assistant', text: 'dışarıdan gelen mesaj' }]} />);
+
+    expect(screen.getByText('dışarıdan gelen mesaj')).toBeVisible();
+  });
+
+  it('calls onMessagesChange instead of managing its own state when controlled (Saga #287 AC-1)', () => {
+    const onMessagesChange = vi.fn();
+    render(<ChatScreen messages={[]} onMessagesChange={onMessagesChange} />);
+
+    fireEvent.change(screen.getByTestId('chat-input-textarea'), { target: { value: 'merhaba' } });
+    fireEvent.click(screen.getByText('Gönder'));
+
+    expect(onMessagesChange).toHaveBeenCalledWith([expect.objectContaining({ text: 'merhaba', role: 'user' })]);
+    // Controlled modda ChatScreen kendi state'ini güncellemez; yeni mesaj
+    // sadece parent messages prop'unu güncellerse görünür.
+    expect(screen.queryByText('merhaba')).not.toBeInTheDocument();
+  });
+
+  it('keeps existing uncontrolled behaviour unchanged when "messages" prop is omitted (Saga #287 AC-2, regression)', () => {
+    render(<ChatScreen />);
+
+    fireEvent.change(screen.getByTestId('chat-input-textarea'), { target: { value: 'uncontrolled mesaj' } });
+    fireEvent.click(screen.getByText('Gönder'));
+
+    expect(screen.getByText('uncontrolled mesaj')).toBeVisible();
+  });
+
   it('renders PlanCard outside the message bubble, after it (Saga #260 AC-6, regression)', () => {
     render(
       <ChatScreen
