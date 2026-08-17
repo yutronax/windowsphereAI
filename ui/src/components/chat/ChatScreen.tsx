@@ -9,6 +9,12 @@ type Props = {
   isGeneratingPlan?: boolean;
   planError?: string | null;
   onRetry?: () => void;
+  // Saga #273: PlanCard'ın "Planı onayla" butonu SADECE bu callback
+  // üzerinden dışarı bildirim yapar — Orchestrator'ı çağırmak (henüz
+  // yazılmadı, Saga #274) bu callback'in sorumluluğu, kullanıcı gerçekten
+  // tıklamadan asla tetiklenmez (PlanCard'ın fail-closed canApprove
+  // mantığıyla birlikte).
+  onApprovePlan?: (messageId: string) => void;
 };
 
 const BOTTOM_THRESHOLD_PX = 24;
@@ -19,6 +25,7 @@ export default function ChatScreen({
   isGeneratingPlan = false,
   planError = null,
   onRetry,
+  onApprovePlan,
 }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [draft, setDraft] = useState('');
@@ -245,6 +252,7 @@ export default function ChatScreen({
               <PlanCard
                 plan={message.plan}
                 onChangePlan={() => handleChangePlan(message.id)}
+                onApprove={() => onApprovePlan?.(message.id)}
                 stale={staleMessageIds.has(message.id)}
                 isGeneratingPlan={isGeneratingPlan}
               />

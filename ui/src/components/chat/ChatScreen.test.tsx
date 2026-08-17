@@ -321,6 +321,66 @@ describe('ChatScreen (dikey-mesaj-akisi / Saga #259)', () => {
     expect(screen.getByTestId('chat-message-bubble-a1')).toHaveClass('chat-message-bubble');
   });
 
+  it('calls onApprovePlan with the message id when the plan is approved (Saga #273)', () => {
+    const onApprovePlan = vi.fn();
+    render(
+      <ChatScreen
+        onApprovePlan={onApprovePlan}
+        initialMessages={[
+          {
+            id: 'p1',
+            role: 'assistant',
+            text: 'Önerilen plan:',
+            plan: { steps: [{ order: 1, operationType: 'Taşı', targetFolder: 'X', affectedFileCount: 2 }], securityStatus: 'approved' },
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('plan-approve-button'));
+
+    expect(onApprovePlan).toHaveBeenCalledTimes(1);
+    expect(onApprovePlan).toHaveBeenCalledWith('p1');
+  });
+
+  it('never calls onApprovePlan for a plan that has not passed security (Saga #273, fail-closed)', () => {
+    const onApprovePlan = vi.fn();
+    render(
+      <ChatScreen
+        onApprovePlan={onApprovePlan}
+        initialMessages={[
+          {
+            id: 'p1',
+            role: 'assistant',
+            text: 'Önerilen plan:',
+            plan: { steps: [{ order: 1, operationType: 'Taşı', targetFolder: 'X', affectedFileCount: 2 }], securityStatus: 'rejected', rejectionReason: 'reddedildi' },
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('plan-approve-button'));
+
+    expect(onApprovePlan).not.toHaveBeenCalled();
+  });
+
+  it('does not require onApprovePlan to be provided (optional prop, no crash on approve)', () => {
+    render(
+      <ChatScreen
+        initialMessages={[
+          {
+            id: 'p1',
+            role: 'assistant',
+            text: 'Önerilen plan:',
+            plan: { steps: [{ order: 1, operationType: 'Taşı', targetFolder: 'X', affectedFileCount: 2 }], securityStatus: 'approved' },
+          },
+        ]}
+      />,
+    );
+
+    expect(() => fireEvent.click(screen.getByTestId('plan-approve-button'))).not.toThrow();
+  });
+
   it('renders PlanCard outside the message bubble, after it (Saga #260 AC-6, regression)', () => {
     render(
       <ChatScreen

@@ -1,5 +1,44 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## planı-onaysız-calistirma-koruması (Saga #273, epic #25)
+
+**Gerçek bug: `ChatScreen` `PlanCard`'a `onApprove` hiç geçirmiyordu.**
+Epic 24'ün önceki task'ları (Saga #265/#266) `PlanCard` içinde fail-closed
+onay mantığını (`canApprove = isApproved && !hasApproved && !stale &&
+!isGeneratingPlan`) zaten eksiksiz kurmuştu, ama `ChatScreen.tsx`'teki
+`&lt;PlanCard /&gt;` render'ı `onApprove` prop'unu hiç bağlamıyordu — yani
+buton görsel olarak vardı ama tıklanınca hiçbir şey dışarı bildirilmiyordu.
+`ChatScreen`'e `onApprovePlan?: (messageId: string) => void` prop'u eklendi,
+`PlanCard`'a `onApprove={() => onApprovePlan?.(message.id)}` olarak
+bağlandı. "Reddetme/plan değişikliği kuyruğu temizler" gereksinimi zaten
+mevcut mekanizmalarla (rejected → `isApproved` hep false, plan değişince
+→ `stale` → `canApprove` false) karşılanıyordu, yeni bir kuyruk icat
+edilmedi.
+
+**Bilinçli kapsam kararı: `App.tsx`'i gerçek `/api/plan`'a bağlamadım.**
+Bunun için gereken `pdfFiles` (gerçek PDF listesi + oluşturulma tarihleri)
+kaynağı projede hiçbir yerde yok — ne backend'de bir klasör-tarama
+endpoint'i, ne frontend'de bir native dosya-listeleme mekanizması
+(`@tauri-apps/plugin-fs` kurulu değil). Bunu bu task'a sıkıştırmak ya
+sahte/boş bir `pdfFiles: []` göndermek (anlamsız, yanıltıcı) ya da yeni
+bir native bağımlılık eklemek (mimari karar, "dar kapsamı seç" ilkesiyle
+çelişir) anlamına gelirdi. Bunun yerine Saga #285 açıldı (backend'in
+`selectedFolder`'ı kendi taraması mı, yoksa frontend'in native fs
+kullanması mı — karar gerektiriyor).
+
+**Red-team bulgusu: "onaydan önce Orchestrator çağrılmaz" garantisi bugün
+İTİBARİYLE HENÜZ PRODUCTION'DA GERÇEK DEĞİL, netleştirildi.** Düzeltilen
+şey `ChatScreen`→`PlanCard` sınırındaki kopuk callback zinciri — bu
+gerçek ve test edilmiş bir düzeltme. AMA `App.tsx` hâlâ `ChatScreen`'i
+hiçbir prop olmadan render ediyor — `onApprovePlan` şu an hiçbir yerden
+bağlanmıyor, çünkü zaten çağıracağı bir Orchestrator/network entegrasyonu
+da yok (Saga #274 hâlâ todo, Saga #285 önkoşulu bekliyor). Yani bu task
+GEREKLİ ama TEK BAŞINA YETERLİ değil — "onaysız çalıştırma engellendi"
+iddiası ancak #285 (PDF keşfi) + App.tsx wiring + #274 (Orchestrator)
+tamamlanınca gerçek bir güvenlik garantisi haline gelir. 103/103 frontend
+test yeşil (3 yeni test: onaylanmış planda callback çağrılıyor, reddedilmiş planda asla
+çağrılmıyor, `onApprovePlan` verilmediğinde çökme yok).
+
 ## sqlite-fileoperation-backup-kaydi (Saga #275, epic #25)
 
 **İlk persistence katmanı: SQLAlchemy ORM ile `Transaction`/`FileOperation`.**
