@@ -1,3 +1,4 @@
+import datetime as dt
 import os
 import re
 from enum import Enum
@@ -206,6 +207,19 @@ class PdfFileMetadata(BaseModel):
         if "/" in value or "\\" in value:
             raise ValueError("must not contain path separators")
         return value
+
+
+class TransactionSummary(BaseModel):
+    """Saga #294: `GET /api/transactions`'ın döndürdüğü, geçmiş bir
+    işlemin ÖZETİ — tam `FileOperation` satırları (kaynak/hedef tam
+    path'ler) İÇERMEZ, sadece `targetFolders` klasör ADLARINI taşır
+    (Saga #283'teki "tam path istemciye sızdırılmaz" ilkesiyle tutarlı)."""
+
+    id: int
+    createdAt: dt.datetime
+    status: str
+    fileCount: int
+    targetFolders: list[str]
 
 
 class PlanRequest(BaseModel):

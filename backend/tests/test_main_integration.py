@@ -2,10 +2,40 @@ import json
 import uuid
 
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session as DbSession
+from sqlalchemy.pool import StaticPool
 
-from backend.main import app, get_llm_client
+from backend.db_models import Base
+from backend.file_operations import create_transaction, record_file_operation
+from backend.main import app, get_db_session, get_llm_client
 
 client = TestClient(app)
+
+
+def _in_memory_db_session() -> DbSession:
+    # `TestClient`, endpoint'i bir threadpool worker thread'inde çalıştırır
+    # (FastAPI'nin `run_in_threadpool`'u) — sqlite'ın varsayılan
+    # `check_same_thread` koruması bu yüzden `StaticPool` + `check_same_thread=False`
+    # ile devre dışı bırakılmalı, aksi halde "SQLite objects created in a
+    # thread can only be used in that same thread" hatası alınır.
+    engine = create_engine(
+        "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    return Session(bind=engine)
+
+
+def _override_get_db_session(db_session: DbSession):
+    # `get_db_session` FastAPI'ye bir GENERATOR olarak tanınıyor (`yield`
+    # içeriyor) — override'ın da bir generator FONKSİYONU olması gerekiyor,
+    # aksi halde FastAPI override'ın dönüş değerini (bir iterator) doğrudan
+    # `db` parametresine bağlar, session nesnesinin kendisini DEĞİL.
+    def _override():
+        yield db_session
+
+    return _override
 
 
 class _StubLLMClient:
@@ -304,3 +334,82 @@ def test_plan_endpoint_returns_403_when_a_discovered_pdf_sits_under_a_system_roo
     # Saga #283 red-team bulgusu: tam mutlak path istemciye SIZDIRILMAMALI
     # (sunucunun dosya sistemi yapısı hakkında keşif bilgisi verirdi).
     assert str(protected_root) not in response.json()["detail"]
+
+
+def test_transactions_endpoint_returns_empty_list_when_no_transactions_exist():
+    db_session = _in_memory_db_session()
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.get("/api/transactions")
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_transactions_endpoint_returns_newest_transaction_first_with_a_status_field_summary(tmp_path):
+    db_session = _in_memory_db_session()
+    older = create_transaction(db_session)
+    record_file_operation(
+        db_session,
+        older,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "a.pdf"),
+        destination_path=str(tmp_path / "2026-07" / "a.pdf"),
+        backup_path=str(tmp_path / "a.pdf"),
+    )
+    older.status = "committed"
+    db_session.commit()
+
+    newer = create_transaction(db_session)
+    record_file_operation(
+        db_session,
+        newer,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "b.pdf"),
+        destination_path=str(tmp_path / "2026-08" / "b.pdf"),
+        backup_path=str(tmp_path / "b.pdf"),
+    )
+    newer.status = "committed"
+    db_session.commit()
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.get("/api/transactions")
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [entry["id"] for entry in body] == [newer.id, older.id]
+    assert body[0]["status"] == "committed"
+    assert body[0]["fileCount"] == 1
+    assert body[0]["targetFolders"] == ["2026-08"]
+
+
+def test_transactions_endpoint_never_leaks_absolute_paths_only_folder_names(tmp_path):
+    db_session = _in_memory_db_session()
+    transaction = create_transaction(db_session)
+    record_file_operation(
+        db_session,
+        transaction,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "a.pdf"),
+        destination_path=str(tmp_path / "2026-08" / "a.pdf"),
+        backup_path=str(tmp_path / "a.pdf"),
+    )
+    transaction.status = "committed"
+    db_session.commit()
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.get("/api/transactions")
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    body = response.json()
+    assert str(tmp_path) not in json.dumps(body)

@@ -1,13 +1,18 @@
 import logging
 import os
 import uuid
+from collections.abc import Generator
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select
+from sqlalchemy.orm import Session as DbSession, sessionmaker
 
 from backend.config import load_setup_config
-from backend.models import PlanRequest, PlanSkeleton, SessionContext, SessionRequest
+from backend.db import create_db_engine, create_session_factory
+from backend.db_models import Transaction
+from backend.models import PlanRequest, PlanSkeleton, SessionContext, SessionRequest, TransactionSummary
 from backend.pdf_discovery import discover_pdf_files
 from backend.plan_generation import (
     LLMClient,
@@ -65,6 +70,63 @@ def get_llm_client() -> LLMClient:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="LLM API anahtarı yapılandırılmamış")
     base_url = os.environ.get("PLAN_LLM_BASE_URL")
     return OpenAICompatibleLLMClient(api_key=api_key, base_url=base_url)
+
+
+_db_session_factory: sessionmaker[DbSession] | None = None
+
+
+def _get_db_session_factory() -> sessionmaker[DbSession]:
+    # Saga #294 red-team bulgusu: `get_llm_client`'ın "her istekte taze
+    # oluştur" deseni burada UYGUN DEĞİL — o desende maliyet sadece bir
+    # HTTP istemcisi kurmak, burada ise `create_db_engine`'in HER
+    # ÇAĞRISI `Base.metadata.create_all` + `_add_missing_columns` (tam
+    # şema introspection/ALTER TABLE taraması) çalıştırıyor. Bu, sık
+    # poll'lanabilecek bir "geçmiş" endpoint'i için gereksiz tekrarlanan
+    # I/O anlamına gelirdi. Engine/session-factory artık SÜREÇ BAŞINA BİR
+    # KEZ (lazy, ilk çağrıda) oluşturulup modül seviyesinde önbelleğe
+    # alınıyor — `get_db_session` sadece `factory()`/`yield`/`close()`
+    # yapıyor. Testler zaten `get_db_session`'ı `app.dependency_overrides`
+    # ile TAMAMEN atlıyor (bkz. test_main_integration.py), bu yüzden bu
+    # cache testler arası izolasyonu bozmuyor.
+    global _db_session_factory
+    if _db_session_factory is None:
+        engine = create_db_engine()
+        _db_session_factory = create_session_factory(engine)
+    return _db_session_factory
+
+
+def get_db_session() -> Generator[DbSession, None, None]:
+    db = _get_db_session_factory()()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def _transaction_to_summary(transaction: Transaction) -> TransactionSummary:
+    # Saga #283 ilkesiyle tutarlı: tam mutlak path İSTEMCİYE SIZDIRILMAZ,
+    # sadece hedef klasörün ADI (`.name`) döner.
+    target_folders = sorted({Path(op.destination_path).parent.name for op in transaction.operations})
+    return TransactionSummary(
+        id=transaction.id,
+        createdAt=transaction.created_at,
+        status=transaction.status,
+        fileCount=len(transaction.operations),
+        targetFolders=target_folders,
+    )
+
+
+@app.get("/api/transactions")
+def list_transactions(db: DbSession = Depends(get_db_session)) -> list[TransactionSummary]:
+    # `created_at.desc()` TEK BAŞINA yeterli değil — hızlı ardışık
+    # transaction'lar aynı milisaniyede oluşturulabilir (`dt.datetime.utcnow`
+    # çözünürlüğü), bu da eşit zaman damgalarında sıralamayı belirsiz
+    # bırakır. `id.desc()` ikincil sıralama anahtarı, eşitlik durumunda bile
+    # en son OLUŞTURULANIN (en yüksek id) önce gelmesini GARANTİ eder.
+    transactions = db.scalars(
+        select(Transaction).order_by(Transaction.created_at.desc(), Transaction.id.desc())
+    ).all()
+    return [_transaction_to_summary(transaction) for transaction in transactions]
 
 
 def get_session_or_404(payload: PlanRequest) -> SessionContext:

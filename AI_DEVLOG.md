@@ -1,5 +1,50 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## gecmis-transaction-listesi-endpoint (Saga #294, epic #28)
+
+**Global `/api/transactions`, session-bazlı DEĞİL.** ATDD'de netleşen
+gerçek: `Transaction`'ın DB şemasında bir `session_id` FK'sı YOK,
+`SessionContext` zaten sadece bellek-içi bir dict (`main.py: _sessions`)
+— DB'ye hiç yazılmıyor, süreç yeniden başlayınca kaybolur. Session-bazlı
+bir filtre önce yeni bir migration + `apply_plan`'ın her çağrısına
+`session_id` geçirmesini gerektirirdi — henüz var olmayan bir apply
+endpoint'iyle (Saga #287 bekliyor) birlikte netleşecek bir mimari
+genişleme, bu task'ın dar kapsamını aşıyordu. Global liste mevcut
+şemaya SIFIR değişiklikle uyumlu.
+
+**Yanıt sadece klasör ADLARINI taşıyor, tam path YOK** (`targetFolders`,
+`Path(...).parent.name`) — Saga #283'teki "tam path istemciye
+sızdırılmaz" ilkesiyle tutarlı, ayrı bir testle (`test_transactions_endpoint_never_leaks_absolute_paths_only_folder_names`)
+doğrulandı.
+
+**`get_db_session` dependency'si, mevcut `get_llm_client` deseniyle
+BİREBİR aynı:** her istekte engine/session TAZE oluşturulur, modül
+seviyesinde cache YOK — bu, test izolasyonunu (her testin kendi
+APPDATA/DB'sini kullanabilmesini) basitçe sağlıyor.
+
+**İki test-altyapısı tuzağı bulunup düzeltildi:** (1) FastAPI generator
+dependency'lerinin override'ı da bir GENERATOR fonksiyonu olmalı —
+`lambda: iter([session])` FastAPI tarafından "generator değil" olarak
+tanınıp override'ın DÖNÜŞ DEĞERİ (iterator'ın kendisi) doğrudan `db`
+parametresine bağlandı (`AttributeError: 'list_iterator' object has no
+attribute 'scalars'`). (2) `TestClient` endpoint'i bir threadpool
+worker thread'inde çalıştırıyor — varsayılan in-memory sqlite engine'i
+`check_same_thread=True` ile oluştuğu için "SQLite objects created in a
+thread can only be used in that same thread" hatası verdi;
+`StaticPool` + `check_same_thread=False` ile çözüldü. (3) Ayrıca hızlı
+ardışık iki transaction aynı milisaniyede oluşabildiği için
+`created_at.desc()` TEK BAŞINA sıralamayı garanti etmiyordu —
+`Transaction.id.desc()` ikincil anahtar olarak eklendi. 150/150 test
+yeşil (3 yeni test).
+
+**Red-team önerisiyle `get_db_session` DEĞİŞTİRİLDİ:** ilk taslak
+`get_llm_client` ile aynı "her istekte taze oluştur" desenini
+kullanıyordu, ama `create_db_engine` her çağrıda tam şema
+introspection/`ALTER TABLE` taraması yapıyor — bu, `get_llm_client`'ın
+(sadece bir HTTP istemcisi kurmak) maliyet profilinden FARKLI, sık
+poll'lanabilecek bir "geçmiş" endpoint'i için gereksiz I/O. Engine/
+session-factory artık süreç başına bir kez (lazy) oluşturuluyor.
+
 ## rollback-bagimsiz-fonksiyon (Saga #293, epic #28)
 
 **`apply_plan`'ın kendi hata-anı rollback mantığı `_rollback_completed_operations`
