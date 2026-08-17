@@ -1,6 +1,7 @@
 import shutil
 from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.db_models import FileOperation, Transaction
@@ -18,26 +19,39 @@ class PlanApplicationError(Exception):
 def _distribute_files_to_steps(
     pdf_files: list[PdfFileMetadata], steps: list[PlanStep]
 ) -> list[tuple[PlanStep, list[PdfFileMetadata]]]:
-    """`PlanStep` bugün HANGİ dosyanın kendisine ait olduğunu taşımıyor
-    (sadece `affectedFileCount`) — bu yüzden `pdf_files`, plan adımlarına
-    `order`a göre SIRAYLA, `affectedFileCount` kadar bölünerek dağıtılır.
-    Bu KIRILGAN bir varsayımdır (LLM'in `pdf_files` sırasını koruduğunu
-    varsayar); asıl düzeltme `PlanStep`e açık bir dosya listesi eklemek
-    olurdu, o ayrı bir task. Toplam sayı eşleşmezse tüm plan reddedilir."""
+    """`PlanStep.fileNames` (Saga #286) üzerinden her step'in HANGİ
+    dosyalara sahip olduğunu KESİN olarak çözer — artık pozisyonel/sıralı
+    bir varsayım YOK. Her `fileNames` girdisinin `pdf_files` içinde
+    gerçekten var olduğunu VE `pdf_files`'taki her dosyanın TAM OLARAK
+    bir step'e atandığını (ne eksik ne fazla, ne çift atama) doğrular;
+    aksi halde tüm plan reddedilir."""
     ordered_steps = sorted(steps, key=lambda step: step.order)
-    total_expected = sum(step.affectedFileCount for step in ordered_steps)
-    if total_expected != len(pdf_files):
+    files_by_name = {file.filename: file for file in pdf_files}
+
+    assigned_names: set[str] = set()
+    distributed: list[tuple[PlanStep, list[PdfFileMetadata]]] = []
+    for step in ordered_steps:
+        step_files: list[PdfFileMetadata] = []
+        for name in step.fileNames:
+            if name not in files_by_name:
+                raise PlanApplicationError(
+                    f"Plan step {step.order}, pdf_files listesinde olmayan bir "
+                    f"dosyaya atıfta bulunuyor: '{name}'"
+                )
+            if name in assigned_names:
+                raise PlanApplicationError(
+                    f"Dosya birden fazla step'e atanmış: '{name}'"
+                )
+            assigned_names.add(name)
+            step_files.append(files_by_name[name])
+        distributed.append((step, step_files))
+
+    unassigned = set(files_by_name) - assigned_names
+    if unassigned:
         raise PlanApplicationError(
-            f"pdf_files sayısı ({len(pdf_files)}) planın affectedFileCount "
-            f"toplamıyla ({total_expected}) eşleşmiyor"
+            f"Hiçbir step'e atanmamış dosyalar var: {sorted(unassigned)}"
         )
 
-    distributed: list[tuple[PlanStep, list[PdfFileMetadata]]] = []
-    cursor = 0
-    for step in ordered_steps:
-        chunk = pdf_files[cursor : cursor + step.affectedFileCount]
-        distributed.append((step, chunk))
-        cursor += step.affectedFileCount
     return distributed
 
 
@@ -135,3 +149,51 @@ def apply_plan(
     transaction.status = "committed"
     session.commit()
     return transaction
+
+
+def recover_incomplete_transactions(session: Session) -> list[Transaction]:
+    """Saga #286: `apply_plan` çalışırken süreç çökerse (`shutil.move`
+    başarılı olduktan hemen sonra ama `session.commit()`'ten ÖNCE),
+    `FileOperation.status` sonsuza dek "pending" asılı kalabilir — dosya
+    fiziksel olarak taşınmış olabilir ama DB bunu bilmiyor olabilir. Bu
+    fonksiyon `status="pending"` olan tüm `Transaction`'ları tarar ve her
+    `FileOperation`'ı GERÇEK dosya sistemi durumuna göre uzlaştırır:
+    `destination_path` fiziksel olarak varsa dosya gerçekten taşınmış
+    demektir → `"completed"`; yoksa taşıma hiç gerçekleşmemiş/geri
+    alınmış demektir → `"rolled_back"` (kaynak zaten olması gereken
+    yerde). Tüm operasyonları `"completed"` olan bir transaction
+    `"committed"` işaretlenir, aksi halde `"rolled_back"`.
+
+    ÖNEMLİ (red-team bulgusu): transaction'ın kendisi hâlâ `"pending"`
+    olduğu sürece, İÇİNDEKİ HER `FileOperation` yeniden doğrulanır —
+    sadece kendi durumu `"pending"` olanlar DEĞİL. Gerekçe: `apply_plan`in
+    rollback except bloğu bir operasyonu bellek-içi `"completed"`→
+    `"rolled_back"`e çevirdikten SONRA ama nihai `session.commit()`'ten
+    ÖNCE süreç çökerse, DB'de o operasyon hâlâ `"completed"` görünür —
+    ama dosya fiziksel olarak zaten geri taşınmış olabilir. Sadece
+    `status=="pending"` olanları kontrol etmek bu operasyonu sonsuza dek
+    yanlış etiketli bırakırdı.
+
+    Henüz bir FastAPI startup event'ine BAĞLANMADI (Saga #287'nin devamı
+    — gerçek bir apply endpoint'i olmadan bağlanacak bir başlangıç akışı
+    yok); bu saf, çağrılabilir bir fonksiyon."""
+    pending_transactions = session.scalars(
+        select(Transaction).where(Transaction.status == "pending")
+    ).all()
+
+    recovered: list[Transaction] = []
+    for transaction in pending_transactions:
+        all_completed = True
+        for operation in transaction.operations:
+            if Path(operation.destination_path).exists():
+                operation.status = "completed"
+            else:
+                operation.status = "rolled_back"
+                all_completed = False
+        if any(operation.status == "rolled_back" for operation in transaction.operations):
+            all_completed = False
+        transaction.status = "committed" if all_completed else "rolled_back"
+        recovered.append(transaction)
+
+    session.commit()
+    return recovered

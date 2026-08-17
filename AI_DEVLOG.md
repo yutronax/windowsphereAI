@@ -1,5 +1,45 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## orchestrator-planstep-dosya-listesi-ve-kurtarma (Saga #286, epic #25)
+
+**Kırılgan pozisyonel dağıtım kaldırıldı — `PlanStep.fileNames`
+eklendi.** Saga #274 red-team bulgusu: `PlanStep` hangi dosyanın
+kendisine ait olduğunu taşımıyordu, Orchestrator `pdf_files`'ı sırayla
+dağıtıyordu (LLM sırası uyuşmazsa dosyalar YANLIŞ tarih klasörüne
+taşınabilirdi, hiçbir runtime kontrol bunu yakalayamazdı).
+`PlanStep.fileNames: list[str]` eklendi, `affectedFileCount ==
+len(fileNames)` şema seviyesinde zorunlu (`model_validator`). LLM
+prompt'u (`plan_generation.py`) buna göre güncellendi.
+`orchestrator.py: _distribute_files_to_steps` artık isimle eşleşme
+yapıyor — bilinmeyen bir dosyaya atıf yapan, bir dosyayı iki kez atayan
+veya bir dosyayı hiç atamayan plan TAMAMEN reddediliyor (hiçbir dosyaya
+dokunulmadan).
+
+**Crash-recovery fonksiyonu eklendi (henüz bağlanmadı).**
+`recover_incomplete_transactions(session)` — `status="pending"` kalmış
+transaction'ları tarar, her `FileOperation`'ı `destination_path`'in
+fiziksel varlığına göre uzlaştırır (varsa `"completed"`, yoksa
+`"rolled_back"`). Bilinçli kapsam kararı: gerçek bir FastAPI startup
+event'ine BAĞLANMADI — bağlanacak gerçek bir apply-endpoint akışı henüz
+yok (Saga #287'nin devamı). Saf, test edilebilir bir fonksiyon olarak
+bırakıldı.
+
+**Red-team: gerçek bir bug bulundu ve hemen düzeltildi (ready_to_commit:
+false).** İlk implementasyon `recover_incomplete_transactions`'da sadece
+kendi durumu `"pending"` olan `FileOperation`'ları yeniden doğruluyordu.
+Ama `apply_plan`'ın rollback except bloğu bir operasyonu bellek-içi
+`"completed"`→`"rolled_back"`e çevirdikten SONRA ama nihai
+`session.commit()`'ten ÖNCE süreç çökerse, DB'de o operasyon hâlâ
+`"completed"` görünür — dosya fiziksel olarak zaten geri taşınmış
+olsa bile. Düzeltme: transaction hâlâ `"pending"` olduğu sürece
+İÇİNDEKİ HER operasyon (kendi durumu ne olursa olsun) dosya sistemine
+karşı yeniden doğrulanıyor. İkinci düşük-önem bulgu da düzeltildi:
+`PlanStep.fileNames` artık `PdfFileMetadata.filename` ile aynı
+path-separator validator'ına tabi (Saga #272 defense-in-depth deseniyle
+tutarlılık — önceden traversal koruması sadece orchestrator'ın isim
+eşleşmesine "kaza eseri" dayanıyordu, şema seviyesinde değildi).
+101/101 backend test yeşil (11 yeni test).
+
 ## gercek-pdf-kesfi-backend-tarama (Saga #285, epic #25)
 
 **`pdfFiles` istemciden kaldırıldı — backend `selectedFolder`'ı kendisi

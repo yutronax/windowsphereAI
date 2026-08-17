@@ -31,8 +31,8 @@ VALID_PLAN_JSON = json.dumps(
         "dateSource": "created_at",
         "sortOrder": "descending",
         "steps": [
-            {"order": 0, "operationType": "Taşı", "targetFolder": "2026-08", "affectedFileCount": 2},
-            {"order": 1, "operationType": "Taşı", "targetFolder": "2026-07", "affectedFileCount": 1},
+            {"order": 0, "operationType": "Taşı", "targetFolder": "2026-08", "affectedFileCount": 2, "fileNames": ["a.pdf", "b.pdf"]},
+            {"order": 1, "operationType": "Taşı", "targetFolder": "2026-07", "affectedFileCount": 1, "fileNames": ["c.pdf"]},
         ],
     }
 )

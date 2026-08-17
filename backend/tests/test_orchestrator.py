@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from backend.db import create_db_engine, create_session_factory
 from backend.db_models import Base, Transaction
 from backend.models import DateSource, OperationType, PdfFileMetadata, PlanSkeleton, PlanStep, SortOrder
-from backend.orchestrator import PlanApplicationError, apply_plan
+from backend.orchestrator import PlanApplicationError, apply_plan, recover_incomplete_transactions
 
 
 @pytest.fixture
@@ -22,6 +22,16 @@ def _plan(steps: list[PlanStep]) -> PlanSkeleton:
     return PlanSkeleton(steps=steps, dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
 
 
+def _step(order: int, target_folder: str, file_names: list[str], operation_type: OperationType = OperationType.MOVE) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=operation_type,
+        targetFolder=target_folder,
+        affectedFileCount=len(file_names),
+        fileNames=file_names,
+    )
+
+
 def _write_pdf(root, filename: str) -> None:
     (root / filename).write_bytes(b"%PDF-1.4 fake")
 
@@ -33,7 +43,7 @@ def test_apply_plan_moves_files_into_target_folder_and_records_completed_operati
         PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
         PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
     ]
-    plan = _plan([PlanStep(order=0, operationType=OperationType.MOVE, targetFolder="2026-08", affectedFileCount=2)])
+    plan = _plan([_step(0, "2026-08", ["a.pdf", "b.pdf"])])
 
     transaction = apply_plan(session, plan, pdf_files, tmp_path)
 
@@ -46,19 +56,14 @@ def test_apply_plan_moves_files_into_target_folder_and_records_completed_operati
     assert all(op.status == "completed" for op in transaction.operations)
 
 
-def test_apply_plan_splits_pdf_files_across_multiple_steps_in_order(session, tmp_path):
+def test_apply_plan_splits_pdf_files_across_multiple_steps_by_file_names(session, tmp_path):
     _write_pdf(tmp_path, "a.pdf")
     _write_pdf(tmp_path, "b.pdf")
     pdf_files = [
         PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
         PdfFileMetadata(filename="b.pdf", createdAt="2026-09-01"),
     ]
-    plan = _plan(
-        [
-            PlanStep(order=0, operationType=OperationType.MOVE, targetFolder="2026-08", affectedFileCount=1),
-            PlanStep(order=1, operationType=OperationType.MOVE, targetFolder="2026-09", affectedFileCount=1),
-        ]
-    )
+    plan = _plan([_step(0, "2026-08", ["a.pdf"]), _step(1, "2026-09", ["b.pdf"])])
 
     apply_plan(session, plan, pdf_files, tmp_path)
 
@@ -66,10 +71,44 @@ def test_apply_plan_splits_pdf_files_across_multiple_steps_in_order(session, tmp
     assert (tmp_path / "2026-09" / "b.pdf").exists()
 
 
-def test_apply_plan_rejects_whole_plan_without_moving_anything_when_file_count_mismatches(session, tmp_path):
+def test_apply_plan_ignores_step_order_when_matching_files_by_name(session, tmp_path):
+    # Saga #286: dağıtım artık pozisyonel DEĞİL, isimle eşleşiyor — steps'in
+    # sırası veya pdf_files'ın sırası dosya-step eşleşmesini etkilemez.
+    _write_pdf(tmp_path, "a.pdf")
+    _write_pdf(tmp_path, "b.pdf")
+    pdf_files = [
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-09-01"),
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+    ]
+    plan = _plan([_step(1, "2026-09", ["b.pdf"]), _step(0, "2026-08", ["a.pdf"])])
+
+    apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert (tmp_path / "2026-08" / "a.pdf").exists()
+    assert (tmp_path / "2026-09" / "b.pdf").exists()
+
+
+def test_apply_plan_rejects_whole_plan_without_moving_anything_when_a_pdf_file_is_unassigned(session, tmp_path):
+    _write_pdf(tmp_path, "a.pdf")
+    _write_pdf(tmp_path, "b.pdf")
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+    plan = _plan([_step(0, "2026-08", ["a.pdf"])])  # b.pdf hiçbir step'e atanmadı
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert (tmp_path / "a.pdf").exists()
+    assert (tmp_path / "b.pdf").exists()
+    assert not (tmp_path / "2026-08").exists()
+
+
+def test_apply_plan_rejects_whole_plan_when_a_step_references_an_unknown_file(session, tmp_path):
     _write_pdf(tmp_path, "a.pdf")
     pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
-    plan = _plan([PlanStep(order=0, operationType=OperationType.MOVE, targetFolder="2026-08", affectedFileCount=2)])
+    plan = _plan([_step(0, "2026-08", ["a.pdf", "ghost.pdf"])])
 
     with pytest.raises(PlanApplicationError):
         apply_plan(session, plan, pdf_files, tmp_path)
@@ -80,7 +119,7 @@ def test_apply_plan_rejects_whole_plan_without_moving_anything_when_file_count_m
 
 def test_apply_plan_rejects_whole_plan_when_a_source_file_escapes_the_whitelist(session, tmp_path):
     pdf_files = [PdfFileMetadata(filename="..", createdAt="2026-08-01")]
-    plan = _plan([PlanStep(order=0, operationType=OperationType.MOVE, targetFolder="2026-08", affectedFileCount=1)])
+    plan = _plan([_step(0, "2026-08", [".."])])
 
     with pytest.raises(Exception):
         apply_plan(session, plan, pdf_files, tmp_path)
@@ -91,7 +130,7 @@ def test_apply_plan_rejects_whole_plan_when_a_source_file_escapes_the_whitelist(
 def test_apply_plan_rejects_non_move_operation_types_without_touching_files(session, tmp_path):
     _write_pdf(tmp_path, "a.pdf")
     pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
-    plan = _plan([PlanStep(order=0, operationType=OperationType.DELETE, targetFolder="2026-08", affectedFileCount=1)])
+    plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.DELETE)])
 
     with pytest.raises(PlanApplicationError):
         apply_plan(session, plan, pdf_files, tmp_path)
@@ -107,7 +146,7 @@ def test_apply_plan_rolls_back_completed_moves_when_a_later_move_fails(session, 
         PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
         PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
     ]
-    plan = _plan([PlanStep(order=0, operationType=OperationType.MOVE, targetFolder="2026-08", affectedFileCount=2)])
+    plan = _plan([_step(0, "2026-08", ["a.pdf", "b.pdf"])])
 
     real_move = shutil.move
     call_count = {"n": 0}
@@ -139,7 +178,7 @@ def test_apply_plan_rolls_back_completed_moves_in_reverse_order(session, tmp_pat
         PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
         PdfFileMetadata(filename="c.pdf", createdAt="2026-08-03"),
     ]
-    plan = _plan([PlanStep(order=0, operationType=OperationType.MOVE, targetFolder="2026-08", affectedFileCount=3)])
+    plan = _plan([_step(0, "2026-08", ["a.pdf", "b.pdf", "c.pdf"])])
 
     real_move = shutil.move
     move_order: list[str] = []
@@ -174,7 +213,7 @@ def test_apply_plan_reads_rollback_source_from_recorded_backup_path(session, tmp
         PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
         PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
     ]
-    plan = _plan([PlanStep(order=0, operationType=OperationType.MOVE, targetFolder="2026-08", affectedFileCount=2)])
+    plan = _plan([_step(0, "2026-08", ["a.pdf", "b.pdf"])])
 
     real_move = shutil.move
     call_count = {"n": 0}
@@ -203,7 +242,7 @@ def test_apply_plan_marks_transaction_and_operations_rolled_back_on_failure(sess
         PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
         PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
     ]
-    plan = _plan([PlanStep(order=0, operationType=OperationType.MOVE, targetFolder="2026-08", affectedFileCount=2)])
+    plan = _plan([_step(0, "2026-08", ["a.pdf", "b.pdf"])])
 
     real_move = shutil.move
     call_count = {"n": 0}
@@ -222,3 +261,114 @@ def test_apply_plan_marks_transaction_and_operations_rolled_back_on_failure(sess
     transaction = session.query(Transaction).one()
     assert transaction.status == "rolled_back"
     assert all(op.status == "rolled_back" for op in transaction.operations)
+
+
+def test_recover_incomplete_transactions_marks_physically_moved_files_as_completed(session, tmp_path):
+    # Saga #286: shutil.move basarili oldu ama surec operation.status =
+    # "completed" + commit'ten ONCE coktu senaryosunu simule eder - kayit
+    # "pending" kalir, dosya fiziksel olarak hedefte durur.
+    target_dir = tmp_path / "2026-08"
+    target_dir.mkdir()
+    (target_dir / "a.pdf").write_bytes(b"%PDF-1.4 fake")
+
+    from backend.file_operations import create_transaction, record_file_operation
+
+    transaction = create_transaction(session)
+    record_file_operation(
+        session,
+        transaction,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "a.pdf"),
+        destination_path=str(target_dir / "a.pdf"),
+        backup_path=str(tmp_path / "a.pdf"),
+    )
+    transaction.status = "pending"
+    session.commit()
+
+    recovered = recover_incomplete_transactions(session)
+
+    assert len(recovered) == 1
+    assert recovered[0].status == "committed"
+    assert recovered[0].operations[0].status == "completed"
+
+
+def test_recover_incomplete_transactions_marks_never_moved_files_as_rolled_back(session, tmp_path):
+    from backend.file_operations import create_transaction, record_file_operation
+
+    transaction = create_transaction(session)
+    record_file_operation(
+        session,
+        transaction,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "a.pdf"),
+        destination_path=str(tmp_path / "2026-08" / "a.pdf"),  # hiç oluşmadı
+        backup_path=str(tmp_path / "a.pdf"),
+    )
+    transaction.status = "pending"
+    session.commit()
+
+    recovered = recover_incomplete_transactions(session)
+
+    assert len(recovered) == 1
+    assert recovered[0].status == "rolled_back"
+    assert recovered[0].operations[0].status == "rolled_back"
+
+
+def test_recover_incomplete_transactions_reverifies_stale_completed_operations_in_a_pending_transaction(session, tmp_path):
+    # Saga #286 red-team bulgusu: apply_plan'in rollback except bloğu bir
+    # operasyonu bellek-içi "completed"->"rolled_back"e cevirdikten SONRA
+    # ama nihai session.commit()'ten ONCE surec cokerse, DB'de o operasyon
+    # hala "completed" gorunur - ama dosya fiziksel olarak zaten geri
+    # tasinmis olabilir. Sadece status=="pending" olanlari kontrol etmek
+    # bu operasyonu sonsuza dek yanlis etiketli birakirdi.
+    from backend.file_operations import create_transaction, record_file_operation
+
+    transaction = create_transaction(session)
+    stale_completed_op = record_file_operation(
+        session,
+        transaction,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "a.pdf"),
+        destination_path=str(tmp_path / "2026-08" / "a.pdf"),  # fiziksel olarak geri tasindi, artik yok
+        backup_path=str(tmp_path / "a.pdf"),
+    )
+    stale_completed_op.status = "completed"  # DB'de hala "completed", ama dosya orada degil
+    still_pending_op = record_file_operation(
+        session,
+        transaction,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "b.pdf"),
+        destination_path=str(tmp_path / "2026-08" / "b.pdf"),  # hic tasinmadi
+        backup_path=str(tmp_path / "b.pdf"),
+    )
+    transaction.status = "pending"
+    session.commit()
+
+    recovered = recover_incomplete_transactions(session)
+
+    assert len(recovered) == 1
+    refreshed_stale_op = next(op for op in recovered[0].operations if op.id == stale_completed_op.id)
+    refreshed_pending_op = next(op for op in recovered[0].operations if op.id == still_pending_op.id)
+    assert refreshed_stale_op.status == "rolled_back"
+    assert refreshed_pending_op.status == "rolled_back"
+    assert recovered[0].status == "rolled_back"
+
+
+def test_recover_incomplete_transactions_ignores_already_terminal_transactions(session, tmp_path):
+    from backend.file_operations import create_transaction, record_file_operation
+
+    transaction = create_transaction(session)
+    record_file_operation(
+        session,
+        transaction,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "a.pdf"),
+        destination_path=str(tmp_path / "2026-08" / "a.pdf"),
+        backup_path=str(tmp_path / "a.pdf"),
+    )
+    transaction.status = "committed"
+    session.commit()
+
+    recovered = recover_incomplete_transactions(session)
+
+    assert recovered == []

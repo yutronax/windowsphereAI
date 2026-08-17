@@ -17,9 +17,14 @@ PLAN_SYSTEM_PROMPT = (
     '"steps": [{"order": <negatif olmayan tamsayı>, "operationType": '
     '"Taşı"|"Kopyala"|"Sil"|"Yeniden Adlandır"|"Listele", "targetFolder": '
     '<"YYYY-MM" formatında string>, "affectedFileCount": <negatif olmayan '
-    "tamsayı>}]}. dateSource ve sortOrder alanları AÇIKÇA belirtilmeli, "
-    "her targetFolder kesinlikle YYYY-MM formatında olmalı. Başka hiçbir "
-    "metin ekleme, sadece bu JSON'u döndür."
+    'tamsayı>, "fileNames": [<bu step\'e ait TAM dosya adlarının listesi>]'
+    "}]}. dateSource ve sortOrder alanları AÇIKÇA belirtilmeli, her "
+    "targetFolder kesinlikle YYYY-MM formatında olmalı. `fileNames`, sana "
+    "verilen PDF dosya adları listesinden BİREBİR alınmalı (yeni bir isim "
+    "uydurma, hiçbirini atlamama, hiçbirini birden fazla step'e koyma); "
+    "her step'in `affectedFileCount`'u o step'in `fileNames` listesinin "
+    "uzunluğuna EŞİT olmalı. Başka hiçbir metin ekleme, sadece bu JSON'u "
+    "döndür."
 )
 
 

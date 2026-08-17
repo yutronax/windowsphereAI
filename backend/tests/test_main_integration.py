@@ -137,7 +137,7 @@ VALID_PLAN_JSON = json.dumps(
     {
         "dateSource": "created_at",
         "sortOrder": "ascending",
-        "steps": [{"order": 0, "operationType": "Taşı", "targetFolder": "2026-08", "affectedFileCount": 1}],
+        "steps": [{"order": 0, "operationType": "Taşı", "targetFolder": "2026-08", "affectedFileCount": 1, "fileNames": ["a.pdf"]}],
     }
 )
 

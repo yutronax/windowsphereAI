@@ -40,7 +40,7 @@ def test_is_path_allowed_false_for_sibling_directory_with_shared_prefix(tmp_path
 
 def _plan(target_folder: str = "2026-08") -> PlanSkeleton:
     return PlanSkeleton(
-        steps=[PlanStep(order=0, operationType=OperationType.MOVE, targetFolder=target_folder, affectedFileCount=1)],
+        steps=[PlanStep(order=0, operationType=OperationType.MOVE, targetFolder=target_folder, affectedFileCount=1, fileNames=["a.pdf"])],
         dateSource=DateSource.CREATED_AT,
         sortOrder=SortOrder.ASCENDING,
     )

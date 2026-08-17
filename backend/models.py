@@ -1,7 +1,7 @@
 import re
 from enum import Enum
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from backend.request_normalization import normalize_request_text, normalize_selected_folder
 
@@ -44,6 +44,12 @@ class PlanStep(BaseModel):
     operationType: OperationType
     targetFolder: str
     affectedFileCount: int
+    # Saga #286 red-team bulgusu: önceden hangi dosyanın hangi step'e ait
+    # olduğu belirtilmiyordu, Orchestrator pdf_files'ı sırayla dağıtıyordu
+    # (kırılgan varsayım — LLM/istemci sırası uyuşmazsa dosyalar YANLIŞ
+    # step'e taşınabilirdi). Artık her step kendi dosyalarını AÇIKÇA
+    # taşıyor.
+    fileNames: list[str]
 
     @field_validator("order", "affectedFileCount")
     @classmethod
@@ -58,6 +64,31 @@ class PlanStep(BaseModel):
         if not TARGET_FOLDER_PATTERN.match(value.strip()):
             raise ValueError("must be a YYYY-MM folder name (e.g. '2026-08')")
         return value
+
+    @field_validator("fileNames")
+    @classmethod
+    def file_names_not_blank(cls, value: list[str]) -> list[str]:
+        if any(name.strip() == "" for name in value):
+            raise ValueError("fileNames must not contain empty or whitespace-only entries")
+        return value
+
+    @field_validator("fileNames")
+    @classmethod
+    def file_names_have_no_path_separators(cls, value: list[str]) -> list[str]:
+        # Saga #286 red-team bulgusu: bugün `_distribute_files_to_steps`
+        # sadece `pdf_files`'ta (zaten ayraçsız) BULUNAN isimleri kabul
+        # ettiği için traversal fiilen kapalı, ama bu şema-seviyesinde
+        # DEĞİL — PdfFileMetadata.filename ile aynı defense-in-depth
+        # ilkesi burada da uygulanmalı (Saga #272 deseni).
+        if any("/" in name or "\\" in name for name in value):
+            raise ValueError("fileNames entries must not contain path separators")
+        return value
+
+    @model_validator(mode="after")
+    def affected_file_count_matches_file_names(self) -> "PlanStep":
+        if self.affectedFileCount != len(self.fileNames):
+            raise ValueError("affectedFileCount must equal len(fileNames)")
+        return self
 
 
 class DateSource(str, Enum):
