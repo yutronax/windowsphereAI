@@ -10,6 +10,8 @@ from sqlalchemy.pool import StaticPool
 from backend.db_models import Base
 from backend.file_operations import create_transaction, record_file_operation
 from backend.main import app, get_db_session, get_llm_client
+from backend.models import DateSource, OperationType, PdfFileMetadata, PlanSkeleton, PlanStep, SortOrder
+from backend.orchestrator import apply_plan
 
 client = TestClient(app)
 
@@ -413,3 +415,95 @@ def test_transactions_endpoint_never_leaks_absolute_paths_only_folder_names(tmp_
 
     body = response.json()
     assert str(tmp_path) not in json.dumps(body)
+
+
+def _apply_a_move_plan(db_session, tmp_path):
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4 fake")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = PlanSkeleton(
+        steps=[
+            PlanStep(
+                order=0,
+                operationType=OperationType.MOVE,
+                targetFolder="2026-08",
+                affectedFileCount=1,
+                fileNames=["a.pdf"],
+            )
+        ],
+        dateSource=DateSource.CREATED_AT,
+        sortOrder=SortOrder.ASCENDING,
+    )
+    return apply_plan(db_session, plan, pdf_files, tmp_path)
+
+
+def test_revert_endpoint_returns_404_for_an_unknown_transaction_id():
+    db_session = _in_memory_db_session()
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post("/api/transactions/999/revert", json={"allowedRoot": r"C:\Users\Yusuf\Documents"})
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 404
+
+
+def test_revert_endpoint_returns_409_when_the_transaction_is_not_committed(tmp_path):
+    db_session = _in_memory_db_session()
+    transaction = _apply_a_move_plan(db_session, tmp_path)
+    transaction.status = "reverted"
+    db_session.commit()
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post(f"/api/transactions/{transaction.id}/revert", json={"allowedRoot": str(tmp_path)})
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 409
+    # Reddedilince hiçbir dosyaya dokunulmaz.
+    assert not (tmp_path / "a.pdf").exists()
+    assert (tmp_path / "2026-08" / "a.pdf").exists()
+
+
+def test_revert_endpoint_moves_the_file_back_and_returns_reverted_status(tmp_path):
+    db_session = _in_memory_db_session()
+    transaction = _apply_a_move_plan(db_session, tmp_path)
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post(f"/api/transactions/{transaction.id}/revert", json={"allowedRoot": str(tmp_path)})
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {"transactionId": transaction.id, "status": "reverted"}
+    assert (tmp_path / "a.pdf").exists()
+    assert not (tmp_path / "2026-08" / "a.pdf").exists()
+
+
+def test_revert_endpoint_returns_200_with_revert_failed_status_when_the_physical_move_fails(tmp_path):
+    db_session = _in_memory_db_session()
+    transaction = _apply_a_move_plan(db_session, tmp_path)
+    # Rollback'in KAYNAĞINI (hedef klasördeki dosya) bir KLASÖRE, hedefini
+    # (orijinal konum) DOLU bir dosyaya çeviriyoruz — `shutil.move` bir
+    # klasörü zaten var olan bir dosyanın üzerine taşımaya çalışınca
+    # OSError fırlatır (backend/tests/test_orchestrator.py'deki AYNI
+    # kanıtlanmış desen).
+    moved_file = tmp_path / "2026-08" / "a.pdf"
+    moved_file.unlink()
+    moved_file.mkdir()
+    (tmp_path / "a.pdf").write_bytes(b"conflict")
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post(f"/api/transactions/{transaction.id}/revert", json={"allowedRoot": str(tmp_path)})
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 200
+    assert response.json() == {"transactionId": transaction.id, "status": "revert_failed"}

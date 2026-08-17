@@ -12,7 +12,16 @@ from sqlalchemy.orm import Session as DbSession, sessionmaker
 from backend.config import load_setup_config
 from backend.db import create_db_engine, create_session_factory
 from backend.db_models import Transaction
-from backend.models import PlanRequest, PlanSkeleton, SessionContext, SessionRequest, TransactionSummary
+from backend.models import (
+    PlanRequest,
+    PlanSkeleton,
+    RevertTransactionRequest,
+    RevertTransactionResponse,
+    SessionContext,
+    SessionRequest,
+    TransactionSummary,
+)
+from backend.orchestrator import TransactionRevertError, revert_transaction
 from backend.pdf_discovery import discover_pdf_files
 from backend.plan_generation import (
     LLMClient,
@@ -127,6 +136,44 @@ def list_transactions(db: DbSession = Depends(get_db_session)) -> list[Transacti
         select(Transaction).order_by(Transaction.created_at.desc(), Transaction.id.desc())
     ).all()
     return [_transaction_to_summary(transaction) for transaction in transactions]
+
+
+@app.post("/api/transactions/{transaction_id}/revert")
+def revert_transaction_endpoint(
+    transaction_id: int,
+    payload: RevertTransactionRequest,
+    db: DbSession = Depends(get_db_session),
+) -> RevertTransactionResponse:
+    """Saga #295: `revert_transaction`i (Saga #293) gerçek bir HTTP
+    endpoint'ine bağlar. `allowed_root`, `Transaction`in kendisinde
+    saklanmadığı için (Saga #294 ile aynı dar-kapsam kararı) İSTEMCİDEN
+    gelir — istemci zaten kendi session'ının `selectedFolder`'ını bilir.
+
+    Durum önce (ÖNCEDEN, `revert_transaction`i hiç çağırmadan) kontrol
+    edilir — bu, "geçersiz istek" (404/409) ile "geçerli istek ama
+    fiziksel geri alma başarısız oldu" (200 + `revert_failed`) arasında
+    hata mesajı PARSE ETMEDEN net bir ayrım sağlar."""
+    transaction = db.get(Transaction, transaction_id)
+    if transaction is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction bulunamadı")
+    if transaction.status != "committed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Sadece 'committed' durumundaki bir transaction geri alınabilir, mevcut durum: '{transaction.status}'",
+        )
+
+    allowed_root = Path(payload.allowedRoot)
+    try:
+        revert_transaction(db, transaction, allowed_root)
+    except TransactionRevertError:
+        # Precondition ÖNCEDEN doğrulandığı için buraya düşen TEK olası
+        # sebep fiziksel geri almanın kendisinin (kısmen) başarısız
+        # olmasıdır — bu bir istemci hatası DEĞİL, gerçek bir operasyon
+        # sonucu, bu yüzden 200 ile döner (ResultCard'ın zaten sahip
+        # olduğu completed/partial/failed üçlü-durum modeline uyar).
+        pass
+
+    return RevertTransactionResponse(transactionId=transaction.id, status=transaction.status)
 
 
 def get_session_or_404(payload: PlanRequest) -> SessionContext:

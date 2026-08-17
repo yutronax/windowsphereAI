@@ -1,5 +1,49 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## son-islemi-geri-al-ui (Saga #295, epic #28)
+
+**Task'ın kendi varsaydığı "backend'in yeni revert-transaction
+endpoint'i" HENÜZ YOKTU** — sadece çağrılabilir `revert_transaction()`
+(Saga #293) ve salt-okunur `GET /api/transactions` (Saga #294) vardı.
+Bu task, dar kapsamlı bir `POST /api/transactions/{id}/revert`
+endpoint'ini de İÇERDİ (butonun çağıracağı gerçek bir şey olması için
+doğrudan gereken önkoşul).
+
+**`allowedRoot` istemciden geliyor, DB şemasında saklanmıyor** —
+`revert_transaction`in `allowed_root` parametresi ZORUNLU (Saga #293
+red-team kararı) ama `Transaction`da bir `session_id`/`allowed_root`
+kolonu yok (Saga #294'teki AYNI dar-kapsam kararıyla tutarlı: şema
+değişikliği yok). İstek gövdesinde `allowedRoot` doğrudan istemciden
+gelir (istemci zaten kendi session'ının `selectedFolder`'ını bilir).
+
+**Hata sınıflandırması string-parse ETMEDEN yapıldı:** endpoint,
+`revert_transaction`i çağırmadan ÖNCE transaction'ın durumunu kontrol
+eder (bulunamadı→404, committed değil→409) — bu sayede
+`revert_transaction`den gelen `TransactionRevertError`nun TEK olası
+sebebi "precondition geçti ama fiziksel geri alma kısmen başarısız
+oldu" olur, bu da 200 + `{"status": "revert_failed"}` ile döner (bir
+istemci hatası değil, gerçek bir operasyon sonucu).
+
+**Frontend: iki aşamalı inline onay, modal İCAT EDİLMEDİ (YAGNI).**
+Task, PlanCard'ın fail-closed deseniyle tutarlı bir "onay" istiyordu —
+ama PlanCard'ın riski FARKLI (backend onayı olmadan buton devre dışı),
+burada risk SADECE kullanıcının yanlışlıkla tıklaması. Çözüm: ilk
+tıklama butonu "Emin misiniz?" + "Evet, geri al"/"Vazgeç" çiftine
+çevirir, SADECE ikinci tıklama gerçek isteği gönderir — mevcut kod
+tabanında (`PlanCard`'ın `hasApproved` state deseni) zaten var olan bir
+örüntüye tutarlı.
+
+**Buton `transactionId`/`selectedFolder` ikisi de verilmezse hiç
+gösterilmiyor** (fail-closed UX kolaylığı — asıl güvenlik sınırı
+backend'de zaten var). Gerçek bir apply endpoint'i (Saga #287) hâlâ
+olmadığı için `ChatScreen`in bu prop'ları GERÇEKTEN dolduran bir akışı
+henüz yok — bu task sadece bileşenin/endpoint'in kendisini doğru inşa
+etti, uçtan uca bağlanması ayrı bir iş.
+
+8 yeni backend testi (404/409/200-reverted/200-revert_failed), 11 yeni
+frontend testi (görünürlük, iki aşamalı onay, başarılı/kısmi/ağ hatası
+senaryoları). Backend 154/154, frontend 135/135, `tsc --noEmit` temiz.
+
 ## gecmis-transaction-listesi-endpoint (Saga #294, epic #28)
 
 **Global `/api/transactions`, session-bazlı DEĞİL.** ATDD'de netleşen

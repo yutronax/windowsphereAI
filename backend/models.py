@@ -222,6 +222,26 @@ class TransactionSummary(BaseModel):
     targetFolders: list[str]
 
 
+class RevertTransactionRequest(BaseModel):
+    """Saga #295: `revert_transaction`'ın `allowed_root` parametresi
+    ZORUNLU (Saga #293 red-team kararı) ama `Transaction` tablosunda bir
+    `allowed_root`/`session_id` kolonu YOK (Saga #294'te aynı gerekçeyle
+    şema değişikliği reddedildi) — bu yüzden istemci DOĞRUDAN gönderir
+    (zaten session'ın `selectedFolder`'ını biliyor)."""
+
+    allowedRoot: str
+
+    @field_validator("allowedRoot")
+    @classmethod
+    def normalize_allowed_root(cls, value: str) -> str:
+        return normalize_selected_folder(value)
+
+
+class RevertTransactionResponse(BaseModel):
+    transactionId: int
+    status: str
+
+
 class PlanRequest(BaseModel):
     # Saga #285: pdfFiles istemciden ALINMAZ — backend, session'ın
     # selectedFolder'ını kendisi tarar (backend/pdf_discovery.py). İstemcinin
