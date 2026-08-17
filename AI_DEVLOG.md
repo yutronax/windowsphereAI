@@ -1,5 +1,36 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## orchestrator-copy-operasyonu (Saga #288, epic #26)
+
+**Epic 26'nın ilk task'ı: COPY desteği eklendi — "tek tip rollback"
+mimarisi operation_type-aware hale getirildi.** Önceden `apply_plan`
+sadece MOVE'u destekliyordu ve rollback her zaman "hedefi kaynağa geri
+taşı" varsayımıyla çalışıyordu. COPY'de kaynak hiç değişmiyor —
+rollback'in "hedefteki kopyayı sil" yapması gerekiyordu, bu yüzden
+ileri/geri işlemler `_FORWARD_OPERATIONS`/`_ROLLBACK_OPERATIONS`
+dispatch dict'lerine çıkarıldı (`OperationType` → fonksiyon eşlemesi).
+Bu, ATDD'de bilinçli olarak DELETE (Saga #289) task'ının üçüncü bir
+dal eklemesini kolaylaştıracak şekilde tasarlandı.
+
+`backup_path` COPY için de `source_path` ile dolduruluyor (şema
+tutarlılığı için) ama rollback anlamı MOVE'dan farklı — dispatch,
+`FileOperation.operation_type` alanından (`OperationType(...)` ile
+enum'a çevrilerek) doğru rollback fonksiyonunu seçiyor. 108/108 test
+yeşil (2 yeni: COPY başarı + COPY-sonrası-rollback, kaynağın
+dokunulmadığını doğrulayan assertion dahil).
+
+**Red-team: exception-masking boşluğu hemen düzeltildi.** Rollback
+dispatch araması (`OperationType(operation.operation_type)` +
+`_ROLLBACK_OPERATIONS[...]`) sadece `except OSError` içindeydi —
+bilinmeyen/bozuk bir `operation_type` (ör. gelecekte DELETE eklenip
+rollback tablosuna eklenmesi unutulursa) `ValueError`/`KeyError`
+fırlatıp orijinal exception'ı (`exc`) maskeler, transaction'ı sonsuza
+dek `"pending"` bırakırdı — Saga #276'nın kendi yorumunun uyardığı TAM
+O sınıf hata, sadece farklı bir exception tipiyle. `except (OSError,
+ValueError, KeyError)` olarak genişletildi. 109/109 test yeşil (3.
+yeni test: rollback tablosu boşken bile orijinal hatanın maskelenmeden
+fırlatıldığını ve transaction'ın "pending" kalmadığını doğruluyor).
+
 ## asistan-mesaji-markdown-degerlendirmesi (Saga #282, epic #24)
 
 **Yeniden değerlendirildi, kod değişikliği YAPILMADI — öncül hâlâ

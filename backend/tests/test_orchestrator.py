@@ -263,6 +263,81 @@ def test_apply_plan_marks_transaction_and_operations_rolled_back_on_failure(sess
     assert all(op.status == "rolled_back" for op in transaction.operations)
 
 
+def test_apply_plan_copies_files_leaving_the_source_intact(session, tmp_path):
+    _write_pdf(tmp_path, "a.pdf")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.COPY)])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert (tmp_path / "a.pdf").exists()  # kaynak hala yerinde
+    assert (tmp_path / "2026-08" / "a.pdf").exists()  # kopya olusturuldu
+    assert transaction.status == "committed"
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_rolls_back_a_copy_by_deleting_the_destination_without_touching_source(session, tmp_path, monkeypatch):
+    _write_pdf(tmp_path, "a.pdf")
+    _write_pdf(tmp_path, "b.pdf")
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+    plan = _plan([_step(0, "2026-08", ["a.pdf", "b.pdf"], operation_type=OperationType.COPY)])
+
+    real_copy = shutil.copy2
+    call_count = {"n": 0}
+
+    def flaky_copy(src, dst):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise OSError("simulated disk failure")
+        return real_copy(src, dst)
+
+    monkeypatch.setattr("backend.orchestrator.shutil.copy2", flaky_copy)
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    # a.pdf kopyalanmisti, rollback hedefteki kopyayi sildi.
+    assert (tmp_path / "a.pdf").exists()  # kaynak hic dokunulmadi
+    assert not (tmp_path / "2026-08" / "a.pdf").exists()  # kopya silindi
+    assert (tmp_path / "b.pdf").exists()  # b.pdf hic kopyalanmadi
+
+
+def test_apply_plan_raises_original_error_not_a_masked_one_when_rollback_dispatch_fails(session, tmp_path, monkeypatch):
+    # Red-team bulgusu (Saga #288): rollback sozlugu aramasi (OperationType(...))
+    # eskiden sadece OSError'a karsi korunuyordu - bilinmeyen bir operation_type
+    # ValueError/KeyError firlatip orijinal hatayi (exc) maskeleyebilirdi ve
+    # transaction sonsuza dek "pending" kalirdi. Bu artik yakalaniyor.
+    _write_pdf(tmp_path, "a.pdf")
+    _write_pdf(tmp_path, "b.pdf")
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+    plan = _plan([_step(0, "2026-08", ["a.pdf", "b.pdf"])])
+
+    real_move = shutil.move
+    call_count = {"n": 0}
+
+    def flaky_move(src, dst):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise OSError("simulated disk failure")
+        return real_move(src, dst)
+
+    monkeypatch.setattr("backend.orchestrator.shutil.move", flaky_move)
+    monkeypatch.setattr("backend.orchestrator._ROLLBACK_OPERATIONS", {})  # bilinmeyen operation_type simule eder
+
+    with pytest.raises(PlanApplicationError, match="simulated disk failure"):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    transaction = session.query(Transaction).one()
+    assert transaction.status == "rolled_back"  # "pending" asili KALMADI
+    assert transaction.operations[0].status == "rollback_failed"
+
+
 def test_recover_incomplete_transactions_marks_physically_moved_files_as_completed(session, tmp_path):
     # Saga #286: shutil.move basarili oldu ama surec operation.status =
     # "completed" + commit'ten ONCE coktu senaryosunu simule eder - kayit

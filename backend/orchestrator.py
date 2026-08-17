@@ -16,6 +16,43 @@ class PlanApplicationError(Exception):
     before this is raised."""
 
 
+# Saga #288: MOVE'a ek olarak COPY desteklenmeye başladı. Her operationType'ın
+# İLERİ (forward) ve GERİ (rollback) uygulaması farklı fiziksel semantiğe
+# sahip — bu yüzden dispatch dict'leri kullanılıyor (gelecekteki DELETE/
+# RENAME task'ları için üçüncü/dördüncü bir dal eklemeyi kolaylaştırır).
+_SUPPORTED_OPERATION_TYPES = {OperationType.MOVE, OperationType.COPY}
+
+
+def _forward_move(source_path: Path, destination_path: Path) -> None:
+    shutil.move(str(source_path), str(destination_path))
+
+
+def _forward_copy(source_path: Path, destination_path: Path) -> None:
+    shutil.copy2(str(source_path), str(destination_path))
+
+
+_FORWARD_OPERATIONS = {
+    OperationType.MOVE: _forward_move,
+    OperationType.COPY: _forward_copy,
+}
+
+
+def _rollback_move(destination_path: Path, backup_path: Path) -> None:
+    shutil.move(str(destination_path), str(backup_path))
+
+
+def _rollback_copy(destination_path: Path, backup_path: Path) -> None:
+    # COPY'de kaynak hiç değişmedi — rollback SADECE hedefteki kopyayı siler,
+    # backup_path'e (=kaynak) hiç dokunmaz.
+    destination_path.unlink()
+
+
+_ROLLBACK_OPERATIONS = {
+    OperationType.MOVE: _rollback_move,
+    OperationType.COPY: _rollback_copy,
+}
+
+
 def _distribute_files_to_steps(
     pdf_files: list[PdfFileMetadata], steps: list[PlanStep]
 ) -> list[tuple[PlanStep, list[PdfFileMetadata]]]:
@@ -71,16 +108,16 @@ def apply_plan(
     `FileOperation`ın nihai durumu (`rolled_back`/`rollback_failed`) DB'ye
     yazılır.
 
-    Sadece `OperationType.MOVE` destekler (bu MVP'nin "PDF'leri tarihe göre
-    sırala" kapsamı taşımadır); başka bir operationType görürse hiçbir
-    dosyaya dokunmadan reddeder."""
+    `OperationType.MOVE` ve `OperationType.COPY` destekler (Saga #288);
+    başka bir operationType görürse hiçbir dosyaya dokunmadan reddeder."""
     validate_plan_paths(plan, pdf_files, allowed_root)
 
     for step in plan.steps:
-        if step.operationType != OperationType.MOVE:
+        if step.operationType not in _SUPPORTED_OPERATION_TYPES:
+            supported = ", ".join(f"'{op.value}'" for op in _SUPPORTED_OPERATION_TYPES)
             raise PlanApplicationError(
-                f"Orchestrator şu an sadece '{OperationType.MOVE.value}' "
-                f"operasyonunu destekliyor, gelen: '{step.operationType.value}'"
+                f"Orchestrator şu an sadece {supported} operasyonlarını "
+                f"destekliyor, gelen: '{step.operationType.value}'"
             )
 
     step_files = _distribute_files_to_steps(pdf_files, plan.steps)
@@ -105,7 +142,7 @@ def apply_plan(
                     destination_path=str(destination_path),
                     backup_path=str(source_path),
                 )
-                shutil.move(str(source_path), str(destination_path))
+                _FORWARD_OPERATIONS[step.operationType](source_path, destination_path)
                 operation.status = "completed"
                 session.commit()
                 applied.append(operation)
@@ -120,19 +157,32 @@ def apply_plan(
             if not destination_path.exists():
                 operation.status = "rolled_back"
                 continue
-            # Ters taşımanın KENDİSİ de başarısız olabilir (ör. original_source
+            # Ters işlemin KENDİSİ de başarısız olabilir (ör. original_source
             # bu sırada başka bir işlem tarafından dolduruldu, disk doldu).
             # Bunu yakalamazsak orijinal exception maskelenir VE aşağıdaki
             # transaction.status="rolled_back"/commit hiç çalışmaz — transaction
             # sonsuza dek "pending" kalır. En iyi çaba: hatayı yut, geri kalan
-            # dosyaları geri taşımaya devam et, bu operasyonu doğru şekilde
+            # dosyaları geri almaya devam et, bu operasyonu doğru şekilde
             # "rollback_failed" olarak işaretle (yanlışlıkla "rolled_back"
             # DEME — dosya fiziksel olarak hâlâ hedefte, #276'nın geri alma
             # mantığı buna güvenecek), orijinal exception'ı (`exc`) fırlat.
             try:
-                shutil.move(str(destination_path), str(original_source_path))
+                # Saga #288: rollback artık operation_type'a göre dallanıyor —
+                # MOVE için hedefi kaynağa geri taşı, COPY için sadece
+                # hedefteki kopyayı sil (kaynağa hiç dokunma). Dispatch
+                # sözlüğü araması (`OperationType(...)`/`[...]`) da AYNI
+                # try içinde — bilinmeyen/bozuk bir `operation_type` (ör.
+                # ileride eklenecek bir op türü rollback tablosuna
+                # unutulursa) `ValueError`/`KeyError` fırlatabilir; bunu
+                # yakalamazsak orijinal exception (`exc`) maskelenir ve
+                # transaction sonsuza dek "pending" kalır — aynı OSError
+                # riskiyle simetrik olarak ele alınmalı (red-team bulgusu,
+                # Saga #288).
+                _ROLLBACK_OPERATIONS[OperationType(operation.operation_type)](
+                    destination_path, original_source_path
+                )
                 operation.status = "rolled_back"
-            except OSError:
+            except (OSError, ValueError, KeyError):
                 operation.status = "rollback_failed"
         for operation in transaction.operations:
             # Kaydı oluşturulmuş ama shutil.move'un kendisi başarısız olduğu
