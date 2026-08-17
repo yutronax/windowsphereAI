@@ -1,5 +1,58 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## orchestrator-transactionli-plan-uygulama (Saga #274, epic #25)
+
+**İlk gerçek dosya I/O: `backend/orchestrator.py: apply_plan()`.** Onaylı
+bir planı `validate_plan_paths` (Saga #271/#272) ile yeniden doğrulayıp
+(defense-in-depth — çağıran ne kadar önce doğrulamış olursa olsun),
+hedef tarih klasörlerini oluşturup PDF'leri `shutil.move` ile taşıyor, her
+dosya için `record_file_operation` çağırıp (Saga #275) transaction'a
+bağlıyor. Bir adım başarısız olursa o ana kadar taşınmış dosyalar ters
+sırayla eski konumlarına geri taşınıyor, `PlanApplicationError` fırlatılıyor
+— kısmi başarı asla dönmüyor.
+
+**Bilinçli kapsam kararı: endpoint YOK, sadece saf fonksiyon.** Saga
+#273/#285 bulgusuyla tutarlı: frontend zaten gerçek `pdfFiles`
+gönderemiyor (PDF keşif mekanizması yok), bu yüzden bir HTTP endpoint'i
+eklense de çağrılamaz, test edilemeyen ölü kod olurdu. `apply_plan`
+tamamen endpoint'siz, HTTP'ye bağlanması ayrı bir task'a (Saga #285'in
+devamı) bırakıldı. Sadece `OperationType.MOVE` destekleniyor (bu epic'in
+kapsamı taşımadır); başka bir operationType görürse hiçbir dosyaya
+dokunmadan reddediyor.
+
+**Tasarım boşluğu belgelendi: `PlanStep` hangi dosyanın kendisine ait
+olduğunu taşımıyor.** Sadece `affectedFileCount` var — `_distribute_files_to_steps`
+`pdf_files`'ı `order`a göre sıralanmış step'lere SIRAYLA dağıtıyor. Bu
+KIRILGAN bir varsayım (LLM'in `pdf_files` sırasını koruduğunu varsayar),
+docstring'de açıkça işaretlendi; toplam sayı eşleşmezse tüm plan
+reddediliyor. Asıl düzeltme (`PlanStep`e açık dosya listesi eklemek, LLM
+plan üretimini de değiştirmek) ayrı bir task.
+
+**Kendi testim gerçek bir bug yakaladı: rollback'te "pending" kalan
+kayıt.** İlk rollback implementasyonu sadece `status == "completed"`
+olan `FileOperation`'ları `"rolled_back"`'e çeviriyordu — ama `shutil.move`
+başarısız olan SON adımın kaydı hiç `"completed"` olamadan (kayıt
+oluşturulmuş, `session.commit()` henüz çağrılmamış) exception'a
+düşüyordu, bu yüzden o kayıt sonsuza dek `"pending"` asılı kalıyordu.
+`test_apply_plan_marks_transaction_and_operations_rolled_back_on_failure`
+bunu hemen yakaladı; düzeltme: hem `"completed"` hem `"pending"` durumları
+`"rolled_back"`'e çevriliyor.
+
+**Red-team: 1 bulgu hemen düzeltildi (ters taşımanın kendisi başarısız
+olabilir), 2 bulgu Saga #286'ya bağlandı.** Rollback sırasında
+`shutil.move(destination, original_source)`'un KENDİSİ başarısız olursa
+(ör. `original_source` bu sırada başka bir işlem tarafından dolduruldu)
+eski kod bunu yakalamıyordu — orijinal exception maskeleniyor VE
+`transaction.status="rolled_back"` hiç yazılmıyordu. Düzeltme: ters
+taşıma artık kendi `try/except`'i içinde, başarısızsa operasyon
+`"rollback_failed"` (yanlışlıkla `"rolled_back"` DEĞİL — dosya fiziksel
+olarak hâlâ hedefte) olarak işaretleniyor, orijinal exception hep
+fırlatılıyor. Diğer iki bulgu (shutil.move↔DB commit arasında crash
+tutarsızlığı; `PlanStep`'in hangi dosyanın kendisine ait olduğunu
+taşımaması) mimari — Saga #276 (rollback/undo) implementasyonuna
+başlamadan önce netleştirilmesi gereken Saga #286'ya bağlandı. 84/84 test
+yeşil.
+
 ## planı-onaysız-calistirma-koruması (Saga #273, epic #25)
 
 **Gerçek bug: `ChatScreen` `PlanCard`'a `onApprove` hiç geçirmiyordu.**
