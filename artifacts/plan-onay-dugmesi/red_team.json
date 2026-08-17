@@ -1,0 +1,8 @@
+{
+  "overall_assessment": "Fixed then Ready to Commit",
+  "findings": [
+    {"severity": "high", "summary": "onay dugmesi securityStatus tanimsizken fail-open etkin kaliyordu (dogru davranis fail-closed)", "outcome": "fixed: canApprove = securityStatus === 'approved', pending mesaji eklendi"},
+    {"severity": "medium", "summary": "cift-tiklamada onApprove iki kez tetiklenebiliyordu", "outcome": "fixed: hasApproved local state ile tek seferlik guard eklendi"},
+    {"severity": "low", "summary": "disabled buton icin rejection reason aria-describedby ile baglanmamisti", "outcome": "fixed: aria-describedby + STATUS_TEXT_ID eklendi"}
+  ]
+}
