@@ -1,5 +1,6 @@
 import os
 import uuid
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +13,7 @@ from backend.plan_generation import (
     PlanGenerationError,
     generate_plan_skeleton,
 )
+from backend.security import PathWhitelistError, validate_plan_paths
 
 app = FastAPI()
 
@@ -63,7 +65,18 @@ def get_llm_client() -> LLMClient:
 
 @app.post("/api/plan")
 def create_plan(payload: PlanRequest, client: LLMClient = Depends(get_llm_client)) -> PlanSkeleton:
+    session = _sessions.get(payload.sessionId)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Oturum bulunamadı")
+
     try:
-        return generate_plan_skeleton(payload.pdfFiles, client)
+        plan = generate_plan_skeleton(payload.pdfFiles, client)
     except PlanGenerationError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    try:
+        validate_plan_paths(plan, payload.pdfFiles, Path(session.selectedFolder))
+    except PathWhitelistError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    return plan

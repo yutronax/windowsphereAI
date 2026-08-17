@@ -1,5 +1,42 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## allowed-paths-whitelist-security-gate (Saga #271, epic #25)
+
+**İlk Security Gate: `backend/security.py` — canonical path whitelist.**
+`is_path_allowed(path, allowed_root)` `Path.resolve()` + `is_relative_to`
+kullanıyor (string prefix karşılaştırması DEĞİL — `/allowed` ile
+`/allowed-but-not-really` gibi kardeş-dizin sızıntısını önlemek için).
+`validate_plan_paths(plan, pdf_files, allowed_root)` her `PdfFileMetadata.
+filename`'i (kaynak) ve her `PlanStep.targetFolder`'ı (hedef) sırayla
+kontrol ediyor, İLK ihlalde `PathWhitelistError` fırlatıp tüm planı
+reddediyor (tek adım reddi değil).
+
+**`POST /api/plan` artık `sessionId`'yi çözüyor.** Önceden endpoint hiç
+oturum aramıyordu (`sessionId` sadece echo edilen bir string'di) — bu, plan
+üretimini `selectedFolder`'dan (whitelist kökü) tamamen kopuk bırakıyordu.
+Şimdi `_sessions`'tan oturum aranıyor (yoksa 404), plan üretildikten sonra
+`session.selectedFolder` kök alınarak `validate_plan_paths` çağrılıyor
+(ihlalde 403). Mevcut 4 testte (rastgele `sessionId` kullanan) bu nedenle
+gerçek bir regresyon çıktı — testler önce `/api/session` ile gerçek bir
+oturum oluşturacak şekilde güncellendi.
+
+**Red-team: path traversal bypass bulunamadı, 3 düşük-önem bulgu.**
+Windows'ta mutlak path (`C:\Windows\evil.pdf`) veya UNC/backslash-önekli
+filename ile bypass denendi — pathlib'in `root / mutlak_path` davranışı
+(mutlak operand join'i tamamen ezer) sonucu `is_path_allowed` doğru
+reddediyor, gerçek bir açık yok. Düşük-önem bulgular: (1) `targetFolder`
+dalı `TARGET_FOLDER_PATTERN` (YYYY-MM) regex'i tarafından zaten API
+seviyesinde engellendiği için ulaşılamaz/test edilmemiş ölü koddu —
+`PlanStep.model_construct`/`PlanSkeleton.model_construct` ile alan
+doğrulamasını atlayan doğrudan bir unit test eklendi. (2) 403 detail
+mesajı ham dosya adını/hedef klasörü istemciye yansıtıyor — bugün
+exploit edilebilir değil (zaten kendi girdisi), ama gelecekte mesaj
+genişletilirse bilgi sızıntısı riski taşıyor, not edildi. (3) Session-lookup
++ whitelist deseni şu an sadece `/api/plan`'a özel — genelleştirilmiş bir
+FastAPI dependency değil; bu mimari iyileştirme Saga #283'e (bu task'a
+bağımlı, low priority) ayrı task olarak açıldı, #271'i bloklamadı.
+62/62 test yeşil.
+
 ## plan-tarih-kaynagi-klasor-yapisi-dogrulama (Saga #270, epic #25)
 
 **Plan şeması sıkılaştırıldı — belirsiz plan artık Security'ye geçemiyor.**

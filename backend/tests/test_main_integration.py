@@ -142,15 +142,24 @@ VALID_PLAN_JSON = json.dumps(
 )
 
 
+def _create_session(selected_folder: str = r"C:\Users\Yusuf\Documents") -> str:
+    response = client.post(
+        "/api/session",
+        json={"selectedFolder": selected_folder, "requestText": "bir istek"},
+    )
+    return response.json()["sessionId"]
+
+
 def test_plan_endpoint_returns_503_when_no_llm_api_key_configured(monkeypatch):
     monkeypatch.delenv("PLAN_LLM_API_KEY", raising=False)
+    session_id = _create_session()
 
-    response = client.post("/api/plan", json={"sessionId": str(uuid.uuid4()), "pdfFiles": [{"filename": "a.pdf", "createdAt": "2026-08-01"}]})
+    response = client.post("/api/plan", json={"sessionId": session_id, "pdfFiles": [{"filename": "a.pdf", "createdAt": "2026-08-01"}]})
 
     assert response.status_code == 503
 
 
-def test_plan_endpoint_returns_the_plan_skeleton_for_a_valid_llm_response():
+def test_plan_endpoint_returns_404_when_session_does_not_exist():
     app.dependency_overrides[get_llm_client] = lambda: _StubLLMClient(response=VALID_PLAN_JSON)
     try:
         response = client.post(
@@ -160,16 +169,31 @@ def test_plan_endpoint_returns_the_plan_skeleton_for_a_valid_llm_response():
     finally:
         app.dependency_overrides.clear()
 
+    assert response.status_code == 404
+
+
+def test_plan_endpoint_returns_the_plan_skeleton_for_a_valid_llm_response():
+    session_id = _create_session()
+    app.dependency_overrides[get_llm_client] = lambda: _StubLLMClient(response=VALID_PLAN_JSON)
+    try:
+        response = client.post(
+            "/api/plan",
+            json={"sessionId": session_id, "pdfFiles": [{"filename": "a.pdf", "createdAt": "2026-08-01"}]},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
     assert response.status_code == 200
     assert response.json()["steps"][0]["targetFolder"] == "2026-08"
 
 
 def test_plan_endpoint_returns_502_when_plan_generation_fails():
+    session_id = _create_session()
     app.dependency_overrides[get_llm_client] = lambda: _StubLLMClient(error=True)
     try:
         response = client.post(
             "/api/plan",
-            json={"sessionId": str(uuid.uuid4()), "pdfFiles": [{"filename": "a.pdf", "createdAt": "2026-08-01"}]},
+            json={"sessionId": session_id, "pdfFiles": [{"filename": "a.pdf", "createdAt": "2026-08-01"}]},
         )
     finally:
         app.dependency_overrides.clear()
@@ -186,3 +210,20 @@ def test_plan_endpoint_returns_422_for_missing_fields():
         app.dependency_overrides.clear()
 
     assert response.status_code == 422
+
+
+def test_plan_endpoint_returns_403_when_source_filename_escapes_allowed_root():
+    session_id = _create_session()
+    app.dependency_overrides[get_llm_client] = lambda: _StubLLMClient(response=VALID_PLAN_JSON)
+    try:
+        response = client.post(
+            "/api/plan",
+            json={
+                "sessionId": session_id,
+                "pdfFiles": [{"filename": r"..\..\Windows\evil.pdf", "createdAt": "2026-08-01"}],
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
