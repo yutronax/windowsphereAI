@@ -7,6 +7,7 @@ type SetupConfig = { selectedFolder: string };
 export default function App() {
   const [config, setConfig] = useState<SetupConfig | null | undefined>(undefined);
   const [backendStatus, setBackendStatus] = useState<'ready' | 'starting' | 'backend_timeout'>('starting');
+  const [sessionId, setSessionId] = useState<string | null>(null);
 
   function checkBackend() {
     setBackendStatus('starting');
@@ -22,7 +23,7 @@ export default function App() {
   }, []);
 
   if (config === undefined) return null;
-  if (config) return <main data-testid="main-chat-screen">Ana sohbet ekranı</main>;
+  if (config || sessionId) return <main data-testid="main-chat-screen">Ana sohbet ekranı</main>;
 
-  return <OnboardingScreen backendStatus={backendStatus} onContinue={() => {}} onRetry={checkBackend} />;
+  return <OnboardingScreen backendStatus={backendStatus} onContinue={setSessionId} onRetry={checkBackend} />;
 }

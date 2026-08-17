@@ -1,9 +1,14 @@
-from fastapi import FastAPI, HTTPException
+import uuid
+
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import load_setup_config
+from backend.models import SessionContext, SessionRequest
 
 app = FastAPI()
+
+_sessions: dict[str, SessionContext] = {}
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,3 +33,14 @@ def get_config() -> dict[str, str]:
     if config is None:
         raise HTTPException(status_code=404)
     return config
+
+
+@app.post("/api/session", status_code=status.HTTP_201_CREATED)
+def create_session(payload: SessionRequest) -> SessionContext:
+    session = SessionContext(
+        sessionId=str(uuid.uuid4()),
+        selectedFolder=payload.selectedFolder,
+        requestText=payload.requestText,
+    )
+    _sessions[session.sessionId] = session
+    return session

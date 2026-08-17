@@ -1,4 +1,4 @@
-const BACKEND_ORIGIN = 'http://127.0.0.1:8000';
+export const BACKEND_ORIGIN = 'http://127.0.0.1:8000';
 
 type BackendHealthStatus = 'ready' | 'backend_timeout';
 

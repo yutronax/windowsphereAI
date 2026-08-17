@@ -1,12 +1,13 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
+import { BACKEND_ORIGIN } from '../../lib/backendHealth';
 
 type BackendStatus = 'ready' | 'starting' | 'backend_timeout';
 
 type Props = {
   backendStatus: BackendStatus;
-  onContinue: () => void;
+  onContinue: (sessionId: string) => void;
   onRetry?: () => void;
 };
 
@@ -18,12 +19,14 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
   const [isRequestEmpty, setIsRequestEmpty] = useState(false);
   const [isFolderInvalid, setIsFolderInvalid] = useState(false);
   const [isValidatingFolder, setIsValidatingFolder] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const latestRequestedPathRef = useRef<string | null>(null);
   const chooseFolderButtonRef = useRef<HTMLButtonElement>(null);
   const requestTextareaRef = useRef<HTMLTextAreaElement>(null);
   const isPathTooltipVisible = isFocused || isHovered;
   const isReady = backendStatus === 'ready';
-  const canSubmit = isReady && !!selectedFolder && !isFolderInvalid && !isValidatingFolder;
+  const canSubmit = isReady && !!selectedFolder && !isFolderInvalid && !isValidatingFolder && !isSubmitting;
 
   async function chooseFolder() {
     const folder = await open({ directory: true, multiple: false });
@@ -53,14 +56,30 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
     if (isRequestEmpty && value.trim() !== '') setIsRequestEmpty(false);
   }
 
-  function handleContinueClick() {
+  async function handleContinueClick() {
     if (!canSubmit) return;
     if (requestText.trim() === '') {
       setIsRequestEmpty(true);
       requestTextareaRef.current?.focus();
       return;
     }
-    onContinue();
+
+    setSubmitError(null);
+    setIsSubmitting(true);
+    try {
+      const response = await fetch(`${BACKEND_ORIGIN}/api/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selectedFolder, requestText }),
+      });
+      if (!response.ok) throw new Error('session request failed');
+      const session: { sessionId: string } = await response.json();
+      setIsSubmitting(false);
+      onContinue(session.sessionId);
+    } catch {
+      setIsSubmitting(false);
+      setSubmitError('İstek gönderilemedi. Lütfen tekrar deneyin.');
+    }
   }
 
   function handleFolderPathKeyDown(e: KeyboardEvent) {
@@ -173,6 +192,11 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
       {isRequestEmpty && (
         <div aria-live="polite">
           <p className="onboarding-error-message">Devam etmek için bir istek yazın.</p>
+        </div>
+      )}
+      {submitError && (
+        <div aria-live="polite">
+          <p className="onboarding-error-message">{submitError}</p>
         </div>
       )}
       <button type="button" onClick={handleContinueClick} disabled={!canSubmit}>Devam</button>

@@ -1,0 +1,40 @@
+{
+  "task_slug": "ilk-istek-oturum-baglami",
+  "saga_task_id": 258,
+  "reviewed_by": "obss-red-team subagent (bağımsız, saga-oto skill'i altında, Codex kotası dolu olduğu için Bölüm C override kapsamında çağrıldı)",
+  "reviewed_at": "2026-08-17",
+  "security_findings": [
+    {
+      "finding": "In-memory _sessions dict'inin hiçbir eviction/expiry/boyut sınırı yok; her başarılı POST /api/session backend süreci boyunca kalıcı olarak büyüyor.",
+      "severity": "low",
+      "scenario": "Sürekli tekrarlayan bir istemci/hatalı retry döngüsü _sessions'ı sınırsız büyütüp belleği tüketebilir. MVP'nin tek-kullanıcılı localhost tehdit modeli için düşük öncelikli ama atdd.md Risks'te açıkça tartışılmamıştı (sadece restart-ta kaybolma bahsedilmişti).",
+      "status": "kabul edildi, düzeltilmedi — bu task'ın dar kapsamı için düşük öncelikli, ileride bir session-expiry/limit task'ı gerekebilir."
+    },
+    {
+      "finding": "Backend'de kimlik doğrulama yok; herhangi bir yerel süreç 127.0.0.1:8000/api/session'a keyfi selectedFolder/requestText göndererek session oluşturabilir (backend selectedFolder'ın var olup olmadığını doğrulamıyor, sadece boş olmadığını).",
+      "severity": "low",
+      "scenario": "Aynı makinedeki başka bir süreç keyfi path'lerle session oluşturabilir. atdd.md'de bilinçli olarak kapsam dışı bırakılmış (D6 Security katmanı ayrı gelecek iş), tek-kullanıcılı masaüstü MVP'si için kabul edilebilir bir taviz.",
+      "status": "kabul edildi, kapsam dışı — atdd.md'de zaten not edilmiş."
+    },
+    {
+      "finding": "sessionId AC-5'in gerektirdiği 'doğrulanabilir kimlik' backend'de üretiliyordu ama frontend'e ulaşır ulaşmaz atılıyordu (onContinue() parametresiz çağrılıyordu, App.tsx sadece boolean tutuyordu) — AC-5 sadece testte doğrulanıyordu, çalışan uygulamada hiçbir yerde tutulmuyordu.",
+      "severity": "medium",
+      "scenario": "Gelecekteki bir Decision/Planner entegrasyonu (Saga #24) bu session kimliğine ihtiyaç duyacak; şimdi taşınmazsa o task OnboardingScreen.tsx'i yeniden açıp POST/response sözleşmesini yeniden doğrulamak zorunda kalacaktı.",
+      "status": "düzeltildi — OnboardingScreen'in onContinue prop tipi (sessionId: string) => void oldu, App.tsx bunu sessionId state'inde tutuyor. Ucuz bir düzeltmeydi (2 dosya, birkaç satır), commit öncesi uygulandı."
+    }
+  ],
+  "approved_points": [
+    "code_diff.md/test_diff.md iddiaları gerçek git diff ile birebir örtüşüyor, plan.md'nin izin verdiği dosyaların dışına taşma yok.",
+    "backend/models.py'deki not_blank field_validator unicode whitespace (ör. U+3000) dahil doğru şekilde reddediyor, bypass yok — elle doğrulandı.",
+    "CORS iddiası (allow_methods=[\"*\"] zaten POST'u kapsıyor) backend/main.py okunarak doğrulandı, gerçek bir regresyon testiyle de kapsanmış.",
+    "handleContinueClick'in backend-hatası ve network-hatasını aynı mesajla ele alması kabul edilebilir bir MVP tasarım kararı (kullanıcı eylemi ikisinde de aynı: tekrar dene).",
+    "App.test.tsx'in OnboardingScreen'i mock'laması sahte-güvence değil, meşru bir kapsam sınırı — gerçek entegrasyon OnboardingScreen.test.tsx (5 yeni test) ve Playwright e2e (2 yeni test) tarafından ayrıca kapsanıyor.",
+    "sessionId'nin kalıcı olmaması (reload'da kaybolma) mevcut uygulamanın zaten sahip olduğu persistence modeliyle (sadece /api/config yazılıyor) tutarlı, bu task'ın kapsamı dışında bırakılması doğru.",
+    "6 AC'nin hepsi gerçek, anlamlı assertion'larla kapsanıyor — hem backend (pytest) hem frontend (vitest+playwright) tarafında."
+  ],
+  "overall_assessment": "Sağlam, uygun şekilde dar kapsamlı bir implementasyon. Tüm code_diff.md/test_diff.md/verify_report.md iddiaları gerçek git diff ile bağımsız doğrulandı. saga-oto'nun otomatik seçtiği ATDD kararları (in-memory store, camelCase alanlar, /api/session yolu, mevcut hata pattern'inin tekrar kullanılması) makul ve proje konvansiyonlarıyla tutarlı. Tek gerçek bulgu (sessionId'nin atılması) commit öncesi ucuza düzeltildi. Kalan bulgular (sınırsız session büyümesi, kimlik doğrulama yok) düşük öncelikli, MVP tehdit modeliyle tutarlı, engelleyici değil.",
+  "ready_to_commit": {
+    "decision": "evet",
+    "gerekce": "MEDIUM bulgu (sessionId atılması) commit öncesi düzeltildi ve tüm testler (13 pytest + 42 vitest + 26 e2e) bağımsız olarak yeniden çalıştırılıp PASS bulundu. Kapsam taşması yok. İki LOW bulgu kayıt altında, engelleyici değil, MVP tehdit modeliyle tutarlı."
+  }
+}
