@@ -1,5 +1,25 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## plan-tarih-kaynagi-klasor-yapisi-dogrulama (Saga #270, epic #25)
+
+**Plan şeması sıkılaştırıldı — belirsiz plan artık Security'ye geçemiyor.**
+`PlanSkeleton`'a zorunlu `dateSource` (`DateSource` enum, tek üye
+`created_at`) ve `sortOrder` (`ascending`|`descending`) alanları eklendi;
+`PlanStep.targetFolder` artık `YYYY-MM` regex'ine uymak zorunda. Bu alanlar
+eksik/geçersizse Pydantic `ValidationError` fırlatıyor, Saga #269'un zaten
+var olan `PlanGenerationError` mekanizmasıyla plan Security katmanına
+(#271/#272, henüz yazılmadı) hiç ulaşmıyor.
+
+**Red-team: 2 düşük-önemli bulgu, hemen düzeltildi.** (1) Regex "2026-13"
+gibi geçersiz ayları kabul ediyordu — bu, kullanıcının onaylamadan önce
+göreceği SON kapsam bilgisi olduğu için gerçek bir boşluktu; ay aralığını
+(01-12) doğrulayacak şekilde sıkılaştırıldı. (2) Boş-PDF-listesi kısayolunun
+sessizce gerçek enum değerleri (`created_at`/`ascending`) döndürmesi,
+gelecekteki Security/Orchestrator kodunun bunları anlamlı bir karar gibi
+yorumlama riski taşıyordu — `DateSource` sınıfına, bu alanların `steps`
+boşken hiçbir gerçek kararı temsil etmediğini açıkça belirten bir docstring
+eklendi. 52/52 test yeşil.
+
 ## pdf-plan-skeleton-uretimi (Saga #269, epic #25)
 
 **LLM plan-skeleton üretimi backend'e eklendi — metadata-only garanti

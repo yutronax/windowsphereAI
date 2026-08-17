@@ -134,7 +134,11 @@ def test_cors_header_present_for_session_post_from_allowed_origin():
 
 
 VALID_PLAN_JSON = json.dumps(
-    {"steps": [{"order": 0, "operationType": "Taşı", "targetFolder": "2026-08", "affectedFileCount": 1}]}
+    {
+        "dateSource": "created_at",
+        "sortOrder": "ascending",
+        "steps": [{"order": 0, "operationType": "Taşı", "targetFolder": "2026-08", "affectedFileCount": 1}],
+    }
 )
 
 

@@ -1,8 +1,13 @@
+import re
 from enum import Enum
 
 from pydantic import BaseModel, field_validator
 
 from backend.request_normalization import normalize_request_text, normalize_selected_folder
+
+# YYYY-MM, ay 01-12 aralığında olmalı (red-team bulgusu, Saga #270: "2026-13"
+# gibi geçersiz aylar eskiden bu regex'ten geçiyordu).
+TARGET_FOLDER_PATTERN = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
 class SessionRequest(BaseModel):
@@ -49,14 +54,33 @@ class PlanStep(BaseModel):
 
     @field_validator("targetFolder")
     @classmethod
-    def target_folder_not_blank(cls, value: str) -> str:
-        if value.strip() == "":
-            raise ValueError("must not be empty or whitespace-only")
+    def target_folder_matches_year_month(cls, value: str) -> str:
+        if not TARGET_FOLDER_PATTERN.match(value.strip()):
+            raise ValueError("must be a YYYY-MM folder name (e.g. '2026-08')")
         return value
+
+
+class DateSource(str, Enum):
+    """Not: `PlanSkeleton.steps` boşsa (taşınacak PDF yoksa),
+    `dateSource`/`sortOrder` yine de şema tutarlılığı için gerçek bir enum
+    değeri taşır ama HİÇBİR GERÇEK KARARI TEMSİL ETMEZ — `generate_plan_skeleton`
+    bu durumda LLM'e hiç istek atmadan varsayılan değerler atar (bkz.
+    plan_generation.py). Downstream kod (Security/Orchestrator, Saga #271+)
+    bu alanları `steps` boşken anlamlı veri gibi yorumlamamalı (red-team
+    bulgusu, Saga #270)."""
+
+    CREATED_AT = "created_at"
+
+
+class SortOrder(str, Enum):
+    ASCENDING = "ascending"
+    DESCENDING = "descending"
 
 
 class PlanSkeleton(BaseModel):
     steps: list[PlanStep]
+    dateSource: DateSource
+    sortOrder: SortOrder
 
     @field_validator("steps")
     @classmethod

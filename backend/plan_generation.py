@@ -4,7 +4,7 @@ from typing import Protocol
 
 from pydantic import ValidationError
 
-from backend.models import PdfFileMetadata, PlanSkeleton
+from backend.models import DateSource, PdfFileMetadata, PlanSkeleton, SortOrder
 
 DEFAULT_MODEL_ID = "gpt-4o-mini"
 MODEL_ID_ENV_VAR = "PLAN_LLM_MODEL_ID"
@@ -13,10 +13,13 @@ PLAN_SYSTEM_PROMPT = (
     "Sen bir dosya organizasyon asistanısın. Sana verilen PDF dosya adı ve "
     "oluşturulma tarihi metadata'sından, dosyaları tarihe göre YYYY-MM "
     "klasörlerine taşıyacak bir plan üret. Sadece şu JSON şemasında yanıt "
-    'ver: {"steps": [{"order": <negatif olmayan tamsayı>, "operationType": '
+    'ver: {"dateSource": "created_at", "sortOrder": "ascending"|"descending", '
+    '"steps": [{"order": <negatif olmayan tamsayı>, "operationType": '
     '"Taşı"|"Kopyala"|"Sil"|"Yeniden Adlandır"|"Listele", "targetFolder": '
-    '<string>, "affectedFileCount": <negatif olmayan tamsayı>}]}. '
-    "Başka hiçbir metin ekleme, sadece bu JSON'u döndür."
+    '<"YYYY-MM" formatında string>, "affectedFileCount": <negatif olmayan '
+    "tamsayı>}]}. dateSource ve sortOrder alanları AÇIKÇA belirtilmeli, "
+    "her targetFolder kesinlikle YYYY-MM formatında olmalı. Başka hiçbir "
+    "metin ekleme, sadece bu JSON'u döndür."
 )
 
 
@@ -43,7 +46,9 @@ def generate_plan_skeleton(
     model: str | None = None,
 ) -> PlanSkeleton:
     if not pdf_files:
-        return PlanSkeleton(steps=[])
+        # Taşınacak dosya yoksa LLM'e hiç istek atılmaz; dateSource/sortOrder
+        # yine de şema tutarlılığı için sağlanır (fiilen kullanılmaz).
+        return PlanSkeleton(steps=[], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
 
     resolved_model = model or resolve_model_id()
     prompt = build_metadata_prompt(pdf_files)
