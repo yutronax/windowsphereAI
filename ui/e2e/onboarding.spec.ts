@@ -433,4 +433,56 @@ test.describe('first-run folder onboarding', () => {
 
     await expect(page.getByTestId('selected-folder-path')).toHaveText('C:\\Users\\Yusuf\\Documents\\Müvekkiller');
   });
+
+  // AC-1 (ilk-istek-oturum-baglami / Saga #258): geçerli formda Devam, backend'e POST /api/session gönderip ana sohbet ekranına geçiriyor.
+  test('posts the request to /api/session and shows the main chat screen on success (AC-1)', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+        invoke: async (cmd: string) => {
+          if (cmd === 'plugin:dialog|open') return 'C:\\Users\\Yusuf\\Documents\\Müvekkiller';
+          if (cmd === 'plugin:fs|exists') return true;
+          return Promise.reject(new Error(`unmocked command: ${cmd}`));
+        },
+      };
+    });
+    let requestBody: unknown;
+    await page.route('**/api/session', (route) => {
+      requestBody = route.request().postDataJSON();
+      return route.fulfill({
+        status: 201,
+        json: { sessionId: '11111111-1111-1111-1111-111111111111', selectedFolder: 'C:\\Users\\Yusuf\\Documents\\Müvekkiller', requestText: 'PDF\'leri tarihe göre sırala' },
+      });
+    });
+    await page.goto('/');
+    await page.getByRole('button', { name: /klasör seç/i }).click();
+    await page.getByTestId('request-textarea').fill('PDF\'leri tarihe göre sırala');
+
+    await page.getByRole('button', { name: /devam/i }).click();
+
+    await expect(page.getByTestId('main-chat-screen')).toBeVisible();
+    expect(requestBody).toEqual({ selectedFolder: 'C:\\Users\\Yusuf\\Documents\\Müvekkiller', requestText: 'PDF\'leri tarihe göre sırala' });
+  });
+
+  // AC-3 (ilk-istek-oturum-baglami / Saga #258): backend'e ulaşılamazsa hata gösterilir, Devam tekrar denenebilir kalır.
+  test('shows a submit error and keeps Continue usable when the backend is unreachable (AC-3)', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+        invoke: async (cmd: string) => {
+          if (cmd === 'plugin:dialog|open') return 'C:\\Users\\Yusuf\\Documents\\Müvekkiller';
+          if (cmd === 'plugin:fs|exists') return true;
+          return Promise.reject(new Error(`unmocked command: ${cmd}`));
+        },
+      };
+    });
+    await page.route('**/api/session', (route) => route.abort('failed'));
+    await page.goto('/');
+    await page.getByRole('button', { name: /klasör seç/i }).click();
+    await page.getByTestId('request-textarea').fill('PDF\'leri tarihe göre sırala');
+
+    await page.getByRole('button', { name: /devam/i }).click();
+
+    await expect(page.getByText('İstek gönderilemedi. Lütfen tekrar deneyin.')).toBeVisible();
+    await expect(page.getByRole('button', { name: /devam/i })).toBeEnabled();
+    await expect(page.getByTestId('main-chat-screen')).toHaveCount(0);
+  });
 });

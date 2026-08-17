@@ -1,5 +1,35 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## ilk-istek-oturum-baglami (Saga #258, epic #23)
+
+**İlk `saga-oto` (tam otonom, çok-task'lı) koşusu.** Bu task, yeni
+oluşturulan `saga-oto` skill'i altında işlendi — ATDD/plan netleştirme
+soruları kullanıcıya sorulmadı, en makul (Recommended) seçenekler
+otomatik seçildi (bkz. `artifacts/ilk-istek-oturum-baglami/atdd.md`
+"Sorular ve Cevaplar" bölümü, 10 soru).
+
+**İlk backend değişikliği — Entry katmanı gerçekten bağlandı.** Frontend'in
+`onContinue={() => {}}` no-op'u (Saga #255'ten beri bilinçli olarak
+bekletiliyordu) artık gerçek bir `POST /api/session` çağrısı yapıyor.
+Backend'de `backend/models.py` (bu projede ilk Pydantic `BaseModel`
+kullanımı) + `backend/main.py`'a yeni bir route eklendi; session'lar
+in-memory bir `dict`'te tutuluyor (MVP kapsamı, DB yok).
+
+**Bulunan ve düzeltilen bug — atılan sessionId (red-team, MEDIUM).**
+Backend'in ürettiği gerçek `sessionId` (UUID) frontend'e ulaşır ulaşmaz
+atılıyordu — `onContinue()` parametresiz çağrılıyordu, `App.tsx` sadece
+bir boolean (`sessionStarted`) tutuyordu. ATDD'nin kendi AC-5'i
+("başarı iddiası doğrulanabilir bir kimliğe dayanmalı") bu yüzden sadece
+testte doğrulanıyor, çalışan uygulamada hiç tutulmuyordu. Düzeltme ucuzdu
+(2 dosya, `onContinue` imzasına bir parametre eklemek) — commit öncesi
+uygulandı, `App.tsx` artık gerçek `sessionId`'yi state'te tutuyor.
+
+**Bilinçli kapsam kararları.** Decision/Planner (LLM) katmanına gerçek bir
+çağrı yapılmadı — backend'de henüz böyle bir modül yok, ayrı bir MVP task'ı
+(muhtemelen epic #24). Session persistence/expiry yok (in-memory, restart'ta
+kaybolur) — tek-kullanıcılı masaüstü MVP'si için kabul edilebilir, red-team
+tarafından da onaylandı (düşük öncelikli, engelleyici değil).
+
 ## ilk-acilis-klasor-secimi-ekrani (Saga #250, epic #23)
 
 **Zorluk — Codex kotası tükendi task ortasında.** Tooling scaffold'u yazdıktan

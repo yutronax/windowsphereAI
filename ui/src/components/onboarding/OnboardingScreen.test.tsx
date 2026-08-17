@@ -16,6 +16,16 @@ vi.mock('@tauri-apps/api/core', () => ({
 const openFolderDialog = vi.mocked(open);
 const invokeTauriCommand = vi.mocked(invoke);
 
+// Dosya geneli varsayılan: /api/session çağrısı başarılı döner, aksini
+// belirten testler (ilk-istek-oturum-baglami describe bloğu) kendi
+// beforeEach'inde farklı bir davranış stub'lar.
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({ sessionId: 'test-session-id', selectedFolder: '', requestText: '' }),
+  }));
+});
+
 describe('OnboardingScreen', () => {
   beforeEach(() => {
     openFolderDialog.mockReset();
@@ -233,7 +243,7 @@ describe('empty request validation (bos-istek-engelleme)', () => {
 
     expect(screen.queryByText('Devam etmek için bir istek yazın.')).not.toBeInTheDocument();
     expect(textarea).not.toHaveClass('has-error');
-    expect(onContinue).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onContinue).toHaveBeenCalledTimes(1));
   });
 
   it('shows a red border and inline error, and does not call onContinue when the request is empty (AC-2)', async () => {
@@ -435,7 +445,7 @@ describe('keyboard navigation and focus management (klavye-ile-form-gezintisi)',
 
     fireEvent.keyDown(screen.getByTestId('selected-folder-path'), { key: 'Enter' });
 
-    expect(onContinue).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onContinue).toHaveBeenCalledTimes(1));
   });
 
   it('shows the empty-request error and moves focus to the textarea when Enter is pressed on an invalid form (AC-4)', async () => {
@@ -479,5 +489,81 @@ describe('keyboard navigation and focus management (klavye-ile-form-gezintisi)',
     fireEvent.keyDown(screen.getByTestId('selected-folder-path'), { key: 'Enter' });
 
     expect(onContinue).not.toHaveBeenCalled();
+  });
+});
+
+// AC-1..AC-4 (ilk-istek-oturum-baglami / Saga #258): geçerli formda "Devam"
+// gerçekten backend'e POST /api/session gönderiyor; başarı, hata ve
+// çift-gönderim senaryoları.
+describe('session submission (ilk-istek-oturum-baglami)', () => {
+  async function renderReadyToSubmit(onContinue = vi.fn()) {
+    invokeTauriCommand.mockResolvedValue(true);
+    openFolderDialog.mockResolvedValue('C:\\Users\\Yusuf\\Documents\\Müvekkiller');
+    render(<OnboardingScreen backendStatus="ready" onContinue={onContinue} />);
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+    await screen.findByTestId('selected-folder-path');
+    fireEvent.change(screen.getByTestId('request-textarea'), { target: { value: 'PDF\'leri tarihe göre sırala' } });
+    return { onContinue };
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  it('POSTs the selected folder and request text to /api/session and calls onContinue on success (AC-1)', async () => {
+    const mockFetch = vi.mocked(fetch);
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ sessionId: '11111111-1111-1111-1111-111111111111', selectedFolder: 'C:\\Users\\Yusuf\\Documents\\Müvekkiller', requestText: 'PDF\'leri tarihe göre sırala' }),
+    } as Response);
+    const { onContinue } = await renderReadyToSubmit();
+
+    fireEvent.click(screen.getByRole('button', { name: /devam/i }));
+
+    await waitFor(() => expect(onContinue).toHaveBeenCalledTimes(1));
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:8000/api/session',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ selectedFolder: 'C:\\Users\\Yusuf\\Documents\\Müvekkiller', requestText: 'PDF\'leri tarihe göre sırala' }),
+      }),
+    );
+  });
+
+  it('shows a submit error and does not call onContinue when the backend rejects the request (AC-2)', async () => {
+    const mockFetch = vi.mocked(fetch);
+    mockFetch.mockResolvedValue({ ok: false, json: async () => ({ detail: 'invalid' }) } as Response);
+    const { onContinue } = await renderReadyToSubmit();
+
+    fireEvent.click(screen.getByRole('button', { name: /devam/i }));
+
+    expect(await screen.findByText('İstek gönderilemedi. Lütfen tekrar deneyin.')).toBeVisible();
+    expect(onContinue).not.toHaveBeenCalled();
+  });
+
+  it('shows a submit error and does not call onContinue when the network request fails (AC-3)', async () => {
+    const mockFetch = vi.mocked(fetch);
+    mockFetch.mockRejectedValue(new Error('network error'));
+    const { onContinue } = await renderReadyToSubmit();
+
+    fireEvent.click(screen.getByRole('button', { name: /devam/i }));
+
+    expect(await screen.findByText('İstek gönderilemedi. Lütfen tekrar deneyin.')).toBeVisible();
+    expect(onContinue).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /devam/i })).toBeEnabled();
+  });
+
+  it('disables Continue while the request is in flight to prevent a double submit (AC-4)', async () => {
+    const mockFetch = vi.mocked(fetch);
+    let resolveFetch: (value: Response) => void = () => {};
+    mockFetch.mockReturnValue(new Promise<Response>((resolve) => { resolveFetch = resolve; }));
+    await renderReadyToSubmit();
+
+    fireEvent.click(screen.getByRole('button', { name: /devam/i }));
+
+    expect(screen.getByRole('button', { name: /devam/i })).toBeDisabled();
+
+    resolveFetch({ ok: true, json: async () => ({ sessionId: '1', selectedFolder: 'x', requestText: 'y' }) } as Response);
+    await waitFor(() => expect(screen.getByRole('button', { name: /devam/i })).toBeEnabled());
   });
 });
