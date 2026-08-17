@@ -1,0 +1,32 @@
+{
+  "security_findings": [
+    {
+      "finding": "Underlying openai SDK exceptions are chained via 'from exc' into PlanGenerationError; the generic message is what reaches the HTTP response, but if future logging/APM (Sentry, OTel) is added around the app, the raw chained exception could expose request headers (Authorization) in some openai-python SDK versions.",
+      "severity": "low",
+      "status": "accepted_risk",
+      "note": "Not exploitable today — no logging middleware exists in this codebase. Flag for whoever adds observability tooling later."
+    },
+    {
+      "finding": "FastAPI resolves Depends(get_llm_client) before body validation, so a request with an invalid body AND a missing PLAN_LLM_API_KEY always returns 503, never 422 — misleading during misconfiguration debugging.",
+      "severity": "low",
+      "status": "accepted_risk",
+      "note": "Standard FastAPI dependency-resolution behavior, not a vulnerability. Confirmed via direct test (test_plan_endpoint_returns_422_for_missing_fields needed a dependency override to reach the 422 path)."
+    },
+    {
+      "finding": "get_llm_client() constructs a new OpenAICompatibleLLMClient on every request instead of caching a singleton; API key validation only happens lazily per-request rather than at startup.",
+      "severity": "low",
+      "status": "considered_not_applied",
+      "note": "Reviewer suggested functools.lru_cache. Evaluated and rejected: this codebase's tests rely on monkeypatch.setenv/delenv for PLAN_LLM_API_KEY across test cases sharing the same process — lru_cache would leak the first-resolved client/error across tests with no invalidation fixture, trading a low-severity efficiency concern for real test-isolation risk. Not applied; per-request construction kept."
+    }
+  ],
+  "approved_points": [
+    "Confirmed by direct read: build_metadata_prompt only ever uses filename+createdAt — no PDF content, path, or binary data reaches the LLM at any point.",
+    "PlanStep/PlanSkeleton/PdfFileMetadata/PlanRequest are genuinely fail-closed: non-negative order/affectedFileCount, closed OperationType enum, unique-order validator, blank-string rejection — all match dedicated tests.",
+    "generate_plan_skeleton wraps every failure mode into a single generic PlanGenerationError message; no raw LLM/API error text leaks into the HTTP 502 response.",
+    "get_llm_client checks PLAN_LLM_API_KEY presence before constructing any client or making network calls — no test makes a real network request.",
+    "DEFAULT_MODEL_ID placeholder does not conflict with the project's BYOK-DeepSeek plan — fully overridable via PLAN_LLM_MODEL_ID/PLAN_LLM_BASE_URL.",
+    "40/40 tests passing, diff matches code_diff.md/test_diff.md claims exactly."
+  ],
+  "overall_assessment": "Core security property (PDF content never reaches the LLM) verified line-by-line. Schema validation is genuinely fail-closed. No API key leakage into responses. Three low-severity, non-blocking findings — one evaluated and deliberately not applied due to a real test-isolation trade-off, two accepted as out-of-scope observability/UX notes.",
+  "ready_to_commit": true
+}

@@ -3,9 +3,21 @@ import uuid
 
 from fastapi.testclient import TestClient
 
-from backend.main import app
+from backend.main import app, get_llm_client
 
 client = TestClient(app)
+
+
+class _StubLLMClient:
+    def __init__(self, response: str | None = None, error: bool = False):
+        self.response = response
+        self.error = error
+
+    def complete(self, *, model: str, system_prompt: str, user_prompt: str) -> str:
+        if self.error:
+            raise RuntimeError("stub failure")
+        assert self.response is not None
+        return self.response
 
 
 def test_health_endpoint_returns_ok():
@@ -119,3 +131,54 @@ def test_cors_header_present_for_session_post_from_allowed_origin():
     )
 
     assert response.headers.get("access-control-allow-origin") == "tauri://localhost"
+
+
+VALID_PLAN_JSON = json.dumps(
+    {"steps": [{"order": 0, "operationType": "Taşı", "targetFolder": "2026-08", "affectedFileCount": 1}]}
+)
+
+
+def test_plan_endpoint_returns_503_when_no_llm_api_key_configured(monkeypatch):
+    monkeypatch.delenv("PLAN_LLM_API_KEY", raising=False)
+
+    response = client.post("/api/plan", json={"sessionId": str(uuid.uuid4()), "pdfFiles": [{"filename": "a.pdf", "createdAt": "2026-08-01"}]})
+
+    assert response.status_code == 503
+
+
+def test_plan_endpoint_returns_the_plan_skeleton_for_a_valid_llm_response():
+    app.dependency_overrides[get_llm_client] = lambda: _StubLLMClient(response=VALID_PLAN_JSON)
+    try:
+        response = client.post(
+            "/api/plan",
+            json={"sessionId": str(uuid.uuid4()), "pdfFiles": [{"filename": "a.pdf", "createdAt": "2026-08-01"}]},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["steps"][0]["targetFolder"] == "2026-08"
+
+
+def test_plan_endpoint_returns_502_when_plan_generation_fails():
+    app.dependency_overrides[get_llm_client] = lambda: _StubLLMClient(error=True)
+    try:
+        response = client.post(
+            "/api/plan",
+            json={"sessionId": str(uuid.uuid4()), "pdfFiles": [{"filename": "a.pdf", "createdAt": "2026-08-01"}]},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 502
+    assert "detail" in response.json()
+
+
+def test_plan_endpoint_returns_422_for_missing_fields():
+    app.dependency_overrides[get_llm_client] = lambda: _StubLLMClient(response=VALID_PLAN_JSON)
+    try:
+        response = client.post("/api/plan", json={})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 422

@@ -1,5 +1,35 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## pdf-plan-skeleton-uretimi (Saga #269, epic #25)
+
+**LLM plan-skeleton üretimi backend'e eklendi — metadata-only garanti
+yapısal olarak sağlandı.** `backend/plan_generation.py`:
+`generate_plan_skeleton(pdf_files, client, model=None)` sadece
+`filename`+`createdAt` kullanan bir prompt kuruyor (fonksiyon imzası PDF
+içeriği/binary parametresi almıyor — "unutma" riski yok, yapısal garanti).
+LLM istemcisi bir `Protocol` (`LLMClient`) arkasında soyutlandı; gerçek
+`OpenAICompatibleLLMClient` (openai SDK, BYOK için `base_url` override)
+sadece `POST /api/plan` endpoint'inde dependency injection ile bağlanıyor.
+Model kimliği `PLAN_LLM_MODEL_ID` env değişkeniyle override edilebilir
+(pinlenmiş `DEFAULT_MODEL_ID` placeholder — proje henüz sağlayıcı kararı
+vermedi). `backend/models.py`'ye backend-taraflı `PlanStep`/`PlanSkeleton`
+Pydantic modelleri eklendi (frontend'deki `validatePlanResponse`, Saga
+#280, ile aynı kurallar — order tekil+negatif olmayan, operationType sabit
+enum, targetFolder boş olmayan, affectedFileCount negatif olmayan).
+
+**Red-team: 3 düşük-önemli bulgu, hepsi değerlendirildi.** (1) Gelecekte
+loglama/APM eklenirse ham SDK exception'ının API anahtarını sızdırma
+riski — kabul edildi, şu an loglama yok. (2) FastAPI'de dependency
+(503) body validasyonundan (422) önce çözülüyor — gerçek bir güvenlik
+açığı değil, sadece yanlış yapılandırmada kafa karıştırıcı bir hata kodu.
+(3) `get_llm_client` her istekte yeni client kuruyor — önerilen
+`lru_cache` DEĞERLENDİRİLDİ AMA UYGULANMADI: testler `PLAN_LLM_API_KEY`
+için `monkeypatch.setenv/delenv` kullanıyor, cache test izolasyonunu
+bozardı — düşük-önemli bir verimlilik notu için gerçek bir test-izolasyon
+riski almak mantıklı değildi. Gerçek LLM entegrasyonu bu ortamda test
+EDİLEMEDİ (API anahtarı yok) — sadece Fake/Stub istemcilerle mock'landı,
+verify_report.md'ye açıkça not düşüldü. 40/40 test yeşil.
+
 ## pdf-siralama-istek-normalizasyonu (Saga #268, epic #25) — Epic #25'e başlangıç
 
 **Backend Entry katmanı normalizasyonu — gerçek bir bug düzeltildi.**

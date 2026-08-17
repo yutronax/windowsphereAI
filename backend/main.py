@@ -1,10 +1,17 @@
+import os
 import uuid
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import load_setup_config
-from backend.models import SessionContext, SessionRequest
+from backend.models import PlanRequest, PlanSkeleton, SessionContext, SessionRequest
+from backend.plan_generation import (
+    LLMClient,
+    OpenAICompatibleLLMClient,
+    PlanGenerationError,
+    generate_plan_skeleton,
+)
 
 app = FastAPI()
 
@@ -44,3 +51,19 @@ def create_session(payload: SessionRequest) -> SessionContext:
     )
     _sessions[session.sessionId] = session
     return session
+
+
+def get_llm_client() -> LLMClient:
+    api_key = os.environ.get("PLAN_LLM_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="LLM API anahtarı yapılandırılmamış")
+    base_url = os.environ.get("PLAN_LLM_BASE_URL")
+    return OpenAICompatibleLLMClient(api_key=api_key, base_url=base_url)
+
+
+@app.post("/api/plan")
+def create_plan(payload: PlanRequest, client: LLMClient = Depends(get_llm_client)) -> PlanSkeleton:
+    try:
+        return generate_plan_skeleton(payload.pdfFiles, client)
+    except PlanGenerationError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
