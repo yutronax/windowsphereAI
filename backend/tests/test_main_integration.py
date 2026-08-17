@@ -212,7 +212,10 @@ def test_plan_endpoint_returns_422_for_missing_fields():
     assert response.status_code == 422
 
 
-def test_plan_endpoint_returns_403_when_source_filename_escapes_allowed_root():
+def test_plan_endpoint_returns_422_when_filename_contains_path_separators():
+    # Saga #272: PdfFileMetadata.filename artık şema seviyesinde ayraç
+    # içeremiyor — bu, çok-segmentli traversal/derinlik denemelerini
+    # runtime whitelist'e (403) hiç ulaşmadan erkenden reddediyor.
     session_id = _create_session()
     app.dependency_overrides[get_llm_client] = lambda: _StubLLMClient(response=VALID_PLAN_JSON)
     try:
@@ -221,6 +224,25 @@ def test_plan_endpoint_returns_403_when_source_filename_escapes_allowed_root():
             json={
                 "sessionId": session_id,
                 "pdfFiles": [{"filename": r"..\..\Windows\evil.pdf", "createdAt": "2026-08-01"}],
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+
+
+def test_plan_endpoint_returns_403_when_source_filename_escapes_allowed_root():
+    # Ayraçsız tek segment (".."), şema doğrulamasından geçer ama whitelist
+    # tarafından runtime'da reddedilir.
+    session_id = _create_session()
+    app.dependency_overrides[get_llm_client] = lambda: _StubLLMClient(response=VALID_PLAN_JSON)
+    try:
+        response = client.post(
+            "/api/plan",
+            json={
+                "sessionId": session_id,
+                "pdfFiles": [{"filename": "..", "createdAt": "2026-08-01"}],
             },
         )
     finally:

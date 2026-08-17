@@ -1,5 +1,41 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## path-derinlik-ve-sistem-klasoru-korumasi (Saga #272, epic #25)
+
+**Security Gate'e iki yeni kural: azami derinlik + kesin sistem kökleri.**
+`backend/security.py`'ye `is_path_too_deep` (allowed_root'a göre relative
+path bileşen sayısı `MAX_PATH_DEPTH=3`'ü aşarsa reddet) ve
+`is_system_protected` eklendi; `validate_plan_paths` her kaynak/hedef için
+artık üç kontrolü de (whitelist → sistem-kök → derinlik) sırayla uyguluyor,
+`_validate_single_path` yardımcı fonksiyonuyla tekrar önlendi.
+
+**Gerçek bir tasarım hatası test sırasında yakalandı ve düzeltildi.** İlk
+yaklaşım "sistem klasörü" tespitini path bileşenlerinde `"appdata"`,
+`"programdata"` gibi anahtar kelime arayarak yapıyordu — bu, `allowed_root`
+kendisi bu isimlerden birini içeren bir yol altında olduğunda (pytest'in
+`tmp_path`'i `%LOCALAPPDATA%\Temp` altında yaşıyor, gerçek dünyada
+taşınabilir kurulumlar da benzer olabilir) MEŞRU yolları da reddediyordu —
+`test_validate_plan_paths_passes_for_valid_plan` bunu hemen ortaya çıkardı.
+Düzeltme: segment-adı eşleştirmesi yerine `%WINDIR%`/`%ProgramFiles%`/
+`%ProgramData%`/`$Recycle.Bin` gibi KESİN mutlak kök dizinlerin altında
+olup olmadığını `is_path_allowed` ile kontrol eden bir yaklaşıma geçildi;
+`%APPDATA%`/`%LOCALAPPDATA%` kasıtlı olarak listeye alınmadı (kullanıcı
+verisi de barındırabilirler, whitelist kökü zaten kapsam dışına çıkışı
+engelliyor).
+
+**Red-team: 2 bulgu, ikisi de hemen düzeltildi.** (1) Derinlik/traversal
+istismarının tek gerçek yüzeyi `pdfFiles[].filename`di ama sadece
+runtime'da (security.py) yakalanıyordu — `models.py`'ye
+`filename_has_no_path_separators` validator'ı eklendi, artık `/`/`\`
+içeren filename'ler şema seviyesinde 422 ile erkenden reddediliyor;
+runtime whitelist/derinlik kontrolü artık TEK savunma değil, gerçek bir
+defense-in-depth katmanı (tek segmentlik `".."` hâlâ 403 ile whitelist'te
+yakalanıyor). (2) `_system_protected_roots()` prod'da (gerçek Windows)
+`WINDIR`/`ProgramFiles`/`ProgramData` env değişkenlerinden biri eksikse
+sessizce o kök için korumasız kalıyordu — `_warn_if_protected_roots_missing`
+ile en az bir kez WARNING logu eklendi, sessiz devre-dışı kalma riski artık
+loglanıyor. 70/70 test yeşil.
+
 ## allowed-paths-whitelist-security-gate (Saga #271, epic #25)
 
 **İlk Security Gate: `backend/security.py` — canonical path whitelist.**

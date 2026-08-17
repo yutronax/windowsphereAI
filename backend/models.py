@@ -102,6 +102,18 @@ class PdfFileMetadata(BaseModel):
             raise ValueError("must not be empty or whitespace-only")
         return value
 
+    @field_validator("filename")
+    @classmethod
+    def filename_has_no_path_separators(cls, value: str) -> str:
+        # Saga #272 red-team bulgusu: path-traversal/derinlik istismarının
+        # tek gerçek yüzeyi filename'dir (targetFolder zaten YYYY-MM
+        # regex'iyle kilitli) — bunu şema seviyesinde erkenden kapatmak,
+        # backend/security.py'deki runtime derinlik kontrolünü gerçek bir
+        # defense-in-depth yapar, TEK savunma olmaktan çıkarır.
+        if "/" in value or "\\" in value:
+            raise ValueError("must not contain path separators")
+        return value
+
 
 class PlanRequest(BaseModel):
     sessionId: str
