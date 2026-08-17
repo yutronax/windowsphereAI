@@ -1,11 +1,15 @@
-import type { Plan, PlanStep } from './PlanCard';
+import { KNOWN_OPERATION_TYPES, type Plan, type PlanStep } from './PlanCard';
 
-export const KNOWN_OPERATION_TYPES = ['Taşı', 'Kopyala', 'Sil', 'Yeniden Adlandır', 'Listele'] as const;
+export { KNOWN_OPERATION_TYPES };
 
 export type PlanValidationResult = { ok: true; plan: Plan } | { ok: false; error: string };
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+function isKnownOperationType(value: unknown): value is (typeof KNOWN_OPERATION_TYPES)[number] {
+  return typeof value === 'string' && (KNOWN_OPERATION_TYPES as readonly string[]).includes(value);
 }
 
 function validateStep(raw: unknown, index: number): PlanStep | string {
@@ -17,7 +21,7 @@ function validateStep(raw: unknown, index: number): PlanStep | string {
   if (!isNonNegativeInteger(step.order)) {
     return `steps[${index}].order negatif olmayan bir tamsayı olmalı`;
   }
-  if (typeof step.operationType !== 'string' || !(KNOWN_OPERATION_TYPES as readonly string[]).includes(step.operationType)) {
+  if (!isKnownOperationType(step.operationType)) {
     return `steps[${index}].operationType bilinen bir işlem türü olmalı (${KNOWN_OPERATION_TYPES.join(', ')})`;
   }
   if (typeof step.targetFolder !== 'string' || step.targetFolder.trim() === '') {

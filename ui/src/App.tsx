@@ -1,18 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import ChatScreen, { type ChatMessage } from './components/chat/ChatScreen';
+import { validatePlanResponse } from './components/chat/planValidation';
 import OnboardingScreen from './components/onboarding/OnboardingScreen';
 import { BACKEND_ORIGIN, waitForBackendHealth } from './lib/backendHealth';
 
 type SetupConfig = { selectedFolder: string };
-
-type PlanStepResponse = {
-  order: number;
-  operationType: string;
-  targetFolder: string;
-  affectedFileCount: number;
-};
-
-type PlanSkeletonResponse = { steps: PlanStepResponse[] };
 
 let nextAssistantMessageId = 0;
 
@@ -66,14 +58,35 @@ export default function App() {
         return;
       }
 
-      lastFailedSessionIdRef.current = null;
-      const plan: PlanSkeletonResponse = await response.json();
+      const rawPlan = await response.json();
       if (isStale()) return;
+
+      // Saga #281: backend'den gelen plan verisi (2xx olsa bile) hiçbir
+      // runtime doğrulaması olmadan PlanCard'a verilmiyordu (Saga #262
+      // bulgusu). `validatePlanResponse` ile şema doğrulanıyor;
+      // geçersizse plan render edilmiyor, mevcut planError/retry
+      // mekanizmasına (Saga #267) düşülüyor.
+      const validation = validatePlanResponse(rawPlan);
+      if (!validation.ok) {
+        lastFailedSessionIdRef.current = currentSessionId;
+        setPlanError(`Sunucudan geçersiz plan verisi alındı: ${validation.error}`);
+        return;
+      }
+
+      lastFailedSessionIdRef.current = null;
       const assistantMessage: ChatMessage = {
         id: `assistant-${nextAssistantMessageId++}`,
         role: 'assistant',
-        text: plan.steps.length > 0 ? 'Önerilen plan:' : 'Seçili klasörde işlenecek PDF bulunamadı.',
-        plan: { steps: plan.steps, securityStatus: 'approved' },
+        text: validation.plan.steps.length > 0 ? 'Önerilen plan:' : 'Seçili klasörde işlenecek PDF bulunamadı.',
+        // Red-team bulgusu (Saga #281): önceden `securityStatus: 'approved'`
+        // KOŞULSUZ atanıyordu — backend gelecekte gerçekten 'rejected'
+        // dönerse bile sessizce eziliyordu, validatePlanResponse'un
+        // securityStatus doğrulaması fiilen ölü koda dönüşüyordu. Artık
+        // backend'in AÇIKÇA gönderdiği bir değer varsa o kullanılır,
+        // sadece hiç gönderilmemişse (bugünkü backend sözleşmesi) 200
+        // yanıtı = whitelist'ten geçti anlamına geldiği için 'approved'a
+        // düşülür.
+        plan: { ...validation.plan, securityStatus: validation.plan.securityStatus ?? 'approved' },
       };
       setMessages((current) => [...current, assistantMessage]);
     } catch {

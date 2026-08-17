@@ -102,6 +102,59 @@ describe('App — gerçek /api/plan bağlantısı (Saga #287)', () => {
     expect(planCallCount).toBe(2);
   });
 
+  it('shows a planError and does not render PlanCard when the 200 response fails runtime plan validation (Saga #281)', async () => {
+    // Saga #262/#280 bulgusu: backend'den 2xx gelse bile plan verisi
+    // hiçbir runtime doğrulaması olmadan render edilmemeli — geçersiz bir
+    // operationType (KNOWN_OPERATION_TYPES'ta olmayan) planCard'ı DEĞİL,
+    // planError'ı tetiklemeli.
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.endsWith('/api/config')) return Promise.resolve({ ok: false });
+      if (url.endsWith('/api/plan')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              steps: [{ order: 0, operationType: 'BilinmeyenTür', targetFolder: '2026-08', affectedFileCount: 1 }],
+            }),
+        });
+      }
+      return Promise.resolve({ ok: false });
+    });
+    await renderChatScreen(fetchMock);
+
+    fireEvent.change(screen.getByTestId('chat-input-textarea'), { target: { value: 'PDF\'leri sırala' } });
+    fireEvent.click(screen.getByText('Gönder'));
+
+    const indicator = await screen.findByTestId('plan-error-indicator');
+    expect(indicator).toHaveTextContent('Sunucudan geçersiz plan verisi alındı');
+    expect(screen.queryByTestId('plan-card')).not.toBeInTheDocument();
+  });
+
+  it('respects an explicit "rejected" securityStatus from the backend instead of overriding it (Saga #281 red-team fix)', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.endsWith('/api/config')) return Promise.resolve({ ok: false });
+      if (url.endsWith('/api/plan')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              steps: [{ order: 0, operationType: 'Taşı', targetFolder: '2026-08', affectedFileCount: 1 }],
+              securityStatus: 'rejected',
+              rejectionReason: 'Güvenlik taramasından geçemedi',
+            }),
+        });
+      }
+      return Promise.resolve({ ok: false });
+    });
+    await renderChatScreen(fetchMock);
+
+    fireEvent.change(screen.getByTestId('chat-input-textarea'), { target: { value: 'PDF\'leri sırala' } });
+    fireEvent.click(screen.getByText('Gönder'));
+
+    await screen.findByTestId('plan-rejection-reason');
+    expect(screen.getByTestId('plan-approve-button')).toBeDisabled();
+  });
+
   it('does not call any apply/orchestrator endpoint when a plan is approved (AC-5)', async () => {
     const fetchMock = vi.fn().mockImplementation((url: string) => {
       if (url.endsWith('/api/config')) return Promise.resolve({ ok: false });

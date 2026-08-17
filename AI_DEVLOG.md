@@ -1,5 +1,34 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## plan-validation-wiring (Saga #281, epic #24)
+
+**Yazılmış ama hiç bağlanmamış bir güvenlik kontrolü nihayet
+bağlandı.** `validatePlanResponse` (Saga #262/#280) uzun süredir
+`planValidation.ts`'te duruyordu ama `App.tsx`'in gerçek backend'e
+bağlanması (Saga #287) olmadan bağlanacak bir yer yoktu. Artık
+`App.tsx: requestPlan`, backend'den gelen ham JSON'u `PlanCard`'a
+vermeden önce `validatePlanResponse`'tan geçiriyor — geçersizse
+(`ok: false`) `PlanCard` HİÇ render edilmiyor, mevcut `planError`/retry
+mekanizmasına (Saga #267) düşülüyor.
+
+**`PlanStep.operationType` tipi sıkılaştırıldı.** `string`'den
+`(typeof KNOWN_OPERATION_TYPES)[number]`'a — `KNOWN_OPERATION_TYPES`
+sabiti `PlanCard.tsx`'e taşındı (tipin sahibi orası, dairesel import'a
+girmemek için `planValidation.ts` oradan import edip re-export ediyor).
+`PlanCard.test.tsx`'teki serbest-string test verisi ('İkinci'/'Birinci'
+operationType olarak kullanılmıştı, sırlama testiydi asıl amacı)
+gerçek operationType değerlerine çevrildi, sıralama ayrımı
+`targetFolder` üzerinden yapıldı.
+
+**Red-team: gerçek bir bug bulundu, hemen düzeltildi.** İlk
+implementasyonda `App.tsx` `{ ...validation.plan, securityStatus:
+'approved' }` yazıyordu — spread SONRASINDA literal `'approved'`
+atandığı için backend gerçekten `securityStatus: 'rejected'` dönse
+BİLE bu koşulsuzca eziliyordu. Düzeltme: `validation.plan.
+securityStatus ?? 'approved'` — backend açıkça bir değer gönderirse
+o kullanılır, sadece hiç gönderilmemişse `approved`a düşülür. 125/125
+test yeşil, `tsc --noEmit` temiz.
+
 ## security-gate-reusable-dependency (Saga #283, epic #25)
 
 **Epic 25'in son task'ı — Security Gate yeniden kullanılabilir hale

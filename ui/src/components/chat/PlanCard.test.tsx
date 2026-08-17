@@ -27,15 +27,15 @@ describe('PlanCard (plan-adimlari-kart / Saga #262)', () => {
   it('renders steps in order regardless of input array order (AC-3)', () => {
     const plan: Plan = {
       steps: [
-        { order: 2, operationType: 'İkinci', targetFolder: 'B', affectedFileCount: 1 },
-        { order: 1, operationType: 'Birinci', targetFolder: 'A', affectedFileCount: 1 },
+        { order: 2, operationType: 'Taşı', targetFolder: 'İkinci-klasör', affectedFileCount: 1 },
+        { order: 1, operationType: 'Taşı', targetFolder: 'Birinci-klasör', affectedFileCount: 1 },
       ],
     };
     render(<PlanCard plan={plan} />);
 
     const items = screen.getAllByRole('listitem');
-    expect(items[0]).toHaveTextContent('Birinci');
-    expect(items[1]).toHaveTextContent('İkinci');
+    expect(items[0]).toHaveTextContent('Birinci-klasör');
+    expect(items[1]).toHaveTextContent('İkinci-klasör');
   });
 
   it('uses an ordered list structure for accessible step-order announcement (AC-4)', () => {

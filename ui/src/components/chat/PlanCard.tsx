@@ -1,8 +1,14 @@
 import { useState } from 'react';
 
+// Saga #281: backend'in üretebileceği bilinen operasyon türleri
+// (backend/models.py: OperationType enum ile birebir eşleşir).
+// `planValidation.ts` bu listeyi buradan import eder — `PlanStep`in
+// sahibi burası, tip döngüsüne (circular import) girmemek için.
+export const KNOWN_OPERATION_TYPES = ['Taşı', 'Kopyala', 'Sil', 'Yeniden Adlandır', 'Listele'] as const;
+
 export type PlanStep = {
   order: number;
-  operationType: string;
+  operationType: (typeof KNOWN_OPERATION_TYPES)[number];
   targetFolder: string;
   affectedFileCount: number;
 };
