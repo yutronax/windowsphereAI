@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, type KeyboardEvent } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -19,8 +19,11 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
   const [isFolderInvalid, setIsFolderInvalid] = useState(false);
   const [isValidatingFolder, setIsValidatingFolder] = useState(false);
   const latestRequestedPathRef = useRef<string | null>(null);
+  const chooseFolderButtonRef = useRef<HTMLButtonElement>(null);
+  const requestTextareaRef = useRef<HTMLTextAreaElement>(null);
   const isPathTooltipVisible = isFocused || isHovered;
   const isReady = backendStatus === 'ready';
+  const canSubmit = isReady && !!selectedFolder && !isFolderInvalid && !isValidatingFolder;
 
   async function chooseFolder() {
     const folder = await open({ directory: true, multiple: false });
@@ -42,6 +45,7 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
     if (latestRequestedPathRef.current !== normalizedPath) return;
     setIsFolderInvalid(!isAccessible);
     setIsValidatingFolder(false);
+    if (!isAccessible) chooseFolderButtonRef.current?.focus();
   }
 
   function handleRequestTextChange(value: string) {
@@ -50,11 +54,17 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
   }
 
   function handleContinueClick() {
+    if (!canSubmit) return;
     if (requestText.trim() === '') {
       setIsRequestEmpty(true);
+      requestTextareaRef.current?.focus();
       return;
     }
     onContinue();
+  }
+
+  function handleFolderPathKeyDown(e: KeyboardEvent) {
+    if (e.key === 'Enter') handleContinueClick();
   }
 
   return (
@@ -125,7 +135,7 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
           margin-top: 4px;
         }
       `}</style>
-      <button type="button" className="onboarding-primary-btn" onClick={chooseFolder} disabled={!isReady}>Klasör Seç</button>
+      <button ref={chooseFolderButtonRef} type="button" className="onboarding-primary-btn" onClick={chooseFolder} disabled={!isReady}>Klasör Seç</button>
       {selectedFolder && (
         <>
           <p
@@ -137,6 +147,7 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
             onBlur={() => setIsFocused(false)}
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
+            onKeyDown={handleFolderPathKeyDown}
           >
             {selectedFolder}
           </p>
@@ -151,6 +162,7 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
         </div>
       )}
       <textarea
+        ref={requestTextareaRef}
         data-testid="request-textarea"
         aria-label="Dosya işlemi isteği"
         className={isRequestEmpty ? 'onboarding-textarea has-error' : 'onboarding-textarea'}
@@ -163,7 +175,7 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
           <p className="onboarding-error-message">Devam etmek için bir istek yazın.</p>
         </div>
       )}
-      <button type="button" onClick={handleContinueClick} disabled={!isReady || !selectedFolder || isFolderInvalid || isValidatingFolder}>Devam</button>
+      <button type="button" onClick={handleContinueClick} disabled={!canSubmit}>Devam</button>
     </main>
   );
 }

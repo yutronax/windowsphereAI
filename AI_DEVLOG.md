@@ -124,3 +124,38 @@ alınmadı (tek "erişilemez" mesajı), kapsamlı path normalization (case,
 symlink) yapılmadı — sadece trailing slash/backslash temizlendi. Red-team
 kök sürücü path'lerinde (`C:\` → `C:`) bu minimal normalize'ın bir edge
 case'i kaçırdığını (low severity) not etti, düzeltilmedi.
+
+## klavye-ile-form-gezintisi (Saga #257, epic #23)
+
+**Codex kotası hâlâ dolu — aynı override deseni.** Testler ve
+implementasyon Claude tarafından doğrudan yazıldı, bağımsız doğrulama
+`obss-red-team` subagent'ı ile yapıldı.
+
+**Bulunan ve düzeltilen bug — doğrulama atlatma (red-team, MEDIUM).**
+`handleContinueClick`, "Devam" butonunun `disabled` özniteliğindeki
+`isFolderInvalid`/`isValidatingFolder` kontrollerini içermiyordu — bu
+kontrol sadece JSX'teki `disabled` ifadesinde vardı, fonksiyonun kendi
+mantığında değil. Bu görev kapsamında `selected-folder-path` elementine
+Enter-ile-submit eklenince (klasör durumundan bağımsız her zaman
+odaklanabilir bir eleman), klavye kullanıcısı geçersiz bir klasör
+seçiliyken bu elemana Tab'layıp Enter'a basarak `onContinue()`'u
+tetikleyebiliyordu — fare kullanıcısının disabled buton sayesinde
+atlayamadığı bir kontrolü klavye kullanıcısı atlatabiliyordu. Tam da
+erişilebilirlik odaklı bir görevin önlemesi gereken türden bir
+mouse/klavye asimetrisi. **Düzeltme:** `canSubmit` adında tek bir
+paylaşılan predicate çıkarıldı (`isReady && selectedFolder && !isFolderInvalid
+&& !isValidatingFolder`), hem butonun `disabled`'ında hem
+`handleContinueClick`'in başında kullanıldı — kural artık tek yerde
+tanımlı, bir regresyon testiyle doğrulandı.
+
+**Mimari keşif — native buton Enter davranışına güvenme kararı doğrulandı.**
+`atdd.md`/`plan.md` aşamasında, "Klasör Seç" ve "Devam" butonlarına Enter
+için ayrı `onKeyDown` eklenip eklenmeyeceği bir Unknown olarak
+işaretlenmişti (jsdom'da native Enter→click davranışı güvenilir simüle
+edilemiyor). Gerçek Playwright/Chromium'da test edilince bu varsayım
+doğrulandı — ek kod gerekmedi, sadece native buton olmayan tek odaklanabilir
+eleman olan `selected-folder-path`'e `onKeyDown` eklendi. Red-team ayrıca
+gerçek paketlemede Tauri'nin WebView2 (Windows) kullanacağını, bunun
+Playwright'ın Chromium'undan farklı bir motor olabileceğini not etti —
+bu, henüz gerçek Tauri paketlemesi olmadığı için (Saga #279, release-blocker)
+doğrudan test edilemedi, ileride #279 kapatılınca yeniden doğrulanmalı.

@@ -322,4 +322,115 @@ test.describe('first-run folder onboarding', () => {
 
     await expect(page.getByTestId('selected-folder-path')).toHaveText('C:\\Users\\Yusuf\\Belgeler');
   });
+
+  // AC-1 (klavye-ile-form-gezintisi / Saga #257): Tab sırası Klasör Seç -> path -> textarea -> Devam olmalı.
+  test('tabs through the form in the order: choose folder, path, request textarea, continue (AC-1)', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+        invoke: async (cmd: string) => {
+          if (cmd === 'plugin:dialog|open') return 'C:\\Users\\Yusuf\\Documents\\Müvekkiller';
+          if (cmd === 'plugin:fs|exists') return true;
+          return Promise.reject(new Error(`unmocked command: ${cmd}`));
+        },
+      };
+    });
+    await page.goto('/');
+    await page.getByRole('button', { name: /klasör seç/i }).click();
+    await expect(page.getByTestId('selected-folder-path')).toBeVisible();
+
+    await page.locator('body').click();
+    await page.keyboard.press('Tab');
+    await expect(page.getByRole('button', { name: /klasör seç/i })).toBeFocused();
+
+    await page.keyboard.press('Tab');
+    await expect(page.getByTestId('selected-folder-path')).toBeFocused();
+
+    await page.keyboard.press('Tab');
+    await expect(page.getByTestId('request-textarea')).toBeFocused();
+
+    await page.keyboard.press('Tab');
+    await expect(page.getByRole('button', { name: /devam/i })).toBeFocused();
+  });
+
+  // AC-3 (klavye-ile-form-gezintisi / Saga #257): Devam butonu odaklıyken Enter, form geçerliyse gönderimi tetikler (native buton davranışı).
+  test('submits when Enter is pressed while the Continue button is focused and the form is valid (AC-3)', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+        invoke: async (cmd: string) => {
+          if (cmd === 'plugin:dialog|open') return 'C:\\Users\\Yusuf\\Documents\\Müvekkiller';
+          if (cmd === 'plugin:fs|exists') return true;
+          return Promise.reject(new Error(`unmocked command: ${cmd}`));
+        },
+      };
+    });
+    await page.goto('/');
+    await page.getByRole('button', { name: /klasör seç/i }).click();
+    await page.getByTestId('request-textarea').fill('bu klasördeki PDF\'leri sırala');
+
+    await page.getByRole('button', { name: /devam/i }).focus();
+    await page.keyboard.press('Enter');
+
+    // onContinue şu an no-op (Kapsam Dışı) — bu test yalnızca native Enter->click
+    // davranışının submit'i (handleContinueClick'i) tetiklediğini, hata göstermediğini doğrular.
+    await expect(page.getByText('Devam etmek için bir istek yazın.')).toHaveCount(0);
+  });
+
+  // AC-4 (klavye-ile-form-gezintisi / Saga #257): Devam odaklıyken Enter, form geçersizse hata gösterir ve odağı textarea'ya taşır.
+  test('shows the empty-request error and moves focus to the textarea when Enter is pressed on Continue with an invalid form (AC-4)', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+        invoke: async (cmd: string) => {
+          if (cmd === 'plugin:dialog|open') return 'C:\\Users\\Yusuf\\Documents\\Müvekkiller';
+          if (cmd === 'plugin:fs|exists') return true;
+          return Promise.reject(new Error(`unmocked command: ${cmd}`));
+        },
+      };
+    });
+    await page.goto('/');
+    await page.getByRole('button', { name: /klasör seç/i }).click();
+
+    await page.getByRole('button', { name: /devam/i }).focus();
+    await page.keyboard.press('Enter');
+
+    await expect(page.getByText('Devam etmek için bir istek yazın.')).toBeVisible();
+    await expect(page.getByTestId('request-textarea')).toBeFocused();
+  });
+
+  // AC-5 (klavye-ile-form-gezintisi / Saga #257): erişilemez klasör sonrası odak Klasör Seç butonuna gerçek tarayıcıda da taşınmalı.
+  test('moves focus to the "Klasör Seç" button after selecting an inaccessible folder, in a real browser (AC-5)', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+        invoke: async (cmd: string) => {
+          if (cmd === 'plugin:dialog|open') return 'C:\\Users\\Yusuf\\Documents\\Silinmiş';
+          if (cmd === 'plugin:fs|exists') return false;
+          return Promise.reject(new Error(`unmocked command: ${cmd}`));
+        },
+      };
+    });
+    await page.goto('/');
+
+    await page.getByRole('button', { name: /klasör seç/i }).click();
+    await expect(page.getByText('Seçilen klasöre erişilemiyor. Lütfen başka bir klasör seçin.')).toBeVisible();
+
+    await expect(page.getByRole('button', { name: /klasör seç/i })).toBeFocused();
+  });
+
+  // AC-6 (klavye-ile-form-gezintisi / Saga #257): Klasör Seç odaklıyken Enter, native davranışıyla dialog açmaya devam eder (regresyon).
+  test('still opens the folder dialog when Enter is pressed while "Klasör Seç" is focused (AC-6)', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as Window & { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+        invoke: async (cmd: string) => {
+          if (cmd === 'plugin:dialog|open') return 'C:\\Users\\Yusuf\\Documents\\Müvekkiller';
+          if (cmd === 'plugin:fs|exists') return true;
+          return Promise.reject(new Error(`unmocked command: ${cmd}`));
+        },
+      };
+    });
+    await page.goto('/');
+
+    await page.getByRole('button', { name: /klasör seç/i }).focus();
+    await page.keyboard.press('Enter');
+
+    await expect(page.getByTestId('selected-folder-path')).toHaveText('C:\\Users\\Yusuf\\Documents\\Müvekkiller');
+  });
 });

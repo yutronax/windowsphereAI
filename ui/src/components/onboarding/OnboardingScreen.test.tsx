@@ -404,3 +404,80 @@ describe('invalid folder rejection (gecersiz-klasor-reddi)', () => {
     expect(screen.getByRole('button', { name: /devam/i })).toBeDisabled();
   });
 });
+
+// AC-2..AC-5 (klavye-ile-form-gezintisi / Saga #257): Enter ile gönderim ve
+// hata sonrası odak taşıma. AC-1 (tam Tab sırası) ve AC-3'ün "Devam" butonu
+// kısmı ile AC-6 (native buton Enter davranışı) jsdom'da güvenilir simüle
+// edilemediği için sadece e2e'de test ediliyor (bkz. plan.md).
+describe('keyboard navigation and focus management (klavye-ile-form-gezintisi)', () => {
+  async function renderWithValidFolder(onContinue = vi.fn()) {
+    invokeTauriCommand.mockResolvedValue(true);
+    openFolderDialog.mockResolvedValue('C:\\Users\\Yusuf\\Documents\\Müvekkiller');
+    render(<OnboardingScreen backendStatus="ready" onContinue={onContinue} />);
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+    await screen.findByTestId('selected-folder-path');
+    return { onContinue };
+  }
+
+  it('does not submit and inserts a normal newline when Enter is pressed inside the textarea (AC-2)', async () => {
+    const { onContinue } = await renderWithValidFolder();
+    const textarea = screen.getByTestId('request-textarea');
+
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    expect(onContinue).not.toHaveBeenCalled();
+    expect(screen.queryByText('Devam etmek için bir istek yazın.')).not.toBeInTheDocument();
+  });
+
+  it('calls onContinue when Enter is pressed on the selected-folder-path element and the form is valid (AC-3)', async () => {
+    const { onContinue } = await renderWithValidFolder();
+    fireEvent.change(screen.getByTestId('request-textarea'), { target: { value: 'bu klasördeki PDF\'leri sırala' } });
+
+    fireEvent.keyDown(screen.getByTestId('selected-folder-path'), { key: 'Enter' });
+
+    expect(onContinue).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the empty-request error and moves focus to the textarea when Enter is pressed on an invalid form (AC-4)', async () => {
+    const { onContinue } = await renderWithValidFolder();
+
+    fireEvent.keyDown(screen.getByTestId('selected-folder-path'), { key: 'Enter' });
+
+    expect(onContinue).not.toHaveBeenCalled();
+    expect(screen.getByText('Devam etmek için bir istek yazın.')).toBeVisible();
+    expect(document.activeElement).toBe(screen.getByTestId('request-textarea'));
+  });
+
+  it('moves focus to the textarea when Continue is clicked on an invalid form (AC-4, tıklama)', async () => {
+    await renderWithValidFolder();
+
+    fireEvent.click(screen.getByRole('button', { name: /devam/i }));
+
+    expect(document.activeElement).toBe(screen.getByTestId('request-textarea'));
+  });
+
+  it('moves focus to the "Klasör Seç" button after selecting an inaccessible folder (AC-5)', async () => {
+    invokeTauriCommand.mockResolvedValue(false);
+    openFolderDialog.mockResolvedValue('C:\\Users\\Yusuf\\Documents\\Silinmiş');
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+    await screen.findByText('Seçilen klasöre erişilemiyor. Lütfen başka bir klasör seçin.');
+
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /klasör seç/i }));
+  });
+
+  it('does not call onContinue when Enter is pressed on selected-folder-path while the folder is invalid, even with non-empty request text (red-team: doğrulama atlatma düzeltmesi)', async () => {
+    invokeTauriCommand.mockResolvedValue(false);
+    openFolderDialog.mockResolvedValue('C:\\Users\\Yusuf\\Documents\\Silinmiş');
+    const onContinue = vi.fn();
+    render(<OnboardingScreen backendStatus="ready" onContinue={onContinue} />);
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+    await screen.findByText('Seçilen klasöre erişilemiyor. Lütfen başka bir klasör seçin.');
+    fireEvent.change(screen.getByTestId('request-textarea'), { target: { value: 'geçerli bir istek metni' } });
+
+    fireEvent.keyDown(screen.getByTestId('selected-folder-path'), { key: 'Enter' });
+
+    expect(onContinue).not.toHaveBeenCalled();
+  });
+});

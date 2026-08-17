@@ -1,0 +1,39 @@
+{
+  "task_slug": "klavye-ile-form-gezintisi",
+  "saga_task_id": 257,
+  "reviewed_by": "obss-red-team subagent (bağımsız, Codex kotası dolu olduğu için Bölüm C override kapsamında çağrıldı)",
+  "reviewed_at": "2026-08-17",
+  "security_findings": [
+    {
+      "finding": "Doğrulama atlatma: handleContinueClick() sadece requestText boşluğunu kontrol ediyordu, isFolderInvalid/isValidatingFolder'ı DEĞİL — bu kontrol sadece Devam butonunun disabled özniteliğinde vardı. selected-folder-path elementi isFolderInvalid'den bağımsız her zaman odaklanabilir kaldığından, klavye kullanıcısı geçersiz klasör seçiliyken bu elemana Tab'layıp Enter'a basarak onContinue()'u tetikleyebiliyordu.",
+      "severity": "medium",
+      "scenario": "Kullanıcı erişilemez bir klasör seçer (hata gösterilir, odak Klasör Seç'e gider), geçerli bir istek metni yazar, sonra selected-folder-path'e Tab'layıp Enter'a basar — form hâlâ geçersizken onContinue() tetiklenir. Fare kullanıcısı (disabled buton sayesinde) bunu yapamazken klavye kullanıcısı yapabiliyordu — erişilebilirlik odaklı bir görevde tam da önlenmesi gereken asimetri.",
+      "status": "düzeltildi — canSubmit paylaşılan predicate'i çıkarılıp hem butonun disabled'ında hem handleContinueClick'in başında kullanıldı, bir regresyon testi eklendi. code_diff.md/test_diff.md güncellendi."
+    },
+    {
+      "finding": "chooseFolder() içinde invoke await'inden sonra chooseFolderButtonRef.current?.focus() koşulsuz çağrılıyor, kullanıcının bu arada odağı başka yere taşımış olabileceği (ör. textarea'ya yazmaya başlamış) kontrol edilmeden.",
+      "severity": "low",
+      "scenario": "Yavaş bir ağ paylaşımı kontrolü sürerken kullanıcı textarea'ya geçip yazmaya başlarsa, invoke sonuçlanınca odak beklenmedik şekilde 'Klasör Seç' butonuna geri çekilir — özellikle ekran okuyucu kullanıcılar için rahatsız edici.",
+      "status": "kabul edildi, düzeltilmedi — bu task'ın dar kapsamı için düşük öncelikli, ileride bir 'kullanıcı hâlâ o an focus ettiği elemanda mı' kontrolü eklenebilir."
+    },
+    {
+      "finding": "backendStatus async invoke sırasında 'ready' dışına geçerse (buton disabled olur), sonraki chooseFolderButtonRef.current?.focus() çağrısı disabled butona odaklanamayacağı için sessizce no-op olur, hiçbir fallback yok.",
+      "severity": "low",
+      "scenario": "Klasör erişilebilirlik kontrolü sürerken backend çökerse/timeout olursa, hata durumu render edilir ama klavye kullanıcısı için odak hiçbir anlamlı yere taşınmaz.",
+      "status": "kabul edildi, düzeltilmedi — düşük olasılıklı bir zamanlama senaryosu, bu task'ın kapsamı dışında."
+    }
+  ],
+  "approved_points": [
+    "code_diff.md/test_diff.md iddiaları gerçek git diff ile birebir örtüşüyor.",
+    "Odak taşıma zamanlaması (ref her zaman koşulsuz render edilen elemente işaret ediyor, useEffect gerekmiyor) doğru bulundu.",
+    "selected-folder-path'e eklenen onKeyDown, mevcut tooltip (onFocus/onBlur) mantığıyla çakışmıyor.",
+    "AC-1'in sadece e2e'de test edilmesi (jsdom native Tab-order simüle etmiyor) makul bir kapsam kararı.",
+    "Scope disiplini iyi: sadece OnboardingScreen.tsx + iki test dosyası değişti, plan.md ile birebir uyumlu.",
+    "'Klasör Seç'/'Devam' butonlarında native Enter davranışına güvenme kararı gerçek tarayıcıda (Playwright) doğrulandı."
+  ],
+  "overall_assessment": "İlk implementasyonda gerçek bir MEDIUM doğrulama-atlatma bulgusu vardı (klavye ile disabled-buton korumasını atlatma) — bu, tam da bu görevin önlemesi gereken türden bir mouse/klavye asimetrisiydi. Commit öncesi düzeltildi (canSubmit tek kaynak) ve regresyon testiyle doğrulandı. İki düşük öncelikli odak-zamanlama bulgusu kayıt altında, engelleyici değil. Diff iddiaları gerçek ve bağımsız olarak yeniden çalıştırılan testler (34 unit + 24 e2e) yeşil.",
+  "ready_to_commit": {
+    "decision": "evet",
+    "gerekce": "MEDIUM doğrulama-atlatma bulgusu commit öncesi düzeltildi (canSubmit paylaşılan predicate) ve yeni bir regresyon testiyle doğrulandı. Tüm testler bağımsız olarak yeniden çalıştırılıp PASS bulundu (34 unit + 24 e2e). Kapsam taşması yok. İki LOW bulgu kayıt altında, engelleyici değil."
+  }
+}
