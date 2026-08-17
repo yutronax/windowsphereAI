@@ -130,6 +130,72 @@ def test_apply_plan_rolls_back_completed_moves_when_a_later_move_fails(session, 
     assert (tmp_path / "b.pdf").exists()
 
 
+def test_apply_plan_rolls_back_completed_moves_in_reverse_order(session, tmp_path, monkeypatch):
+    _write_pdf(tmp_path, "a.pdf")
+    _write_pdf(tmp_path, "b.pdf")
+    _write_pdf(tmp_path, "c.pdf")
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+        PdfFileMetadata(filename="c.pdf", createdAt="2026-08-03"),
+    ]
+    plan = _plan([PlanStep(order=0, operationType=OperationType.MOVE, targetFolder="2026-08", affectedFileCount=3)])
+
+    real_move = shutil.move
+    move_order: list[str] = []
+
+    def tracking_move(src, dst):
+        move_order.append(f"{src}->{dst}")
+        if len(move_order) == 3:  # c.pdf'in ileri taşınması başarısız olsun
+            raise OSError("simulated disk failure")
+        return real_move(src, dst)
+
+    monkeypatch.setattr("backend.orchestrator.shutil.move", tracking_move)
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    # Rollback hareketleri, ileri taşımaların TERS sırasıyla gerçekleşmeli:
+    # önce (son tamamlanan) b.pdf, sonra a.pdf geri taşınmalı.
+    reverse_moves = move_order[3:]
+    assert len(reverse_moves) == 2
+    assert reverse_moves[0].split("->")[0].endswith("b.pdf")
+    assert reverse_moves[1].split("->")[0].endswith("a.pdf")
+    assert (tmp_path / "a.pdf").exists()
+    assert (tmp_path / "b.pdf").exists()
+    assert (tmp_path / "c.pdf").exists()
+    assert not (tmp_path / "2026-08").exists() or list((tmp_path / "2026-08").iterdir()) == []
+
+
+def test_apply_plan_reads_rollback_source_from_recorded_backup_path(session, tmp_path, monkeypatch):
+    _write_pdf(tmp_path, "a.pdf")
+    _write_pdf(tmp_path, "b.pdf")
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+    plan = _plan([PlanStep(order=0, operationType=OperationType.MOVE, targetFolder="2026-08", affectedFileCount=2)])
+
+    real_move = shutil.move
+    call_count = {"n": 0}
+
+    def flaky_move(src, dst):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise OSError("simulated disk failure")
+        return real_move(src, dst)
+
+    monkeypatch.setattr("backend.orchestrator.shutil.move", flaky_move)
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    completed_op = session.query(Transaction).one().operations[0]
+    assert completed_op.backup_path == str(tmp_path / "a.pdf")
+    assert completed_op.status == "rolled_back"
+    assert (tmp_path / "a.pdf").exists()
+
+
 def test_apply_plan_marks_transaction_and_operations_rolled_back_on_failure(session, tmp_path, monkeypatch):
     _write_pdf(tmp_path, "a.pdf")
     _write_pdf(tmp_path, "b.pdf")

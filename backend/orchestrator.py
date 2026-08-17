@@ -49,9 +49,13 @@ def apply_plan(
 ) -> Transaction:
     """Onaylanmış bir planı TEK transaction içinde gerçekten uygular: hedef
     tarih klasörlerini oluşturur, PDF'leri plan sırasıyla taşır, her adımı
-    `FileOperation` olarak kaydeder. Bir adım başarısız olursa o ana kadar
-    taşınmış dosyalar ters sırayla eski konumlarına geri taşınır ve
-    `PlanApplicationError` fırlatılır — kısmi başarı asla döndürülmez.
+    `FileOperation` olarak kaydeder (Saga #275). Bir adım başarısız olursa
+    (Saga #276) o ana kadar tamamlanmış adımlar, kaydedilen
+    `FileOperation.destination_path`/`backup_path` alanları kullanılarak
+    TERS SIRAYLA eski konumlarına geri taşınır; `PlanApplicationError`
+    net bir hata mesajıyla fırlatılır — kısmi başarı asla döndürülmez, her
+    `FileOperation`ın nihai durumu (`rolled_back`/`rollback_failed`) DB'ye
+    yazılır.
 
     Sadece `OperationType.MOVE` destekler (bu MVP'nin "PDF'leri tarihe göre
     sırala" kapsamı taşımadır); başka bir operationType görürse hiçbir
@@ -70,7 +74,7 @@ def apply_plan(
     transaction = create_transaction(session)
     session.commit()  # Transaction kaydı, sonuç ne olursa olsun kalıcı olsun.
 
-    applied: list[tuple[FileOperation, Path, Path]] = []  # (operation, destination, original_source)
+    applied: list[FileOperation] = []
     try:
         for step, files in step_files:
             target_dir = allowed_root / step.targetFolder
@@ -90,9 +94,15 @@ def apply_plan(
                 shutil.move(str(source_path), str(destination_path))
                 operation.status = "completed"
                 session.commit()
-                applied.append((operation, destination_path, source_path))
+                applied.append(operation)
     except Exception as exc:
-        for operation, destination_path, original_source_path in reversed(applied):
+        # Saga #276: geri alma, bellek-içi bir yardımcı yapı değil, DOĞRUDAN
+        # kaydedilmiş `FileOperation.destination_path`/`backup_path`
+        # alanlarından okunarak yapılır — tamamlanmış adımlar TERS SIRAYLA
+        # (`reversed(applied)`) geri çevrilir.
+        for operation in reversed(applied):
+            destination_path = Path(operation.destination_path)
+            original_source_path = Path(operation.backup_path)
             if not destination_path.exists():
                 operation.status = "rolled_back"
                 continue

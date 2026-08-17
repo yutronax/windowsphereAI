@@ -1,5 +1,38 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## kismi-hatada-ters-sirali-geri-alma (Saga #276, epic #25)
+
+**Rollback artık kaydedilen alanlardan okuyor, paralel bir bellek-içi
+yapıdan değil.** Saga #274'ün ilk implementasyonu geri almayı ayrı bir
+`applied: list[tuple[...]]` yardımcı listesiyle yapıyordu — işlevsel
+olarak doğruydu ama görev tanımının ("backup_path ve işlem kayıtlarını
+kullanarak") istediği şey değildi. Refactor: `applied` artık sadece
+`FileOperation` nesnelerinin bir listesi, rollback sırasında
+`destination_path`/`backup_path` DOĞRUDAN bu DB kayıtlarından okunuyor
+(görev tanımının istediği "backup_path ve işlem kayıtlarını kullanarak"
+ifadesiyle artık birebir örtüşüyor).
+
+**Netleştirme (red-team bulgusu): bu, süreç-çökmesi senaryosuna karşı
+kurtarma SAĞLAMIYOR.** `applied` hâlâ TAMAMEN bellek-içi bir liste —
+`apply_plan` çalışırken process çökerse bu liste kaybolur, hiçbir şey
+rollback'i tetiklemez, transaction DB'de "pending" asılı kalır. Bu
+refactor SADECE aynı process/çağrı içindeki rollback'in DOĞRU
+KAYNAKTAN (DB alanları) okumasını sağlıyor — gerçek bir başlangıçta
+(startup) "yarım kalmış transaction'ları tara ve geri al" mekanizması
+YOK, bu Saga #286'nın konusu ve henüz yazılmadı.
+
+**Ters sıra davranışı artık açıkça test ediliyor.** 3 dosyalı bir plan,
+3. dosyanın taşınması sırasında başarısız olacak şekilde kuruldu;
+`move_order` listesi doğrulandı — geri alma hareketleri gerçekten TERS
+sırayla (önce en son tamamlanan) gerçekleşiyor.
+
+**"Sohbete... net hata durumu dönmelidir" kısmı henüz kablolanmadı.**
+`PlanApplicationError` net, açıklayıcı bir mesajla fırlatılıyor (backend
+tarafı tamam) ama bunu sohbet arayüzüne göstermek `App.tsx`'in gerçek bir
+apply-çağrısına bağlanmasını gerektiriyor — bu, Saga #273/#285'te
+belgelenen aynı önkoşula (gerçek `pdfFiles` kaynağı yok) takılıyor, ayrı
+bir task açılmadı çünkü zaten #285'in kapsamına giriyor. 86/86 test yeşil.
+
 ## orchestrator-transactionli-plan-uygulama (Saga #274, epic #25)
 
 **İlk gerçek dosya I/O: `backend/orchestrator.py: apply_plan()`.** Onaylı
