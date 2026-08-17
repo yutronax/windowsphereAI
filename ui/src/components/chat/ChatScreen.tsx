@@ -6,9 +6,10 @@ export type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string
 type Props = {
   initialMessages?: ChatMessage[];
   onSendMessage?: (message: ChatMessage) => void;
+  isGeneratingPlan?: boolean;
 };
 
-export default function ChatScreen({ initialMessages = [], onSendMessage }: Props) {
+export default function ChatScreen({ initialMessages = [], onSendMessage, isGeneratingPlan = false }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [draft, setDraft] = useState('');
   const [editingPlanMessageId, setEditingPlanMessageId] = useState<string | null>(null);
@@ -88,6 +89,40 @@ export default function ChatScreen({ initialMessages = [], onSendMessage }: Prop
           font-size: 16px;
           box-sizing: border-box;
         }
+        .chat-input-textarea:disabled {
+          background-color: #F3F4F6;
+          cursor: not-allowed;
+        }
+        .plan-loading-indicator {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 4px 16px;
+          font-size: 14px;
+          color: #4B5563;
+        }
+        .plan-loading-dots {
+          display: inline-flex;
+          gap: 4px;
+        }
+        .plan-loading-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background-color: #6B7280;
+          animation: plan-loading-bounce 1.2s infinite ease-in-out both;
+        }
+        .plan-loading-dot:nth-child(1) { animation-delay: -0.24s; }
+        .plan-loading-dot:nth-child(2) { animation-delay: -0.12s; }
+        @keyframes plan-loading-bounce {
+          0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+          40% { opacity: 1; transform: scale(1); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .plan-loading-dot {
+            animation: none;
+          }
+        }
       `}</style>
       <ul
         className="chat-message-list"
@@ -110,6 +145,7 @@ export default function ChatScreen({ initialMessages = [], onSendMessage }: Prop
                 plan={message.plan}
                 onChangePlan={() => handleChangePlan(message.id)}
                 stale={staleMessageIds.has(message.id)}
+                isGeneratingPlan={isGeneratingPlan}
               />
             )}
           </li>
@@ -120,6 +156,16 @@ export default function ChatScreen({ initialMessages = [], onSendMessage }: Prop
           Planı değiştirmek için ne yapmak istediğinizi yazın.
         </p>
       )}
+      {isGeneratingPlan && (
+        <div className="plan-loading-indicator" data-testid="plan-loading-indicator" aria-live="polite">
+          <span className="plan-loading-dots" aria-hidden="true">
+            <span className="plan-loading-dot" />
+            <span className="plan-loading-dot" />
+            <span className="plan-loading-dot" />
+          </span>
+          Plan hazırlanıyor…
+        </div>
+      )}
       <div className="chat-input-area">
         <textarea
           ref={textareaRef}
@@ -129,8 +175,9 @@ export default function ChatScreen({ initialMessages = [], onSendMessage }: Prop
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={handleKeyDown}
+          disabled={isGeneratingPlan}
         />
-        <button type="button" onClick={sendDraft} disabled={draft.trim() === ''}>Gönder</button>
+        <button type="button" onClick={sendDraft} disabled={draft.trim() === '' || isGeneratingPlan}>Gönder</button>
       </div>
     </main>
   );

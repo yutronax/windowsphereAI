@@ -1,0 +1,25 @@
+{
+  "security_findings": [
+    {
+      "finding": "isGeneratingPlan disabled the textarea/send button but PlanCard's 'Planı değiştir' and 'Onayla' buttons were not gated by it — a user could click 'Değiştir' while a new plan generates, producing contradictory UI (both 'Plan hazırlanıyor…' and the edit hint visible at once) and a stale editingPlanMessageId.",
+      "severity": "medium",
+      "status": "fixed",
+      "fix": "PlanCard now accepts isGeneratingPlan prop; canApprove additionally requires !isGeneratingPlan, and the 'Planı değiştir' button gets disabled={isGeneratingPlan}. ChatScreen passes isGeneratingPlan through to PlanCard. Regression tests added in both PlanCard.test.tsx and ChatScreen.test.tsx."
+    },
+    {
+      "finding": "Three separate aria-live='polite' regions (message list, edit hint, loading indicator) can announce near-simultaneously, giving nondeterministic screen-reader announcement order.",
+      "severity": "low",
+      "status": "accepted_risk",
+      "note": "Accessibility polish gap, not a functional defect; out of scope for this task per dar-kapsam ilkesi — noted for a future accessibility pass, not blocking."
+    }
+  ],
+  "approved_points": [
+    "Disabled-textarea + Enter key: confirmed correct — React does not dispatch keydown to disabled elements, so double-submit prevention (AC-3) is real, not assumed.",
+    "prefers-reduced-motion correctly scoped to only the dot animation; text remains visible either way (AC-2).",
+    "Default isGeneratingPlan=false with no internal HTTP/state in ChatScreen preserves the existing prop-driven pattern from #259/#264.",
+    "Draft text preserved (not cleared) while textarea disabled — no destructive UX.",
+    "73/73 tests green after fix, diff matches code_diff.md/test_diff.md claims."
+  ],
+  "overall_assessment": "Initial implementation had one real medium-severity cross-component gap (PlanCard buttons not gated by isGeneratingPlan), fixed immediately with a regression test in both affected test files. Low-severity aria-live ordering note accepted as out-of-scope polish per project's dar-kapsam convention.",
+  "ready_to_commit": true
+}

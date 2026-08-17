@@ -129,6 +129,22 @@ describe('PlanCard (plan-adimlari-kart / Saga #262)', () => {
     expect(onApprove).not.toHaveBeenCalled();
   });
 
+  it('disables both approve and change-plan buttons while a new plan is generating (Saga #265 red-team fix)', () => {
+    const onApprove = vi.fn();
+    const onChangePlan = vi.fn();
+    render(
+      <PlanCard
+        plan={{ ...onePlan, securityStatus: 'approved' }}
+        onApprove={onApprove}
+        onChangePlan={onChangePlan}
+        isGeneratingPlan
+      />,
+    );
+
+    expect(screen.getByTestId('plan-approve-button')).toBeDisabled();
+    expect(screen.getByTestId('plan-change-button')).toBeDisabled();
+  });
+
   it('permanently disables approval and shows a stale message when stale=true (Saga #264 AC-4)', () => {
     const onApprove = vi.fn();
     render(<PlanCard plan={{ ...onePlan, securityStatus: 'approved' }} onApprove={onApprove} stale />);

@@ -1,5 +1,21 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## plan-hazirlaniyor-yukleniyor-durumu (Saga #265, epic #24)
+
+**Yükleniyor göstergesi + çift-gönderim kilidi eklendi.** `ChatScreen`'e
+dışarıdan kontrol edilen `isGeneratingPlan` prop'u eklendi; true iken
+"Plan hazırlanıyor…" + 3 nokta CSS animasyonu gösteriliyor
+(`prefers-reduced-motion: reduce` ile animasyon durduruluyor), textarea
+ve gönder düğmesi disabled kalıyor.
+
+**Red-team: MEDIUM bulgu bulundu ve hemen düzeltildi.** İlk halde
+`PlanCard`'ın "Planı değiştir"/"Onayla" düğmeleri `isGeneratingPlan`'a
+bağlı değildi — kullanıcı yeni plan üretilirken eski planı değiştirmeye
+çalışabiliyor, "Plan hazırlanıyor…" ile "Planı değiştirmek için yazın"
+ipucu aynı anda çelişkili gösteriliyordu. `isGeneratingPlan` prop'u
+`PlanCard`'a da geçirildi, her iki düğme de o sırada disabled; regresyon
+testi her iki test dosyasına eklendi (73/73 yeşil).
+
 ## plani-degistir-duzenleme-baglami (Saga #264, epic #24)
 
 **"Planı değiştir" düğmesi eklendi, onaydan tamamen izole.** `PlanCard`'a

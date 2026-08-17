@@ -13,14 +13,20 @@ export type Plan = {
   rejectionReason?: string;
 };
 
-type Props = { plan: Plan; onApprove?: () => void; onChangePlan?: () => void; stale?: boolean };
+type Props = {
+  plan: Plan;
+  onApprove?: () => void;
+  onChangePlan?: () => void;
+  stale?: boolean;
+  isGeneratingPlan?: boolean;
+};
 
 const DEFAULT_REJECTION_MESSAGE = 'Bu plan güvenlik kontrolünden geçemedi.';
 const PENDING_MESSAGE = 'Güvenlik kontrolü bekleniyor…';
 const STALE_MESSAGE = 'Bu plan artık geçerli değil, yeni plan bekleniyor.';
 const STATUS_TEXT_ID = 'plan-approve-status';
 
-export default function PlanCard({ plan, onApprove, onChangePlan, stale = false }: Props) {
+export default function PlanCard({ plan, onApprove, onChangePlan, stale = false, isGeneratingPlan = false }: Props) {
   const [hasApproved, setHasApproved] = useState(false);
   const sortedSteps = [...plan.steps]
     .map((step, index) => ({ step, index }))
@@ -32,7 +38,11 @@ export default function PlanCard({ plan, onApprove, onChangePlan, stale = false 
   // etkinleşir. `securityStatus` henüz gelmemişken (undefined) veya "rejected"
   // ise devre dışı kalır — kontrol edilmemiş bir plan asla onaylanabilir
   // durumda gösterilmez (bağımsız red-team bulgusu, 2026-08-17).
-  const canApprove = isApproved && !hasApproved && !stale;
+  // Yeni bir plan üretilirken (isGeneratingPlan) bu plan üzerinde onay/değiştir
+  // eylemi de kilitlenir — aksi halde "Plan hazırlanıyor…" ile "Planı değiştirmek
+  // için yazın" ipucu aynı anda çelişkili biçimde görünebilir (red-team bulgusu,
+  // Saga #265).
+  const canApprove = isApproved && !hasApproved && !stale && !isGeneratingPlan;
   const statusText = stale
     ? STALE_MESSAGE
     : isRejected
@@ -140,6 +150,7 @@ export default function PlanCard({ plan, onApprove, onChangePlan, stale = false 
         type="button"
         className="plan-card-change-btn"
         data-testid="plan-change-button"
+        disabled={isGeneratingPlan}
         onClick={() => onChangePlan?.()}
       >
         Planı değiştir

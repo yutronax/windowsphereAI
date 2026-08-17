@@ -163,4 +163,39 @@ describe('ChatScreen (dikey-mesaj-akisi / Saga #259)', () => {
     expect(screen.getByTestId('chat-edit-plan-hint')).toBeVisible();
     expect(screen.getByTestId('plan-approve-button')).toBeEnabled();
   });
+
+  it('shows the "Plan hazırlanıyor…" indicator and disables input/send while isGeneratingPlan (Saga #265 AC-1, AC-3)', () => {
+    render(<ChatScreen isGeneratingPlan />);
+
+    expect(screen.getByTestId('plan-loading-indicator')).toHaveTextContent('Plan hazırlanıyor…');
+    expect(screen.getByTestId('chat-input-textarea')).toBeDisabled();
+    expect(screen.getByText('Gönder')).toBeDisabled();
+  });
+
+  it('does not show the loading indicator and keeps the input usable when isGeneratingPlan is false/omitted (Saga #265 AC-4, regression)', () => {
+    render(<ChatScreen />);
+
+    expect(screen.queryByTestId('plan-loading-indicator')).not.toBeInTheDocument();
+    expect(screen.getByTestId('chat-input-textarea')).toBeEnabled();
+  });
+
+  it('announces the loading indicator in an aria-live polite region (Saga #265 AC-5)', () => {
+    render(<ChatScreen isGeneratingPlan />);
+
+    expect(screen.getByTestId('plan-loading-indicator')).toHaveAttribute('aria-live', 'polite');
+  });
+
+  it('disables a visible plan card\'s approve/change-plan buttons while isGeneratingPlan, avoiding contradictory UI (Saga #265 red-team fix)', () => {
+    render(
+      <ChatScreen
+        isGeneratingPlan
+        initialMessages={[
+          { id: 'p1', role: 'assistant', text: 'Önerilen plan:', plan: { steps: [{ order: 1, operationType: 'Taşı', targetFolder: 'X', affectedFileCount: 2 }], securityStatus: 'approved' } },
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId('plan-approve-button')).toBeDisabled();
+    expect(screen.getByTestId('plan-change-button')).toBeDisabled();
+  });
 });
