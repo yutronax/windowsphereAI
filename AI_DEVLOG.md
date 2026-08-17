@@ -1,5 +1,29 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## pdf-siralama-istek-normalizasyonu (Saga #268, epic #25) — Epic #25'e başlangıç
+
+**Backend Entry katmanı normalizasyonu — gerçek bir bug düzeltildi.**
+`SessionRequest.not_blank` validator'ı `requestText` için sadece "boş mu"
+kontrolü yapıyordu ama trim edilmiş değeri DÖNDÜRMÜYORDU — task'ın
+"istek metni trimlenmeli" AC'siyle doğrudan çelişen bir bug'dı. Yeni
+`backend/request_normalization.py` modülü (`normalize_request_text`)
+eklendi, `/api/session` artık gerçekten trim edilmiş metni döndürüyor.
+
+**Red-team: 3 düşük-önemli bulgu, hepsi hemen düzeltildi.**
+(1) `selectedFolder` trim edilmiyordu ("Windows yolları boşluk almaz"
+varsayımı pratikte yanlış — API payload'ı temiz olmayabilir) → paylaşılan
+bir `_trim_and_reject_blank` helper'a taşınıp her iki alan da artık trim
+ediliyor. (2) Unicode boşluk karakterleri (U+00A0, U+3000) ve
+tab/newline-only test edilmemişti → eklendi. (3) İki blank-check yolu
+zamanla birbirinden sapabilirdi → tek bir yardımcı fonksiyona birleştirildi.
+Gerçek dosya sistemi path-validation'ı (whitelist/traversal) bilinçli
+olarak kapsam dışı bırakıldı — bu zaten Saga #271/#272'nin işi. 24/24
+test yeşil.
+
+Python ortamı notu: proje için ayrı bir venv yok; `pytest`+`fastapi`
+`C:\Users\YUSUF ÇİNAR\AppData\Local\Programs\Python\Python311\python.exe`
+kurulumunda mevcut, backend testleri o python ile çalıştırılıyor.
+
 ## asistan-mesaj-balonu-stili (Saga #261, epic #24) — Epic #24 tamamlandı
 
 **Asistan mesaj balonu stillendirildi, epic #24 (MVP: Ana sohbet arayüzü)

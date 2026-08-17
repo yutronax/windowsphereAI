@@ -1,0 +1,36 @@
+{
+  "security_findings": [
+    {
+      "finding": "The 'don't pass raw user text to a filesystem tool' principle exists only as a naming convention today — no code path in the current codebase actually consumes selectedFolder/requestText for filesystem I/O yet.",
+      "severity": "low",
+      "status": "accepted_risk",
+      "note": "Correctly out of scope for #268 (entry layer only, no filesystem I/O). Must be enforced (path resolution + allow-listing) by whichever task actually reads selectedFolder for I/O — epic #25's #271/#272 (whitelist + depth/system-folder checks) already exist to cover exactly this."
+    },
+    {
+      "finding": "selectedFolder was not trimmed, only rejected if blank, based on the assumption Windows paths never carry leading/trailing whitespace.",
+      "severity": "low",
+      "status": "fixed",
+      "fix": "Assumption was wrong in practice (API payload strings aren't guaranteed clean). Added normalize_selected_folder() (shares _trim_and_reject_blank with normalize_request_text) and wired it into SessionRequest's selectedFolder validator. Regression tests added at both unit (test_request_normalization.py) and integration (test_main_integration.py) level."
+    },
+    {
+      "finding": "Test coverage omitted Unicode whitespace edge cases (non-breaking space U+00A0, ideographic space U+3000, tab/newline-only strings).",
+      "severity": "low",
+      "status": "fixed",
+      "fix": "Added test_raises_for_tab_and_newline_only_text and test_raises_for_unicode_whitespace_only_text — confirmed Python's str.strip() already handles these correctly, now locked in by tests."
+    },
+    {
+      "finding": "The two blank-check code paths (selectedFolder inline, requestText delegated) risked drifting apart over time.",
+      "severity": "low",
+      "status": "fixed",
+      "fix": "Unified into a single shared _trim_and_reject_blank() helper in request_normalization.py, used by both normalize_request_text and the new normalize_selected_folder."
+    }
+  ],
+  "approved_points": [
+    "Pydantic v2 field_validator split (separate validators per field name) verified safe — no ordering/overwrite hazard, each validator is strictly scoped to its own field.",
+    "normalize_request_text is a small, pure, testable function correctly separated from the pydantic model.",
+    "New integration test correctly exercises the real /api/session endpoint end-to-end, closing the original bug (validator checked blank but returned the untrimmed original value).",
+    "The originally described bug (requestText silently kept leading/trailing whitespace despite the AC) is confirmed real and now fixed."
+  ],
+  "overall_assessment": "Small, correct fix for the described entry-layer bug. All findings were low-severity and cheap to close immediately (unify blank-check helper, trim selectedFolder defensively, add Unicode-whitespace test cases) — applied inline rather than deferred. The one remaining out-of-scope item (real filesystem path enforcement) is correctly left to #271/#272 which already exist for that purpose. 24/24 tests green.",
+  "ready_to_commit": true
+}

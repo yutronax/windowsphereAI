@@ -91,6 +91,26 @@ def test_session_endpoint_returns_422_for_missing_fields():
     assert response.status_code == 422
 
 
+def test_session_endpoint_trims_leading_and_trailing_whitespace_from_request_text():
+    response = client.post(
+        "/api/session",
+        json={"selectedFolder": r"C:\Users\Yusuf\Documents", "requestText": "  PDF'leri tarihe göre sırala  "},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["requestText"] == "PDF'leri tarihe göre sırala"
+
+
+def test_session_endpoint_trims_leading_and_trailing_whitespace_from_selected_folder():
+    response = client.post(
+        "/api/session",
+        json={"selectedFolder": r"  C:\Users\Yusuf\Documents  ", "requestText": "bir istek"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["selectedFolder"] == r"C:\Users\Yusuf\Documents"
+
+
 def test_cors_header_present_for_session_post_from_allowed_origin():
     response = client.post(
         "/api/session",
