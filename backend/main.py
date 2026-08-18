@@ -13,15 +13,30 @@ from backend.config import load_setup_config
 from backend.db import create_db_engine, create_session_factory
 from backend.db_models import Transaction
 from backend.models import (
+    AppliedFileOperation,
+    ApplyPlanRequest,
+    OperationType,
     PlanRequest,
     PlanSkeleton,
     RevertTransactionRequest,
     RevertTransactionResponse,
     SessionContext,
     SessionRequest,
+    TransactionApplyResponse,
     TransactionSummary,
 )
-from backend.orchestrator import TransactionRevertError, revert_transaction
+from backend.orchestrator import (
+    PlanApplicationError,
+    TransactionRevertError,
+    apply_plan,
+    revert_transaction,
+)
+# Saga #309 red-team fix: `_distribute_files_to_steps` özel (underscore) bir
+# fonksiyon ama transaction-sayısı-diff yarışını (race) ortadan kaldırmak için
+# orchestrator.py'ye dokunmadan buradan doğrudan çağrılıyor (bkz.
+# apply_plan_endpoint içindeki ön-kontrol yorumu) — bu, incelenmiş/onaylanmış
+# minimal düzeltmedir.
+from backend.orchestrator import _distribute_files_to_steps
 from backend.pdf_discovery import discover_pdf_files
 from backend.plan_generation import (
     LLMClient,
@@ -241,3 +256,98 @@ def create_plan(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"{exc.description} {exc.reason}") from exc
 
     return plan
+
+
+def get_session_for_apply(payload: ApplyPlanRequest) -> SessionContext:
+    """`get_session_or_404` ile aynı mantık ama farklı body şeması
+    (ApplyPlanRequest, PlanRequest değil) olduğu için ayrı — ikisini
+    birleştiren bir Protocol/generic burada gereksiz karmaşıklık
+    olurdu (dar kapsam ilkesi, saga-oto atdd.md Soru 3)."""
+    session = _sessions.get(payload.sessionId)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Oturum bulunamadı")
+    return session
+
+
+@app.post("/api/transactions/apply")
+def apply_plan_endpoint(
+    payload: ApplyPlanRequest,
+    session: SessionContext = Depends(get_session_for_apply),
+    db: DbSession = Depends(get_db_session),
+) -> TransactionApplyResponse:
+    allowed_root = Path(session.selectedFolder)
+    if not allowed_root.is_dir():
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Seçili klasör artık mevcut değil")
+
+    # Saga #309 ATDD Soru 4: apply_plan boş/sadece-LIST bir planı
+    # sorunsuzca "committed" (0 FileOperation) sayar — bu, eski projenin
+    # "hiçbir dosya işlenmedi ama success döndü" hata sınıfı. apply_plan
+    # ÇAĞRILMADAN ÖNCE reddedilir, orchestrator.py'ye dokunulmaz.
+    has_real_operation = any(step.operationType != OperationType.LIST for step in payload.plan.steps)
+    if not has_real_operation:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Plan hiçbir gerçek dosya işlemi içermiyor",
+        )
+
+    pdf_files = discover_pdf_files(allowed_root)
+
+    # Saga #309 red-team fix: transaction-sayısı ÖNCESİ/SONRASI diff'ine
+    # (racy — eşzamanlı başka bir isteğin oluşturduğu transaction bu isteği
+    # yanlış sınıflandırıp OLMAYAN bir transaction'ı sızdırabilirdi)
+    # dayanmak YERİNE, `apply_plan`'ın `create_transaction()`'dan ÖNCE
+    # yaptığı whitelist-benzeri doğrulamayı (`_distribute_files_to_steps`)
+    # burada DOĞRUDAN, `apply_plan` çağrılmadan ÖNCE, kendi try/except'i
+    # içinde tekrar çalıştırıyoruz. Bu determinist ön-kontrol geçerse,
+    # `apply_plan` içindeki asıl çağrı bu adımda ASLA
+    # `PlanApplicationError` fırlatamaz — dolayısıyla `apply_plan` çağrısı
+    # sırasında yakalanan HERHANGİ bir `PlanApplicationError`, tanım
+    # itibarıyla `create_transaction()` ÇALIŞTIKTAN SONRA oluşmuş olmalı
+    # (bkz. orchestrator.py apply_plan: create_transaction erken çağrılır,
+    # sonra adımlar uygulanır/rollback edilir). `_distribute_files_to_steps`
+    # özel (underscore) bir fonksiyon ama bu düzeltme onu orchestrator.py'ye
+    # dokunmadan doğrudan çağırmayı gerektiriyor (incelenmiş/onaylanmış
+    # minimal kapsam). Hata mesajları sadece dosya adı içerir, tam path
+    # sızdırmaz (bkz. _distribute_files_to_steps).
+    try:
+        _distribute_files_to_steps(pdf_files, payload.plan.steps)
+    except PlanApplicationError as exc:
+        logger.warning("Plan geçersiz (apply, transaction oluşturulmadan önce): %s", exc)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    try:
+        transaction = apply_plan(db, payload.plan, pdf_files, allowed_root)
+    except PathWhitelistError as exc:
+        logger.warning(
+            "Whitelist ihlali (apply): %s %s (allowed_root=%s)",
+            exc.description, exc.offending_path, exc.allowed_root,
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"{exc.description} {exc.reason}") from exc
+    except PlanApplicationError as exc:
+        # Yukarıdaki ön-kontrol zaten geçti — bu noktaya ULAŞILDIYSA
+        # `apply_plan` zaten `create_transaction()`'ı çalıştırmış ve
+        # ardından ATOMİK olarak geri almış olmalı (transaction.status =
+        # "rolled_back", bkz. orchestrator.py). Exception'ı 500'e çevirmek
+        # yerine, DB'de zaten rolled_back olarak işaretlenmiş transaction'ı
+        # normal bir 200 yanıtla döneriz — frontend'in transactionResult.ts'i
+        # rolled_back'i zaten "failed" olarak gösteriyor (Saga #277).
+        logger.warning("Plan uygulaması başarısız, geri alındı: %s", exc)
+        latest_transaction = db.scalars(
+            select(Transaction).order_by(Transaction.id.desc())
+        ).first()
+        if latest_transaction is None:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Plan uygulanamadı") from exc
+        return TransactionApplyResponse(
+            id=latest_transaction.id,
+            status=latest_transaction.status,
+            operations=[],
+        )
+
+    return TransactionApplyResponse(
+        id=transaction.id,
+        status=transaction.status,
+        operations=[
+            AppliedFileOperation(destination_path=op.destination_path, status=op.status)
+            for op in transaction.operations
+        ],
+    )

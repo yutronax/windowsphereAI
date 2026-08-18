@@ -1,5 +1,61 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## apply-plan endpoint (Saga #309, epic #25) — ürünün ilk gerçek uçtan uca dosya işlemi
+
+**Kilometre taşı: uygulama artık gerçekten bir şey yapıyor.** `POST
+/api/plan` planı önerebiliyordu, `PlanCard` onaya sunabiliyordu, ama
+`onApprovePlan` kasıtlı bir no-op'tu (Saga #287) — hiçbir dosya asla
+gerçekten taşınmıyordu. Bu görev `POST /api/transactions/apply`
+endpoint'ini ekleyip mevcut, olgun `orchestrator.apply_plan`'a (atomik
+transaction + rollback + backup_path, zaten 200+ testle kapsanıyordu)
+bağladı ve frontend'i (`App.tsx`'in `handleApprovePlan`'ı) gerçekten bu
+endpoint'i çağırıp `ResultCard`'ı render edecek şekilde bağladı.
+`orchestrator.py`/`security.py`/`db_models.py`'ye HİÇ dokunulmadı —
+görev kasıtlı olarak sadece HTTP + frontend kablolama katmanıydı.
+
+**Frontend'in eksik veri sorunu.** `planValidation.ts`'in ürettiği
+budanmış `Plan` tipi (PlanCard için) `fileNames`i (backend'in
+`apply_plan`i için ZORUNLU) taşımıyordu. Yeni bir sunucu-taraflı
+plan-saklama katmanı eklemek yerine (kapsam dışı mimari genişleme),
+`/api/plan`in HAM yanıtı `ChatMessage.rawPlan` alanında (sadece
+App.tsx içinde kullanılır, PlanCard render'ını etkilemez) ayrıca
+saklandı ve onay anında bu geri gönderildi.
+
+**Sıfır-işlem-ama-başarı false-positive'i önceden kapatıldı.**
+`apply_plan` boş/`LIST`-sadece bir planı sorunsuzca "committed" (0
+`FileOperation`) sayıyordu — eski projenin bilinen hata sınıfı. Endpoint,
+`apply_plan`ı çağırmadan ÖNCE plan en az bir gerçek (LIST-dışı) adım
+içerip içermediğini kontrol ediyor, yoksa 422 ile reddediyor,
+`orchestrator.py`'ye dokunulmuyor.
+
+**Red-team bulgusu — race condition, düzeltildi.** İlk implementasyon,
+"whitelist-benzeri geçersiz plan" (transaction hiç oluşmadı, 403 olmalı)
+ile "gerçek rollback" (transaction oluştu ve geri alındı, 200 olmalı)
+ayrımını `Transaction` tablosunun global satır sayısını ÖNCESİ/SONRASI
+karşılaştırarak yapıyordu — eşzamanlı bir istek araya girip transaction
+oluşturursa, bu isteğin YANLIŞ transaction'ın id/status'unu (başka bir
+isteğe ait) döndürmesine yol açabilirdi (TOCTOU). Düzeltme:
+`orchestrator._distribute_files_to_steps`'i (private ama import edilebilir)
+`apply_plan`dan ÖNCE doğrudan çağırıp deterministik bir ön-kontrol
+yapıldı — sayaç karşılaştırması tamamen kaldırıldı, `orchestrator.py`'ye
+yine dokunulmadı.
+
+Test (red) ve implementasyon (green) adımları ayrı genel-amaçlı
+subagent'lara delegasyon disipliniyle yazdırıldı; bağımsız `obss-red-team`
+incelemesi gerçek git diff'e karşı çalıştırıldı, bulunan race condition
+aynı disiplinle (ayrı bir subagent'a) düzeltildi ve yeniden doğrulandı.
+
+Backend: 209/209 yeşil (`backend/tests/test_main_integration.py`, 5 yeni
+test). Frontend: 138/138 yeşil (`ui/src/App.test.tsx`, 3 yeni test + 1
+artık geçersiz no-op-varsayımı test güncellendi).
+
+**Kapsam dışı bırakılan riskler (ayrı task adayları):** 20+ dosyalık
+toplu işlemler için ek onay eşiği yok; kilitli dosya/AV geçici engeli
+(WinError 32/5) için ayrı bir bounded-retry mekanizması eklenmedi
+(`apply_plan`in mevcut atomik rollback'i "sessiz tek deneme
+başarısızlığı" sınıfını zaten önlüyor, ama TÜM planın geri alınması UX
+açısından gelecekte iyileştirilebilir).
+
 ## purge-lock (Saga #302, epic #28)
 
 **Saga #300'ün bıraktığı orta önemli bulgu, scheduler'a bağlanmadan ÖNCE

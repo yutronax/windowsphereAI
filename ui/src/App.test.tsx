@@ -155,28 +155,119 @@ describe('App — gerçek /api/plan bağlantısı (Saga #287)', () => {
     expect(screen.getByTestId('plan-approve-button')).toBeDisabled();
   });
 
-  it('does not call any apply/orchestrator endpoint when a plan is approved (AC-5)', async () => {
+  // Saga #309: bu test eskiden (AC-5, Saga #287 döneminde) apply_plan'ın
+  // KASITLI OLARAK no-op olduğu bir dönemi doğruluyordu. Saga #309 bunu
+  // gerçek bir POST /api/transactions/apply çağrısına bağlamayı AÇIKÇA
+  // gerektirdiği için bu eski varsayım artık YANLIŞ — güncel davranış
+  // aşağıdaki 'gerçek /api/transactions/apply bağlantısı' describe
+  // bloğunda test ediliyor, bu test kaldırıldı (silinmedi, obsolete
+  // olarak burada not düşüldü — pipeline talimatı gereği).
+});
+
+describe('App — gerçek /api/transactions/apply bağlantısı (Saga #309)', () => {
+  async function renderChatScreen(fetchMock: ReturnType<typeof vi.fn>) {
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App />);
+    fireEvent.click(await screen.findByText('mock-onboarding-continue'));
+    await screen.findByTestId('main-chat-screen');
+    return fetchMock;
+  }
+
+  // Backend'in GERÇEK PlanSkeleton şekli (fileNames dahil) — App.tsx'in
+  // budanmış frontend Plan tipiyle KARIŞTIRILMAMALI (bkz. atdd.md Soru 2).
+  const RAW_PLAN_RESPONSE = {
+    dateSource: 'created_at',
+    sortOrder: 'ascending',
+    steps: [
+      {
+        order: 0,
+        operationType: 'Taşı',
+        targetFolder: '2026-08',
+        affectedFileCount: 1,
+        fileNames: ['a.pdf'],
+      },
+    ],
+  };
+
+  async function approvePlan(fetchMock: ReturnType<typeof vi.fn>) {
+    await renderChatScreen(fetchMock);
+    fireEvent.change(screen.getByTestId('chat-input-textarea'), { target: { value: "PDF'leri sırala" } });
+    fireEvent.click(screen.getByText('Gönder'));
+    await screen.findByTestId('plan-approve-button');
+    fireEvent.click(screen.getByTestId('plan-approve-button'));
+  }
+
+  it('calls POST /api/transactions/apply with sessionId and the raw plan (including fileNames) on approval', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/config')) return Promise.resolve({ ok: false });
+      if (url.endsWith('/api/plan')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(RAW_PLAN_RESPONSE) });
+      }
+      if (url.endsWith('/api/transactions/apply')) {
+        expect(init?.method).toBe('POST');
+        expect(JSON.parse(init!.body as string)).toEqual({
+          sessionId: '11111111-1111-1111-1111-111111111111',
+          plan: RAW_PLAN_RESPONSE,
+        });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ id: 1, status: 'committed', operations: [] }),
+        });
+      }
+      return Promise.resolve({ ok: false });
+    });
+
+    await approvePlan(fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/transactions/apply'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('renders a ResultCard with the correct file count on a successful apply response', async () => {
     const fetchMock = vi.fn().mockImplementation((url: string) => {
       if (url.endsWith('/api/config')) return Promise.resolve({ ok: false });
       if (url.endsWith('/api/plan')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(RAW_PLAN_RESPONSE) });
+      }
+      if (url.endsWith('/api/transactions/apply')) {
         return Promise.resolve({
           ok: true,
           json: () =>
             Promise.resolve({
-              steps: [{ order: 0, operationType: 'Taşı', targetFolder: '2026-08', affectedFileCount: 1 }],
+              id: 42,
+              status: 'committed',
+              operations: [{ destination_path: 'C:\\Users\\Yusuf\\Documents\\2026-08\\a.pdf', status: 'completed' }],
             }),
         });
       }
       return Promise.resolve({ ok: false });
     });
-    await renderChatScreen(fetchMock);
-    fireEvent.change(screen.getByTestId('chat-input-textarea'), { target: { value: 'PDF\'leri sırala' } });
-    fireEvent.click(screen.getByText('Gönder'));
-    await screen.findByTestId('plan-approve-button');
-    fetchMock.mockClear();
 
-    fireEvent.click(screen.getByTestId('plan-approve-button'));
+    await approvePlan(fetchMock);
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    const resultCard = await screen.findByTestId('result-card');
+    expect(resultCard).toBeVisible();
+    expect(screen.getByTestId('result-file-count')).toHaveTextContent('1 dosya işlendi');
+  });
+
+  it('shows a failed result state when the apply request fails', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.endsWith('/api/config')) return Promise.resolve({ ok: false });
+      if (url.endsWith('/api/plan')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(RAW_PLAN_RESPONSE) });
+      }
+      if (url.endsWith('/api/transactions/apply')) {
+        return Promise.resolve({ ok: false, json: () => Promise.resolve({ detail: 'Oturum bulunamadı' }) });
+      }
+      return Promise.resolve({ ok: false });
+    });
+
+    await approvePlan(fetchMock);
+
+    const resultCard = await screen.findByTestId('result-card');
+    expect(resultCard).toBeVisible();
+    expect(screen.getByTestId('result-status-text')).toHaveTextContent('İşlem tamamlanamadı.');
   });
 });

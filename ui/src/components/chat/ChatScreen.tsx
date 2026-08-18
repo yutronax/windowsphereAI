@@ -8,6 +8,11 @@ export type ChatMessage = {
   text: string;
   plan?: Plan;
   result?: TransactionResult;
+  // Saga #309: `/api/plan`'ın HAM (budanmadan önceki) JSON gövdesi —
+  // sadece App.tsx tarafından `/api/transactions/apply`e geri göndermek
+  // için saklanır, ChatScreen/PlanCard bunu RENDER ETMEZ (bkz. atdd.md
+  // Soru 2, plan.md).
+  rawPlan?: Record<string, unknown>;
 };
 
 type Props = {

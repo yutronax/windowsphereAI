@@ -2,12 +2,12 @@ import json
 import uuid
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.pool import StaticPool
 
-from backend.db_models import Base
+from backend.db_models import Base, Transaction
 from backend.file_operations import create_transaction, record_file_operation
 from backend.main import app, get_db_session, get_llm_client
 from backend.models import DateSource, OperationType, PdfFileMetadata, PlanSkeleton, PlanStep, SortOrder
@@ -578,6 +578,174 @@ def test_revert_endpoint_reports_the_real_db_status_after_losing_the_claim_race(
     # (bayat bellek-ici deger) donerdi. Duzeltilmis davranis: DB'nin GERCEK
     # guncel degeri.
     assert response.json() == {"transactionId": txn_id, "status": "backup_purged"}
+
+
+def _valid_apply_plan_body(file_names: list[str] | None = None) -> dict:
+    return {
+        "dateSource": "created_at",
+        "sortOrder": "ascending",
+        "steps": [
+            {
+                "order": 0,
+                "operationType": "Taşı",
+                "targetFolder": "2026-08",
+                "affectedFileCount": len(file_names) if file_names is not None else 1,
+                "fileNames": file_names if file_names is not None else ["a.pdf"],
+            }
+        ],
+    }
+
+
+def test_apply_plan_endpoint_moves_the_file_on_disk_and_returns_committed_status(tmp_path):
+    # Saga #309: onaylanan plan gerçekten POST /api/transactions/apply'a
+    # gönderildiğinde dosyalar diskte gerçekten taşınmalı ve yanıt
+    # TransactionApplyResponse şeklini (id/status/operations) taşımalı.
+    db_session = _in_memory_db_session()
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4 fake")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post(
+            "/api/transactions/apply",
+            json={"sessionId": session_id, "plan": _valid_apply_plan_body()},
+        )
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "committed"
+    assert isinstance(body["id"], int)
+    assert body["operations"] == [
+        {"destination_path": str(tmp_path / "2026-08" / "a.pdf"), "status": "completed"}
+    ]
+    # Dosya GERÇEKTEN diskte taşınmış olmalı.
+    assert not (tmp_path / "a.pdf").exists()
+    assert (tmp_path / "2026-08" / "a.pdf").exists()
+
+
+def test_apply_plan_endpoint_returns_422_and_creates_no_transaction_for_a_zero_real_operation_plan(tmp_path):
+    # Saga #309 ATDD Soru 4: boş steps VEYA sadece LIST adımlarından oluşan
+    # bir plan, "0 dosya işlendi ama success" false-positive'ini önlemek
+    # için apply_plan hiç çağrılmadan 422 ile reddedilmeli — hiçbir
+    # Transaction satırı DB'ye yazılmamalı.
+    db_session = _in_memory_db_session()
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4 fake")
+    session_id = _create_session(selected_folder=str(tmp_path))
+    empty_plan = {"dateSource": "created_at", "sortOrder": "ascending", "steps": []}
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post(
+            "/api/transactions/apply",
+            json={"sessionId": session_id, "plan": empty_plan},
+        )
+    finally:
+        app.dependency_overrides.clear()
+        transaction_count = len(db_session.scalars(select(Transaction)).all())
+        db_session.close()
+
+    assert response.status_code == 422
+    assert transaction_count == 0
+
+
+def test_apply_plan_endpoint_returns_422_for_a_plan_with_only_list_steps(tmp_path):
+    db_session = _in_memory_db_session()
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4 fake")
+    session_id = _create_session(selected_folder=str(tmp_path))
+    list_only_plan = {
+        "dateSource": "created_at",
+        "sortOrder": "ascending",
+        "steps": [
+            {
+                "order": 0,
+                "operationType": "Listele",
+                "targetFolder": "2026-08",
+                "affectedFileCount": 1,
+                "fileNames": ["a.pdf"],
+            }
+        ],
+    }
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post(
+            "/api/transactions/apply",
+            json={"sessionId": session_id, "plan": list_only_plan},
+        )
+    finally:
+        app.dependency_overrides.clear()
+        transaction_count = len(db_session.scalars(select(Transaction)).all())
+        db_session.close()
+
+    assert response.status_code == 422
+    assert transaction_count == 0
+
+
+def test_apply_plan_endpoint_returns_403_when_a_file_name_is_not_in_the_whitelisted_pdf_files(tmp_path):
+    # Whitelist ihlali: fileNames, allowed_root'ta taranan pdf_files'ta
+    # BULUNMAYAN bir dosya adına atıfta bulunuyor. Tam path istemciye
+    # SIZDIRILMAMALI (Saga #283 ilkesi) — sadece kısa `reason`.
+    db_session = _in_memory_db_session()
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4 fake")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post(
+            "/api/transactions/apply",
+            json={"sessionId": session_id, "plan": _valid_apply_plan_body(file_names=["does-not-exist.pdf"])},
+        )
+        # Saga #309 red-team fix regresyon testi: bu 403, `_distribute_files_
+        # to_steps` ön-kontrolünden geliyor ve `apply_plan`/`create_transaction`
+        # HİÇ ÇAĞRILMAMALI — yani bu istek SIFIR yeni Transaction satırı
+        # oluşturmalı. Eski (racy) count-diff sürümünde bu doğruydu ama sadece
+        # eşzamanlı başka bir transaction yokken; artık deterministik.
+        transaction_count = len(db_session.scalars(select(Transaction)).all())
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert str(tmp_path) not in detail
+    assert transaction_count == 0
+
+
+def test_apply_plan_endpoint_returns_404_for_an_unknown_session_id(tmp_path):
+    db_session = _in_memory_db_session()
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post(
+            "/api/transactions/apply",
+            json={"sessionId": str(uuid.uuid4()), "plan": _valid_apply_plan_body()},
+        )
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 404
+
+
+def test_apply_plan_endpoint_returns_410_when_the_selected_folder_no_longer_exists(tmp_path):
+    db_session = _in_memory_db_session()
+    missing_folder = tmp_path / "silinmis-klasor"
+    session_id = _create_session(selected_folder=str(missing_folder))
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post(
+            "/api/transactions/apply",
+            json={"sessionId": session_id, "plan": _valid_apply_plan_body()},
+        )
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 410
 
 
 def test_revert_endpoint_returns_200_with_revert_failed_status_when_the_physical_move_fails(tmp_path):

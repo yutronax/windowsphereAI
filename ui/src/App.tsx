@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import ChatScreen, { type ChatMessage } from './components/chat/ChatScreen';
 import { validatePlanResponse } from './components/chat/planValidation';
+import type { BackendTransaction } from './lib/transactionResult';
+import { toTransactionResult } from './lib/transactionResult';
+import type { TransactionResult } from './components/chat/ResultCard';
 import OnboardingScreen from './components/onboarding/OnboardingScreen';
 import { BACKEND_ORIGIN, waitForBackendHealth } from './lib/backendHealth';
 
@@ -87,6 +90,10 @@ export default function App() {
         // yanıtı = whitelist'ten geçti anlamına geldiği için 'approved'a
         // düşülür.
         plan: { ...validation.plan, securityStatus: validation.plan.securityStatus ?? 'approved' },
+        // Saga #309 ATDD Soru 2: `Plan` tipi (PlanCard için budanmış)
+        // `fileNames`'i taşımıyor — `apply_plan`in ZORUNLU ihtiyaç duyduğu
+        // bu alan için HAM (doğrulanmadan önceki) yanıt ayrıca saklanır.
+        rawPlan,
       };
       setMessages((current) => [...current, assistantMessage]);
     } catch {
@@ -107,11 +114,35 @@ export default function App() {
     if (lastFailedSessionIdRef.current) void requestPlan(lastFailedSessionIdRef.current);
   }
 
-  function handleApprovePlan(messageId: string) {
-    // Saga #274'ün apply_plan'ı kasıtlı olarak endpoint'siz — gerçek bir
-    // Orchestrator çağrısı henüz yok, bu yüzden burada sadece loglanır.
-    // Gerçek apply-endpoint wiring'i ayrı bir task (bkz. AI_DEVLOG, Saga #287).
-    console.info('Plan onaylandı (henüz Orchestrator’a bağlı değil):', messageId);
+  async function handleApprovePlan(messageId: string) {
+    // Saga #309: onaylanan plan artık gerçekten POST /api/transactions/apply'a
+    // gönderilir ve gerçek Orchestrator'ı tetikler (Saga #274/#287'nin
+    // kasıtlı no-op'u burada wiring'i tamamlanarak kapatıldı).
+    if (!sessionId) return;
+    const message = messages.find((m) => m.id === messageId);
+    if (!message?.rawPlan) return;
+
+    function markFailed() {
+      const failedResult: TransactionResult = { fileCount: 0, destinationFolders: [], status: 'failed' };
+      setMessages((current) => current.map((m) => (m.id === messageId ? { ...m, result: failedResult } : m)));
+    }
+
+    try {
+      const response = await fetch(`${BACKEND_ORIGIN}/api/transactions/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, plan: message.rawPlan }),
+      });
+      if (!response.ok) {
+        markFailed();
+        return;
+      }
+      const body: BackendTransaction & { id: number } = await response.json();
+      const result: TransactionResult = { ...toTransactionResult(body), transactionId: body.id };
+      setMessages((current) => current.map((m) => (m.id === messageId ? { ...m, result } : m)));
+    } catch {
+      markFailed();
+    }
   }
 
   if (config === undefined) return null;

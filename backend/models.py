@@ -305,6 +305,38 @@ class RevertTransactionResponse(BaseModel):
     status: str
 
 
+class ApplyPlanRequest(BaseModel):
+    """Saga #309: onaylanan planı `POST /api/transactions/apply`e taşır.
+    `plan` tam `PlanSkeleton` (fileNames dahil) — backend henüz `/api/plan`
+    yanıtını server tarafında saklamıyor, bu yüzden istemci HAM yanıtı
+    olduğu gibi geri gönderir (bkz. atdd.md Soru 1/2)."""
+
+    sessionId: str
+    plan: PlanSkeleton
+
+    @field_validator("sessionId")
+    @classmethod
+    def session_id_not_blank(cls, value: str) -> str:
+        if value.strip() == "":
+            raise ValueError("must not be empty or whitespace-only")
+        return value
+
+
+class AppliedFileOperation(BaseModel):
+    """Frontend'in `transactionResult.ts`'teki `BackendFileOperation` ile
+    birebir eşleşmesi için alan adları AYNEN snake_case (Saga #277
+    sözleşmesi, camelCase'e ÇEVRİLMEZ)."""
+
+    destination_path: str
+    status: str
+
+
+class TransactionApplyResponse(BaseModel):
+    id: int
+    status: str
+    operations: list[AppliedFileOperation]
+
+
 class PlanRequest(BaseModel):
     # Saga #285: pdfFiles istemciden ALINMAZ — backend, session'ın
     # selectedFolder'ını kendisi tarar (backend/pdf_discovery.py). İstemcinin
