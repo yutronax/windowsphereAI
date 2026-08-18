@@ -1,5 +1,45 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Kilitli-dosya/antivirüs geçici I/O toleransı (Saga #310, epic #26) — ilk aider-bridge denemesi
+
+**Token maliyetini düşürmek için yeni bir araç denendi: Aider + Ollama
+(yerel, ücretsiz `qwen2.5-coder:7b`).** `C:\Users\...\.claude\skills\aider-bridge\`
+altında kurulan köprü, Codex/Copilot kotası dolduğunda Agent-tool
+subagent delegasyonunun yerine geçmesi için tasarlandı. Bu görev ilk
+gerçek denemesiydi.
+
+**Sonuç: kısmi başarı, kritik bir tuzak canlı bulundu ve düzeltildi.**
+Test yazımı (küçük, yeni içerik) sorunsuz çalıştı — ama iki tur
+"düzeltme" çağrısı sırasında Aider'ın Ollama modelleri için varsayılan
+**"whole edit format"**i, `backend/tests/test_orchestrator.py`'nin
+(1800+ satır, MOVE/COPY/DELETE/MERGE/SPLIT/REDACT/EXCEL_SORT testleri
+dahil) neredeyse TAMAMINI sessizce sildi (58 satıra indirdi,
+`returncode: 0`, hiçbir hata/uyarı yok). Commit edilmemiş olduğu için
+`git checkout --` ile anında geri alındı, kayıp yaşanmadı — ama bu,
+"Aider'in sonucunu MUTLAKA doğrula" disiplininin (`aider_bridge.py`
+docstring'i, `SKILL.md`) neden var olduğunu somut şekilde kanıtladı.
+
+**İkinci bulgu: `qwen2.5-coder:7b`'nin context penceresi (32K), 700+
+satırlık `backend/orchestrator.py`'ye küçük bir fonksiyon eklemek için
+bile yetersiz kaldı** ("possibly exhausted context window", jenerasyon
+yarıda kesildi — ama `diff` edit formatı sayesinde geçersiz/yarım bir
+blok dosyaya hiç UYGULANMADI, `orchestrator.py` sağlam kaldı). Bu
+implementasyon (tek fonksiyon + 3 çağrı noktası) sonunda Claude
+tarafından doğrudan yazıldı.
+
+**Sonuç olarak `SKILL.md`'ye kalıcı bir kural eklendi:** Aider, SADECE
+yeni dosyalar veya küçük (<150 satır) mevcut dosyalar için kullanılmalı;
+büyük/mevcut dosyalara küçük ekleme gerektiğinde Claude'un kendisi
+`Edit` kullanmalı — "kod yazımı modele ait" kuralının bilinçli bir
+istisnası, çünkü bu boyuttaki dosyalarda araç güvenilir değil.
+
+**Asıl özellik:** `_retry_on_transient_io_error` — `_forward_move`/
+`_forward_copy`/`_forward_delete` içindeki `shutil`/`os` çağrılarını
+sarmalayan, WinError 32 (kilitli dosya)/5 (antivirüs geçici bloğu)
+için üstel backoff'lu (en fazla 3 deneme) retry uygulayan bir yardımcı.
+Diğer tüm `OSError` türleri hiç retry edilmeden hemen fırlatılır —
+kalıcı hata davranışı değişmedi. 261/261 test yeşil (5 yeni).
+
 ## Excel sıralama + formül güvenlik ağı (Saga #324, epic #29) — projenin ilk Excel desteği
 
 **Finansal veri bozulması riski kapatıldı.** Referans projedeki

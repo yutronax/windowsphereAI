@@ -1,5 +1,7 @@
 import shutil
+import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy.orm import Session
@@ -1823,3 +1825,86 @@ def test_apply_plan_rejects_excel_sort_of_a_path_outside_allowed_root(session, t
 
     assert calls == []
     assert not (tmp_path / "siralanmis.xlsx").exists()
+
+
+def test_retry_on_transient_io_error_retries_on_winerror_32(session, tmp_path):
+    from backend.orchestrator import _retry_on_transient_io_error
+
+    call_count = {"n": 0}
+
+    def mock_func():
+        call_count["n"] += 1
+        if call_count["n"] < 2:
+            err = OSError("Mock error")
+            err.winerror = 32
+            raise err
+        return "ok"
+
+    with patch("time.sleep"):
+        result = _retry_on_transient_io_error(mock_func)
+        assert result == "ok"
+        assert call_count["n"] == 2
+
+
+def test_retry_on_transient_io_error_retries_on_winerror_5(session, tmp_path):
+    from backend.orchestrator import _retry_on_transient_io_error
+
+    call_count = {"n": 0}
+
+    def mock_func():
+        call_count["n"] += 1
+        if call_count["n"] < 2:
+            err = OSError("Mock error")
+            err.winerror = 5
+            raise err
+        return "ok"
+
+    with patch("time.sleep"):
+        result = _retry_on_transient_io_error(mock_func)
+        assert result == "ok"
+        assert call_count["n"] == 2
+
+
+def test_retry_on_transient_io_error_fails_after_3_retries(session, tmp_path):
+    from backend.orchestrator import _retry_on_transient_io_error
+
+    def mock_func():
+        err = OSError("Mock error")
+        err.winerror = 32
+        raise err
+
+    with patch("time.sleep"):
+        with pytest.raises(OSError) as exc_info:
+            _retry_on_transient_io_error(mock_func)
+        assert exc_info.value.winerror == 32
+
+
+def test_retry_on_transient_io_error_raises_non_transient_errors(session, tmp_path):
+    from backend.orchestrator import _retry_on_transient_io_error
+
+    call_count = {"n": 0}
+
+    def mock_func():
+        call_count["n"] += 1
+        err = OSError("Mock error")
+        err.winerror = 100
+        raise err
+
+    with patch("time.sleep") as mock_sleep:
+        with pytest.raises(OSError) as exc_info:
+            _retry_on_transient_io_error(mock_func)
+        assert exc_info.value.winerror == 100
+        assert call_count["n"] == 1
+        assert mock_sleep.call_count == 0
+
+
+def test_retry_on_transient_io_error_calls_function_once_without_retries(session, tmp_path):
+    from backend.orchestrator import _retry_on_transient_io_error
+
+    def mock_func():
+        return "Success"
+
+    with patch("time.sleep") as mock_sleep:
+        result = _retry_on_transient_io_error(mock_func)
+        assert result == "Success"
+        assert mock_sleep.call_count == 0

@@ -2,6 +2,7 @@ import datetime as dt
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 from sqlalchemy import select, update
@@ -67,12 +68,33 @@ def _delete_backup_path(allowed_root: Path, transaction_id: int, filename: str) 
     return allowed_root / _DELETE_BACKUP_DIRNAME / str(transaction_id) / filename
 
 
+_TRANSIENT_IO_WINERRORS = (32, 5)  # kilitli dosya (Excel/Outlook), antivirüs geçici bloğu
+_TRANSIENT_IO_MAX_ATTEMPTS = 3
+_TRANSIENT_IO_BACKOFF_SECONDS = 0.5
+
+
+def _retry_on_transient_io_error(func, *args, **kwargs):
+    """Saga #310: `func`'ı çağırır; `winerror` 32 (kilitli dosya) veya 5
+    (antivirüsün geçici bloğu) olan bir `OSError` alırsa üstel backoff'lu
+    olarak en fazla `_TRANSIENT_IO_MAX_ATTEMPTS` kez tekrar dener. Diğer
+    tüm hatalar (kalıcı yetki sorunu, dosya yok, vb.) hiç retry edilmeden
+    hemen fırlatılır — davranış bu hata sınıflarında DEĞİŞMEZ."""
+    for attempt in range(_TRANSIENT_IO_MAX_ATTEMPTS):
+        try:
+            return func(*args, **kwargs)
+        except OSError as exc:
+            is_transient = getattr(exc, "winerror", None) in _TRANSIENT_IO_WINERRORS
+            if not is_transient or attempt == _TRANSIENT_IO_MAX_ATTEMPTS - 1:
+                raise
+            time.sleep(_TRANSIENT_IO_BACKOFF_SECONDS * (2**attempt))
+
+
 def _forward_move(source_path: Path, destination_path: Path) -> None:
-    shutil.move(str(source_path), str(destination_path))
+    _retry_on_transient_io_error(shutil.move, str(source_path), str(destination_path))
 
 
 def _forward_copy(source_path: Path, destination_path: Path) -> None:
-    shutil.copy2(str(source_path), str(destination_path))
+    _retry_on_transient_io_error(shutil.copy2, str(source_path), str(destination_path))
 
 
 def _forward_delete(source_path: Path, destination_path: Path) -> None:
@@ -80,8 +102,8 @@ def _forward_delete(source_path: Path, destination_path: Path) -> None:
     # Önce fiziksel yedek alınır, SONRA kaynak silinir — sıra önemli: yedek
     # başarısız olursa kaynak hâlâ yerinde kalır, hiçbir veri kaybı olmaz.
     destination_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(str(source_path), str(destination_path))
-    source_path.unlink()
+    _retry_on_transient_io_error(shutil.copy2, str(source_path), str(destination_path))
+    _retry_on_transient_io_error(source_path.unlink)
 
 
 def _forward_merge(source_paths: list[Path], destination_path: Path) -> None:
