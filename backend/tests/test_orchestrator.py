@@ -1223,3 +1223,113 @@ def test_revert_transaction_signature_no_longer_accepts_a_client_supplied_allowe
 
     assert reverted.status == "reverted"
     assert (real_root / "a.pdf").exists()
+
+
+# Saga #302 (RED step): revert_transaction ve purge_expired_delete_backups
+# arasindaki lost-update yarisi. Gercek OS-thread'ler yerine, AYNI sqlite
+# dosyasina baglanan iki BAGIMSIZ Session nesnesi kullanip, hangi
+# session'in "once" commit ettigini elle interleave ederek simule ediyoruz.
+# `session` fixture'i ":memory:" kullaniyor (her baglanti kendi ayri
+# bellek-ici DB'sini gorur), bu yuzden bu test kendi dosya-tabanli engine'ini
+# kuruyor - aynen fixture'in yaptigi create_db_engine/create_session_factory
+# cagrilarini, ama gercek bir dosya yolu ile, boylece iki session AYNI
+# satirlari gorebilsin.
+
+
+def test_revert_transaction_and_purge_expired_delete_backups_do_not_lose_the_race(tmp_path, monkeypatch):
+    from sqlalchemy import update
+
+    import backend.orchestrator as orchestrator_module
+
+    db_path = tmp_path / "race.db"
+    engine = create_db_engine(f"sqlite:///{db_path}")
+    factory = create_session_factory(engine)
+    root = tmp_path / "root"
+    root.mkdir()
+
+    with factory() as session_a, factory() as session_b:
+        # --- Senaryo 1: "Revert, satir az once purge edilmis" -------------
+        # session_a DELETE-only bir transaction'i revert etmeye baslar;
+        # revert'in dosya-geri-alma isini bitirip KENDI son commit'ini
+        # yapmasindan HEMEN ONCE, session_b (purge_expired_delete_backups'in
+        # claim'ini simule ederek) satiri "committed" -> "backup_purged"
+        # yapip commit eder. Hedeflenen davranis: revert bunu fark edip
+        # TransactionRevertError firlatmali ve KENDI "reverted" durumunu
+        # DB'ye YAZMAMALI (satir "backup_purged" olarak kalmali). Mevcut
+        # (henuz duzeltilmemis) kod bunu kontrol etmiyor, revert dosyalari
+        # zaten geri almis olacak VE session_a'nin son commit'i session_b'nin
+        # "backup_purged" yazisinin UZERINE sessizce "reverted" yazacak -
+        # bu da testin RED olarak basarisiz olmasini saglar.
+        transaction = _apply_a_delete_plan(session_a, root, "a.pdf")
+        txn_id = transaction.id
+        backup_dir = root / ".windows-ai-files-backup" / str(txn_id)
+        assert backup_dir.exists()
+
+        original_rollback = orchestrator_module._rollback_completed_operations
+
+        def _rollback_then_let_purge_win_the_race(*args, **kwargs):
+            result = original_rollback(*args, **kwargs)
+            session_b.execute(
+                update(Transaction)
+                .where(Transaction.id == txn_id, Transaction.status == "committed")
+                .values(status="backup_purged")
+            )
+            session_b.commit()
+            return result
+
+        monkeypatch.setattr(
+            orchestrator_module, "_rollback_completed_operations", _rollback_then_let_purge_win_the_race
+        )
+
+        with pytest.raises(TransactionRevertError):
+            revert_transaction(session_a, transaction)
+
+        monkeypatch.undo()
+
+        session_b.expire_all()
+        final = session_b.get(Transaction, txn_id)
+        # Kaybeden (revert) satiri KENDI sonucuyla EZMEMELI - kazananin
+        # ("backup_purged") yazdigi deger korunmali.
+        assert final.status == "backup_purged"
+
+        # --- Senaryo 2: "Purge, satir az once revert edilmeye baslanmis" --
+        # session_a onceden BASKA bir DELETE-only transaction icin revert
+        # claim'ini kazanmis GIBI davranir ("committed" -> "reverting");
+        # purge_expired_delete_backups (session_b) bu satiri aday olarak
+        # secip KENDI atomik claim'ini ("committed" -> "purging") denemeden
+        # HEMEN ONCE, session_a'nin claim'i devreye girer. Purge'un claim'i
+        # artik `_claim_transaction_status` uzerinden ILK adimda (rmtree'den
+        # ONCE calisir, Saga #302 red-team duzeltmesi: kilit artik rmtree
+        # boyunca acik tutulmuyor) gerceklestigi icin, race'i bu fonksiyonun
+        # ILK cagrisinin etrafinda simule ediyoruz. Hedeflenen davranis:
+        # purge bu adayi ATLAMALI - purged_ids'e girmemeli, backup klasoru
+        # SILINMEMELI.
+        transaction2 = _apply_a_delete_plan(session_a, root, "b.pdf")
+        txn2_id = transaction2.id
+        backup_dir2 = root / ".windows-ai-files-backup" / str(txn2_id)
+        assert backup_dir2.exists()
+        transaction2.created_at = dt.datetime.utcnow() - dt.timedelta(days=31)
+        session_a.commit()
+
+        original_claim = orchestrator_module._claim_transaction_status
+        claim_call_count = {"n": 0}
+
+        def _claim_via_revert_then_real_claim(session, transaction_id, *, from_status, to_status):
+            claim_call_count["n"] += 1
+            if claim_call_count["n"] == 1 and transaction_id == txn2_id:
+                session_a.execute(
+                    update(Transaction)
+                    .where(Transaction.id == txn2_id, Transaction.status == "committed")
+                    .values(status="reverting")
+                )
+                session_a.commit()
+            return original_claim(session, transaction_id, from_status=from_status, to_status=to_status)
+
+        monkeypatch.setattr(orchestrator_module, "_claim_transaction_status", _claim_via_revert_then_real_claim)
+
+        purged_ids = purge_expired_delete_backups(session_b, root, older_than_days=30)
+
+        monkeypatch.undo()
+
+        assert txn2_id not in purged_ids
+        assert backup_dir2.exists()

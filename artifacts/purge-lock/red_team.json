@@ -1,0 +1,41 @@
+{
+  "task": "Saga #302 — purge_expired_delete_backups / revert_transaction row-level kilitleme",
+  "reviewer": "obss-red-team subagent",
+  "reviewed_diff": "backend/orchestrator.py, backend/tests/test_orchestrator.py (pre-fix version, before findings below were addressed)",
+  "security_findings": [
+    {
+      "finding": "revert_transaction_endpoint returned a stale in-memory transaction.status to the client after revert_transaction's atomic claim lost a race (e.g. to purge_expired_delete_backups), contradicting the endpoint's own documented invariant that TransactionRevertError only ever means a physical-rollback failure.",
+      "severity": "medium",
+      "status": "fixed",
+      "fix": "backend/main.py: revert_transaction_endpoint now calls db.refresh(transaction) after catching TransactionRevertError before building the response.",
+      "regression_test": "backend/tests/test_main_integration.py::test_revert_endpoint_reports_the_real_db_status_after_losing_the_claim_race"
+    },
+    {
+      "finding": "purge_expired_delete_backups held its claim UPDATE uncommitted across shutil.rmtree, holding SQLite's whole-database RESERVED write lock for the duration of a potentially slow/unbounded filesystem delete — an app-wide availability risk once wired to a scheduler (any other concurrent write anywhere in the app would fail with 'database is locked').",
+      "severity": "medium",
+      "status": "fixed",
+      "fix": "backend/orchestrator.py: purge_expired_delete_backups now uses a three-state claim chain ('committed' -> 'purging' -> 'backup_purged', with a compensating 'purging' -> 'committed' rollback on rmtree failure) via _claim_transaction_status, with each step committed immediately so no write lock is held across shutil.rmtree.",
+      "regression_test": "backend/tests/test_orchestrator.py::test_revert_transaction_and_purge_expired_delete_backups_do_not_lose_the_race (updated to target the new claim timing)"
+    },
+    {
+      "finding": "_claim_transaction_status's session.execute() has no try/except around a possible raw sqlalchemy.exc.OperationalError under real SQLite lock contention (distinct from the deliberate rowcount==0 non-error outcome). It would propagate uncaught out of revert_transaction/purge_expired_delete_backups; main.py's endpoint only catches TransactionRevertError, so this becomes an unhandled 500 instead of the documented 200/409/404 contract.",
+      "severity": "low",
+      "status": "accepted_not_fixed",
+      "rationale": "Not blocking for this low-priority task: purge_expired_delete_backups is not yet wired to any scheduler (no real concurrent contention exists today), and the project is a single-process desktop app where sustained lock contention is unlikely. Filed as a follow-up task."
+    },
+    {
+      "finding": "The except OSError guard around shutil.rmtree in purge_expired_delete_backups is not exhaustive against every exception type an unusual filesystem could raise (e.g. platform-specific errors), which could leave the 'purging' claim state unresolved if an uncaught exception escapes.",
+      "severity": "low",
+      "status": "accepted_not_fixed",
+      "rationale": "Same as above — low likelihood under current single-process deployment, orthogonal to the P0/P1 locking property this task targets. Filed as a follow-up task."
+    }
+  ],
+  "approved_points": [
+    "The core compare-and-swap pattern (UPDATE ... WHERE id=? AND status=? + rowcount check) correctly works around SQLite's lack of with_for_update() support and is schema-free.",
+    "expire_on_commit toggling in _claim_transaction_status is correctly wrapped in try/finally.",
+    "The Saga #294/#295/#300 multi-root safety guard (only claim/purge if backup_dir exists under the caller's own allowed_root) is preserved unchanged and the new claim logic runs after that check.",
+    "The regression test correctly exercises both interleavings (revert-loses-to-purge, purge-loses-to-revert) using two independent Session objects against the same file-backed sqlite db."
+  ],
+  "overall_assessment": "Two medium findings (endpoint stale-status, DB-wide lock held across a filesystem call) were fixed in-scope with regression tests. Two low findings (missing OperationalError handling, non-exhaustive rmtree exception guard) were judged non-blocking for this low-priority, not-yet-scheduled task and filed as a follow-up Saga task. The P0/P1 core locking guarantees from atdd.md are met.",
+  "ready_to_commit": true
+}

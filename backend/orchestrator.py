@@ -4,7 +4,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from backend.db_models import FileOperation, Transaction
@@ -231,6 +231,40 @@ def _rollback_completed_operations(operations: list[FileOperation], allowed_root
     return all_succeeded
 
 
+def _claim_transaction_status(
+    session: Session, transaction_id: int, *, from_status: str, to_status: str
+) -> bool:
+    """SQLite `with_for_update()`u desteklemediği için satır seviyesinde
+    optimistic locking'i atomik bir compare-and-swap UPDATE ile taklit eder:
+    `UPDATE transactions SET status=to_status WHERE id=transaction_id AND
+    status=from_status`. Dönen `rowcount == 1` ise satırı BU çağıran
+    "kazanmış" demektir (aynı anda başka bir işlemin aynı satırı claim
+    etmesi imkansızdır, SQLite'ın tek-yazarlık kilidi sayesinde); `0` ise
+    satır artık `from_status` durumunda DEĞİLDİR (yarışı kaybedildi)."""
+    # `session.commit()` varsayılan olarak (`expire_on_commit=True`)
+    # session'daki TÜM nesneleri expire eder — bu da çağıranın daha önce
+    # yüklediği ilişkili nesnelerde (ör. `transaction.operations`) bir
+    # SONRAKİ attribute okumasının sessizce YENİ bir SELECT (ve dolayısıyla
+    # SQLite'ta yeni bir okuma transaction'ı) tetiklemesine yol açar — bu da
+    # rollback döngüsü sürerken başka bir session'ın aynı satıra yazıp
+    # commit etmesini "database is locked" ile engelleyebilir (Saga #302
+    # red-team bulgusu). Claim'in commit'ini geçici olarak expire etkisi
+    # olmadan yapıyoruz; çağıranlar zaten claim başarılı olduğunda ilgili
+    # nesnenin `.status`unu bellekte elle güncelliyor.
+    previous_expire_on_commit = session.expire_on_commit
+    session.expire_on_commit = False
+    try:
+        result = session.execute(
+            update(Transaction)
+            .where(Transaction.id == transaction_id, Transaction.status == from_status)
+            .values(status=to_status)
+        )
+        session.commit()
+    finally:
+        session.expire_on_commit = previous_expire_on_commit
+    return result.rowcount == 1
+
+
 def revert_transaction(session: Session, transaction: Transaction) -> Transaction:
     """Saga #293: ZATEN `"committed"` durumundaki bir transaction'ı
     SONRADAN (kullanıcının manuel "geri al" isteğiyle, `apply_plan`'ın
@@ -270,12 +304,26 @@ def revert_transaction(session: Session, transaction: Transaction) -> Transactio
     allowed_root = Path(transaction.allowed_root)
 
     completed_operations = [op for op in transaction.operations if op.status == "completed"]
+
     all_reverted = _rollback_completed_operations(
         list(reversed(completed_operations)), allowed_root=allowed_root
     )
 
-    transaction.status = "reverted" if all_reverted else "revert_failed"
-    session.commit()
+    # Saga #302: dosya rollback'i bittikten sonra, DB'ye SON durumu yazmadan
+    # hemen once atomik bir claim (compare-and-swap) yapılır — satır hâlâ
+    # "committed" DEĞİLSE (ör. `purge_expired_delete_backups` araya girip
+    # "backup_purged" yazdıysa) bu commit KENDİ sonucunu kazananın yazdığı
+    # değerin ÜZERİNE YAZMAZ, bunun yerine hiçbir şey yazmadan
+    # `TransactionRevertError` fırlatır (dosyalar zaten geri alınmış
+    # olabilir, ama DB satırı yarışı kazananın değerinde kalır).
+    final_status = "reverted" if all_reverted else "revert_failed"
+    if not _claim_transaction_status(
+        session, transaction.id, from_status="committed", to_status=final_status
+    ):
+        raise TransactionRevertError(
+            f"Transaction {transaction.id} geri alma sırasında durumu başka bir işlem tarafından değiştirildi, sonuç yazılamadı."
+        )
+    transaction.status = final_status
 
     if not all_reverted:
         raise TransactionRevertError(
@@ -634,7 +682,41 @@ def purge_expired_delete_backups(
             # hâlâ geçerli olabilecek bir transaction'ı YANLIŞLIKLA
             # kilitlemektense hiçbir şey yapmamak daha güvenli.
             continue
-        shutil.rmtree(backup_dir)
+        # Saga #302 red-team bulgusu (medium): claim UPDATE'ini `rmtree`
+        # boyunca commit etmeden AÇIK tutmak, SQLite'ın TÜM `app.db`
+        # dosyası üzerindeki RESERVED yazma kilidini -sadece bu satır değil-
+        # potansiyel olarak uzun süren bir dosya sistemi çağrısı boyunca
+        # tutardı (uygulamadaki BAŞKA HİÇBİR endpoint o pencerede yazamaz).
+        # Bunun yerine ÜÇ-durumlu, HER ADIMI ANINDA COMMIT EDEN bir CAS
+        # kullanılır: "committed" -> "purging" (kısa kilit, hemen commit) ->
+        # `rmtree` KİLİT TUTULMADAN çalışır -> başarılıysa "purging" ->
+        # "backup_purged", başarısızsa telafi edici "purging" -> "committed"
+        # (satır bir SONRAKİ çalıştırmada tekrar denenebilir kalır).
+        if not _claim_transaction_status(
+            session, transaction.id, from_status="committed", to_status="purging"
+        ):
+            # Yarışı kaybettik (ör. `revert_transaction` araya girdi) —
+            # hiçbir dosyaya dokunmadan sıradaki adaya geç.
+            continue
+        try:
+            shutil.rmtree(backup_dir)
+        except OSError:
+            # Fiziksel silme başarısız oldu — telafi edici CAS ile satırı
+            # "committed"a geri döndür (bir sonraki çalıştırmada tekrar
+            # denenebilir); bu geri-dönüş HER ZAMAN başarılı olmalı çünkü
+            # satır şu an "purging" durumunda ve BAŞKA HİÇBİR işlem onu bu
+            # durumdan çıkaramaz (sadece bu fonksiyon "purging" yazar).
+            _claim_transaction_status(
+                session, transaction.id, from_status="purging", to_status="committed"
+            )
+            continue
+        if not _claim_transaction_status(
+            session, transaction.id, from_status="purging", to_status="backup_purged"
+        ):
+            # Teorik olarak imkansız (bu satırı "purging"e SADECE biz
+            # geçirdik) ama savunmacı: dosya zaten silindi, DB durumu
+            # senkronsuz kalmasın diye devam etmiyoruz, sıradaki adaya geç.
+            continue
         transaction.status = "backup_purged"
         purged_ids.append(transaction.id)
 

@@ -536,6 +536,50 @@ def test_revert_endpoint_returns_409_when_the_transactions_allowed_root_is_missi
     assert (tmp_path / "2026-08" / "a.pdf").exists()
 
 
+def test_revert_endpoint_reports_the_real_db_status_after_losing_the_claim_race(tmp_path, monkeypatch):
+    # Saga #302 red-team bulgusu: `revert_transaction`in atomik claim'i
+    # (ornegin `purge_expired_delete_backups`e) yarisi KAYBETTIGINDE
+    # `TransactionRevertError` firlatilir, ama eskiden endpoint bu durumda
+    # bellekteki BAYAT `transaction.status`u ("committed") donerdi - DB'deki
+    # GERCEK deger (kazananin yazdigi "backup_purged") ile UYUMSUZ. Bu test,
+    # `db.refresh(transaction)` duzeltmesinin istemciye HER ZAMAN DB'nin
+    # guncel degerini dondurdugunu kanitlar.
+    import backend.orchestrator as orchestrator_module
+    from sqlalchemy import update as sa_update
+
+    db_session = _in_memory_db_session()
+    transaction = _apply_a_move_plan(db_session, tmp_path)
+    txn_id = transaction.id
+
+    def _lose_the_race(session, transaction_id, *, from_status, to_status):
+        # Baska bir islemin (ornegin purge) yarisi kazanip satiri
+        # "backup_purged" yaptigini simule et, sonra HER ZAMAN kaybettigimizi
+        # bildir - `revert_transaction`in TransactionRevertError firlatmasini
+        # tetikler.
+        session.execute(
+            sa_update(orchestrator_module.Transaction)
+            .where(orchestrator_module.Transaction.id == transaction_id)
+            .values(status="backup_purged")
+        )
+        session.commit()
+        return False
+
+    monkeypatch.setattr(orchestrator_module, "_claim_transaction_status", _lose_the_race)
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post(f"/api/transactions/{txn_id}/revert", json={})
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 200
+    # Onceki hatali davranis: {"transactionId": txn_id, "status": "committed"}
+    # (bayat bellek-ici deger) donerdi. Duzeltilmis davranis: DB'nin GERCEK
+    # guncel degeri.
+    assert response.json() == {"transactionId": txn_id, "status": "backup_purged"}
+
+
 def test_revert_endpoint_returns_200_with_revert_failed_status_when_the_physical_move_fails(tmp_path):
     db_session = _in_memory_db_session()
     transaction = _apply_a_move_plan(db_session, tmp_path)

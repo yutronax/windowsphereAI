@@ -178,12 +178,18 @@ def revert_transaction_endpoint(
     try:
         revert_transaction(db, transaction)
     except TransactionRevertError:
-        # Precondition ÖNCEDEN doğrulandığı için buraya düşen TEK olası
-        # sebep fiziksel geri almanın kendisinin (kısmen) başarısız
-        # olmasıdır — bu bir istemci hatası DEĞİL, gerçek bir operasyon
-        # sonucu, bu yüzden 200 ile döner (ResultCard'ın zaten sahip
-        # olduğu completed/partial/failed üçlü-durum modeline uyar).
-        pass
+        # Saga #302 red-team bulgusu: precondition ÖNCEDEN doğrulanmış olsa
+        # da, artık buraya düşmenin İKİ farklı sebebi olabilir: (a) fiziksel
+        # geri almanın kendisi (kısmen) başarısız oldu (mevcut davranış,
+        # `transaction.status` zaten DB'yle senkron: "revert_failed") YA DA
+        # (b) `revert_transaction`in atomik claim'i YARIŞI KAYBETTİ (ör.
+        # `purge_expired_delete_backups` araya girdi) — bu durumda
+        # bellekteki `transaction.status` HÂLÂ claim öncesi eski değeri
+        # taşır ("committed"), oysa DB'deki gerçek değer başka bir işlemin
+        # yazdığı değerdir (ör. "backup_purged"). `db.refresh` ile
+        # nesneyi DB'nin GERÇEK güncel durumuyla senkronlayarak istemciye
+        # asla bayat bir `status` döndürmemeyi garanti ederiz.
+        db.refresh(transaction)
 
     return RevertTransactionResponse(transactionId=transaction.id, status=transaction.status)
 

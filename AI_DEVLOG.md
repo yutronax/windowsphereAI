@@ -1,5 +1,44 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## purge-lock (Saga #302, epic #28)
+
+**Saga #300'ün bıraktığı orta önemli bulgu, scheduler'a bağlanmadan ÖNCE
+kapatıldı:** `purge_expired_delete_backups` ve `revert_transaction` aynı
+`Transaction` satırını iki bağımsız DB session'ından yarışarak
+güncelleyebiliyordu (lost-update) — henüz hiçbir cron/scheduler'a
+bağlanmadığı için gerçek risk yoktu, ama bu iş o bağlanmadan önce bitirildi.
+
+**Kilitleme deseni:** proje SQLite kullanıyor (`backend/db.py`), SQLAlchemy
+`with_for_update()` SQLite'ta desteklenmiyor. Bunun yerine yeni bir
+`_claim_transaction_status` yardımcı fonksiyonu eklendi — atomik koşullu
+`UPDATE ... WHERE id=? AND status=from_status` (compare-and-swap),
+`rowcount` kontrolüyle "kazanan"ı belirliyor. Yeni kolon/migration YOK,
+mevcut `status` sütunu hem veri hem kilit anahtarı olarak kullanılıyor.
+
+- `revert_transaction`: dosya rollback'i bittikten sonra, DB'ye son durumu
+  yazmadan önce bu atomik claim'i dener; kaybederse hiçbir şeyin üzerine
+  yazmadan `TransactionRevertError` fırlatır.
+- `purge_expired_delete_backups`: `shutil.rmtree`den ÖNCE üç durumlu bir
+  claim zinciri kullanır (`"committed"` → `"purging"` → `"backup_purged"`,
+  fiziksel silme başarısız olursa telafi edici `"purging"` → `"committed"`)
+  — böylece DB yazma kilidi `rmtree` süresince AÇIK TUTULMUYOR (ilk
+  taslakta öyleydi, bağımsız red-team incelemesi SQLite'ın tüm `app.db`
+  dosyası üzerindeki kilidin uzun bir dosya sistemi çağrısı boyunca
+  tutulacağını, uygulama genelinde başka yazmaları bloklayacağını tespit
+  etti — düzeltildi).
+
+**Red-team bulgusu (aynı oturumda düzeltildi):** `revert_transaction`in
+claim'i yarışı kaybettiğinde, `POST /api/transactions/{id}/revert`
+endpoint'i bellekteki BAYAT `transaction.status` değerini (claim öncesi,
+ör. hâlâ `"committed"`) döndürüyordu — DB'deki GERÇEK değerle (kazananın
+yazdığı, ör. `"backup_purged"`) uyumsuzdu. `main.py`ye
+`db.refresh(transaction)` eklendi, regresyon testi eklendi.
+
+**Test:** `backend/tests/test_orchestrator.py`e iki bağımsız `Session`
+nesnesiyle (aynı sqlite dosyasına bağlı) her iki yarış yönünü de simüle eden
+tek bir regresyon testi eklendi; `backend/tests/test_main_integration.py`e
+endpoint seviyesinde bayat-durum bulgusunu kanıtlayan ayrı bir test eklendi.
+
 ## transaction-allowed-root (Saga #301, epic #28)
 
 **Saga #295'in bıraktığı mimari bulgu kapatıldı:** `POST
