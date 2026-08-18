@@ -1121,3 +1121,152 @@ def test_search_endpoint_results_are_sorted_by_filename(tmp_path):
     body = response.json()
     filenames = [r["filename"] for r in body["results"]]
     assert filenames == ["apple.txt", "banana.txt", "zebra.txt"]
+
+
+# --- Saga #314: dosya-icerik-arama-encoding-timeout (RED STEP) ---
+# `SearchRequest.contentContains` ve `SearchResponse.partial` alanlari henuz
+# YOK. Bu yuzden asagidaki testler ya 422 yerine 200 donerek assertion
+# hatasi, ya da KeyError (body'de "contentContains"/"partial" gorulmemesi)
+# ile KIRMIZI olmalidir — bu BEKLENEN davranistir (atdd.md AC-1,2,4,9).
+
+
+def test_search_endpoint_content_contains_matches_utf8_and_latin1_and_cp1254(tmp_path):
+    (tmp_path / "utf8.txt").write_text("fatura no 12345 kaydı", encoding="utf-8")
+    (tmp_path / "latin1.txt").write_bytes("fatura no 12345 kaydi".encode("latin-1"))
+    (tmp_path / "cp1254.txt").write_bytes("fatura no 12345 şirket".encode("cp1254"))
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id, "contentContains": "fatura no 12345"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    filenames = {r["filename"] for r in body["results"]}
+    assert filenames == {"utf8.txt", "latin1.txt", "cp1254.txt"}
+
+
+def test_search_endpoint_content_contains_returns_422_for_empty_string(tmp_path):
+    (tmp_path / "dosya.txt").write_text("test")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id, "contentContains": ""},
+    )
+
+    assert response.status_code == 422
+
+
+def test_search_endpoint_content_contains_returns_422_for_whitespace_only(tmp_path):
+    (tmp_path / "dosya.txt").write_text("test")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id, "contentContains": "   "},
+    )
+
+    assert response.status_code == 422
+
+
+def test_search_endpoint_content_contains_returns_422_when_over_500_chars(tmp_path):
+    (tmp_path / "dosya.txt").write_text("test")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    too_long = "a" * 501
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id, "contentContains": too_long},
+    )
+
+    assert response.status_code == 422
+
+
+def test_search_endpoint_content_contains_combines_with_other_filters(tmp_path):
+    (tmp_path / "fatura_2024.pdf").write_bytes(b"fatura no 12345")
+    (tmp_path / "fatura_2024.txt").write_text("fatura no 12345")
+    (tmp_path / "invoice.pdf").write_bytes(b"fatura no 12345")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/search",
+        json={
+            "sessionId": session_id,
+            "nameContains": "fatura",
+            "extension": "pdf",
+            "contentContains": "fatura no 12345",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["results"]) == 1
+    assert body["results"][0]["filename"] == "fatura_2024.pdf"
+
+
+def test_search_endpoint_content_contains_binary_and_large_files_are_skipped(tmp_path):
+    (tmp_path / "app.exe").write_bytes(bytes(range(256)) * 4)
+    (tmp_path / "notes.txt").write_text("fatura no 12345", encoding="utf-8")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id, "contentContains": "fatura no 12345"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    filenames = {r["filename"] for r in body["results"]}
+    assert filenames == {"notes.txt"}
+
+
+def test_search_endpoint_content_contains_no_match_returns_empty_results(tmp_path):
+    """Davranis Sozlesmesi satir 8: hicbir sey bulunamadi ama hata da yok."""
+    (tmp_path / "file1.txt").write_text("alakasiz icerik", encoding="utf-8")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id, "contentContains": "fatura no 12345"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["results"] == []
+
+
+def test_search_endpoint_content_contains_timeout_returns_partial_true(
+    tmp_path, monkeypatch
+):
+    """AC-2: arama 10sn'yi asarsa 200 + partial:true doner (kismi basari,
+    Davranis Sozlesmesi satir 6/7).
+
+    `time.monotonic` mock'lamak yerine `backend.file_search.search_files`
+    doğrudan `unittest.mock.patch` ile mock'lanıyor: FastAPI/Starlette/anyio
+    threadpool altyapısı endpoint koduna ulaşmadan önce `time.monotonic`'i
+    belirsiz sayıda kez çağırdığı için sıraya dayalı bir monkeypatch
+    kırılgan. Timeout MANTIĞININ kendisi zaten
+    `test_search_times_out_and_returns_partial_flag`
+    (backend/tests/test_file_search.py) ile kanıtlanmış; bu test sadece
+    endpoint'in `search_files`'ın döndürdüğü `partial` bilgisini doğru
+    şekilde `SearchResponse.partial`'a yansıttığını (wiring) doğrular.
+    """
+    from unittest.mock import patch
+
+    (tmp_path / "dosya.txt").write_text("fatura no 12345", encoding="utf-8")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    with patch(
+        "backend.main.search_files",
+        return_value=([], True),
+    ):
+        response = client.post(
+            "/api/search",
+            json={"sessionId": session_id, "contentContains": "fatura no 12345"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["partial"] is True

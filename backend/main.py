@@ -416,12 +416,14 @@ def search_endpoint(
                 detail=f"modifiedBefore geçersiz ISO 8601 formatı: '{payload.modifiedBefore}'",
             )
 
-    results = search_files(
+    results, partial = search_files(
         allowed_root,
         name_contains=payload.nameContains,
         extension=payload.extension,
         modified_after=modified_after,
         modified_before=modified_before,
+        content_contains=payload.contentContains,
+        return_partial=True,
     )
 
-    return SearchResponse(results=results)
+    return SearchResponse(results=results, partial=partial)

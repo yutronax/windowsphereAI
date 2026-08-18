@@ -565,3 +565,258 @@ class TestSearchFilesEdgeCases:
         assert str(tmp_path) not in item.filename
         # modifiedAt is ISO string, shouldn't contain path
         assert "/" not in item.modifiedAt or "T" in item.modifiedAt  # ISO format check
+
+
+# --- Saga #314: dosya-icerik-arama-encoding-timeout (RED STEP) ---
+# Asagidaki testler `search_files()`in henuz VAR OLMAYAN `content_contains`
+# parametresini kullanir. Bu testlerin su an TypeError (beklenmeyen keyword
+# argument) ile KIRMIZI olmasi BEKLENEN ve DOGRU davranistir (atdd.md AC-1..9).
+
+
+class TestSearchFilesContentContainsEncoding:
+    """AC-1 [Critical]: utf-8/latin-1/cp1254 encoding'lerinde content_contains
+    eslesmesi dogru bulunmali."""
+
+    def test_content_contains_matches_utf8_file(self, tmp_path: Path) -> None:
+        file1 = tmp_path / "utf8_fatura.txt"
+        file1.write_text("fatura no 12345 - odendi", encoding="utf-8")
+
+        result = search_files(tmp_path, content_contains="fatura no 12345")
+
+        filenames = {item.filename for item in result}
+        assert filenames == {"utf8_fatura.txt"}
+
+    def test_content_contains_matches_latin1_file(self, tmp_path: Path) -> None:
+        # "ödenmiş" içindeki "ş" latin-1 (ISO-8859-1) ile temsil edilemez —
+        # bu yüzden latin-1 dalını gerçekten kapsayan, latin-1'in
+        # kodlayabildiği Batı Avrupa karakterli bir örnek kullanılıyor.
+        file1 = tmp_path / "latin1_fatura.txt"
+        file1.write_bytes("fatura no 12345 - café résumé".encode("latin-1"))
+
+        result = search_files(tmp_path, content_contains="fatura no 12345")
+
+        filenames = {item.filename for item in result}
+        assert filenames == {"latin1_fatura.txt"}
+
+    def test_content_contains_matches_cp1254_file(self, tmp_path: Path) -> None:
+        file1 = tmp_path / "cp1254_fatura.txt"
+        file1.write_bytes("fatura no 12345 - şirket ödemesi".encode("cp1254"))
+
+        result = search_files(tmp_path, content_contains="fatura no 12345")
+
+        filenames = {item.filename for item in result}
+        assert filenames == {"cp1254_fatura.txt"}
+
+    def test_content_contains_all_three_encodings_together(self, tmp_path: Path) -> None:
+        (tmp_path / "a_utf8.txt").write_text(
+            "fatura no 12345 kaydı", encoding="utf-8"
+        )
+        (tmp_path / "b_latin1.txt").write_bytes(
+            "fatura no 12345 kaydi".encode("latin-1")
+        )
+        (tmp_path / "c_cp1254.txt").write_bytes(
+            "fatura no 12345 şirket".encode("cp1254")
+        )
+        (tmp_path / "d_nomatch.txt").write_text("alakasiz icerik", encoding="utf-8")
+
+        result = search_files(tmp_path, content_contains="fatura no 12345")
+
+        filenames = {item.filename for item in result}
+        assert filenames == {"a_utf8.txt", "b_latin1.txt", "c_cp1254.txt"}
+
+    def test_content_contains_no_match_returns_empty_list(self, tmp_path: Path) -> None:
+        """Davranis Sozlesmesi satir 8: hicbir sey bulunamadi ama hata yok."""
+        (tmp_path / "file1.txt").write_text("baska bir icerik", encoding="utf-8")
+
+        result = search_files(tmp_path, content_contains="fatura no 12345")
+
+        assert result == []
+
+    def test_content_contains_case_insensitive(self, tmp_path: Path) -> None:
+        (tmp_path / "file1.txt").write_text("FATURA NO 12345", encoding="utf-8")
+
+        result = search_files(tmp_path, content_contains="fatura no 12345")
+
+        filenames = {item.filename for item in result}
+        assert filenames == {"file1.txt"}
+
+
+class TestSearchFilesContentContainsSkipsUnreadable:
+    """AC-3 [High]: binary/10MB+ dosyalar sessizce atlanir, hata firlamaz.
+    AC-5 [Medium]: okuma izni olmayan dosya atlanir, arama devam eder."""
+
+    def test_binary_file_is_skipped_without_error(self, tmp_path: Path) -> None:
+        binary_file = tmp_path / "app.exe"
+        binary_file.write_bytes(bytes(range(256)) * 4)
+        text_file = tmp_path / "notes.txt"
+        text_file.write_text("fatura no 12345", encoding="utf-8")
+
+        result = search_files(tmp_path, content_contains="fatura no 12345")
+
+        filenames = {item.filename for item in result}
+        assert filenames == {"notes.txt"}
+        assert "app.exe" not in filenames
+
+    def test_large_file_over_10mb_is_skipped(self, tmp_path: Path) -> None:
+        big_file = tmp_path / "big.txt"
+        # 10MB + biraz fazlası, içeriğinde arama metni geçse bile atlanmalı
+        content = ("fatura no 12345 " + "x" * 1024).encode("utf-8")
+        repeat = (10 * 1024 * 1024 // len(content)) + 2
+        big_file.write_bytes(content * repeat)
+        small_file = tmp_path / "small.txt"
+        small_file.write_text("fatura no 12345", encoding="utf-8")
+
+        result = search_files(tmp_path, content_contains="fatura no 12345")
+
+        filenames = {item.filename for item in result}
+        assert filenames == {"small.txt"}
+        assert "big.txt" not in filenames
+
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason=(
+            "Windows NTFS'te os.chmod(path, 0o000) dosya sahibinin okuma "
+            "erişimini POSIX gibi engellemiyor; bu yüzden Windows'ta atlanır "
+            "(Unix'te çalışır)."
+        ),
+    )
+    def test_permission_denied_file_is_skipped(self, tmp_path: Path) -> None:
+        readable = tmp_path / "readable.txt"
+        readable.write_text("fatura no 12345", encoding="utf-8")
+        denied = tmp_path / "denied.txt"
+        denied.write_text("fatura no 12345", encoding="utf-8")
+
+        try:
+            os.chmod(denied, 0o000)
+            result = search_files(tmp_path, content_contains="fatura no 12345")
+        finally:
+            # Cleanup sırasında tmp_path silinebilmesi için izinleri geri ver
+            os.chmod(denied, 0o644)
+
+        filenames = {item.filename for item in result}
+        assert "readable.txt" in filenames
+        assert "denied.txt" not in filenames
+
+
+class TestSearchFilesContentContainsTimeout:
+    """AC-2 [Critical]: arama 10 saniyeyi asarsa partial=True ile (kısmi
+    sonuçlar) kesilir, hata firlamaz. `search_files` şu an partial bilgisini
+    döndürecek bir mekanizmaya sahip değil (ne dönüş tipi ne de parametre) —
+    bu test hem timeout mantığının hem de partial sinyalinin (fonksiyon
+    imzasında/dönüş değerinde) VAR OLMASINI bekler."""
+
+    def test_search_times_out_and_returns_partial_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for i in range(50):
+            (tmp_path / f"file_{i}.txt").write_text(
+                "fatura no 12345", encoding="utf-8"
+            )
+
+        import time as time_module
+
+        real_monotonic = time_module.monotonic
+        call_count = {"n": 0}
+
+        def fake_monotonic():
+            # İlk çağrıdan sonra zamanı 11 saniye ileri attır, bu yüzden
+            # global 10sn timeout hemen tetiklenir.
+            call_count["n"] += 1
+            if call_count["n"] <= 1:
+                return real_monotonic()
+            return real_monotonic() + 11
+
+        monkeypatch.setattr(time_module, "monotonic", fake_monotonic)
+
+        result, partial = search_files(
+            tmp_path, content_contains="fatura no 12345", return_partial=True
+        )
+
+        assert partial is True
+        assert isinstance(result, list)
+
+
+class TestSearchFilesContentContainsAndOtherFilters:
+    """AC-6 [Medium]: content_contains diger filtrelerle AND mantigiyla
+    birlesir."""
+
+    def test_content_contains_and_extension_and_name_contains(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "fatura_2024.pdf").write_bytes(
+            "fatura no 12345".encode("utf-8")
+        )
+        (tmp_path / "fatura_2024.txt").write_text(
+            "fatura no 12345", encoding="utf-8"
+        )
+        (tmp_path / "invoice.pdf").write_bytes("fatura no 12345".encode("utf-8"))
+        (tmp_path / "fatura_2024_nomatch.pdf").write_bytes(
+            "alakasiz".encode("utf-8")
+        )
+
+        result = search_files(
+            tmp_path,
+            name_contains="fatura",
+            extension="pdf",
+            content_contains="fatura no 12345",
+        )
+
+        filenames = {item.filename for item in result}
+        assert filenames == {"fatura_2024.pdf"}
+
+
+class TestSearchFilesContentContainsNonRecursive:
+    """AC-7 [Medium]: content_contains da recursive DEGIL — sadece
+    allowed_root'un dogrudan altindaki dosyalar taranir."""
+
+    def test_subfolder_file_content_is_not_matched(self, tmp_path: Path) -> None:
+        (tmp_path / "top_level.txt").write_text(
+            "fatura no 12345", encoding="utf-8"
+        )
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        (subdir / "nested.txt").write_text("fatura no 12345", encoding="utf-8")
+
+        result = search_files(tmp_path, content_contains="fatura no 12345")
+
+        filenames = {item.filename for item in result}
+        assert filenames == {"top_level.txt"}
+        assert "nested.txt" not in filenames
+
+
+class TestSearchFilesContentContainsSymlinkEscape:
+    """AC-8 [High] (threat-model): allowed_root disina isaret eden bir
+    symlink icerigi taranmaz/sonuca girmez."""
+
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason=(
+            "Windows'ta os.symlink() admin/developer-mode yetkisi gerektirir; "
+            "CI/geliştirme ortamında bu yetki garanti değil, bu yüzden "
+            "Windows'ta atlanır (Unix'te çalışır)."
+        ),
+    )
+    def test_symlink_pointing_outside_allowed_root_is_not_searched(
+        self, tmp_path: Path
+    ) -> None:
+        allowed_root = tmp_path / "allowed_root"
+        allowed_root.mkdir()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+
+        secret_file = outside_dir / "secret.txt"
+        secret_file.write_text("fatura no 12345 GİZLİ", encoding="utf-8")
+
+        symlink_path = allowed_root / "escape_link.txt"
+        os.symlink(secret_file, symlink_path)
+
+        # allowed_root icinde normal, esleşen bir dosya da olsun
+        (allowed_root / "normal.txt").write_text(
+            "fatura no 12345", encoding="utf-8"
+        )
+
+        result = search_files(allowed_root, content_contains="fatura no 12345")
+
+        filenames = {item.filename for item in result}
+        assert "escape_link.txt" not in filenames
+        assert "normal.txt" in filenames

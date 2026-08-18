@@ -1,5 +1,37 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Dosya içeriğinde arama: timeout + encoding toleransı (Saga #314, epic #27)
+
+**Encoding fallback sırası — plan aşamasında bulunan risk.** `search_files()`
+için ilk akla gelen sıra utf-8→latin-1→cp1254 olurdu, ama latin-1 (ISO-8859-1)
+256 kod noktasının hepsini tanımladığı için PRATİKTE HİÇ `UnicodeDecodeError`
+fırlatmaz — yanlış sırada denenirse cp1254 gerektiren Türkçe içerik sessizce
+yanlış decode edilip aranan metin hiç bulunamazdı. Plan adımında fark edilip
+sıra `utf-8 → cp1254 → latin-1` (latin-1 EN SON) olarak düzeltildi.
+
+**Threat-model'in eklediği 2 güvenlik kriteri.** `atdd` sonrası çalıştırılan
+`threat-model` adımı, içerik aramasının dosya İÇERİĞİNİ okuduğunu (sadece
+dosya adı değil) fark edip iki somut AC ekledi: (1) `allowed_root` dışına
+işaret eden symlink'lerin içeriği taranmıyor (veri sızıntısı önleme), (2)
+`contentContains` 500 karakterle sınırlı (aşırı büyük payload ile DoS
+önleme). İkisi de implementasyona girdi; Windows'ta ikisinin de testi
+(symlink oluşturma ve chmod, POSIX-only semantik gerektirdiği için) skip
+edildi — red-team bunu "kodu okundu ama bu döngüde gerçekten çalıştırılmadı"
+diye medium-severity bulgu olarak işaretledi, Linux/CI'da tekrar doğrulanması
+gerekiyor.
+
+**Test-fixture hataları implementasyon hatasıyla karıştırılmadı.** Green
+adımından sonra 3 test kırmızı kaldı; ayrı bir subagent turu bunların
+implementasyon değil TEST verisi hatası olduğunu doğruladı: (1) latin-1'de
+temsil edilemeyen bir Türkçe karakter (`ş`) içeren fixture, (2)
+`os.chmod(0o000)`'ın Windows NTFS'te POSIX gibi davranmaması, (3) FastAPI
+TestClient'ın threadpool'unun `time.monotonic()` monkeypatch sırasını
+bozması. Üçü de implementasyon dosyalarına dokunulmadan, sadece test
+tarafında düzeltildi — 110 passed, 2 skipped (gerekçeli), 0 failed.
+
+`test_file_search.py` + `test_main_integration.py`: 110 passed, 2 skipped
+(Windows-only sınırlama, gerekçeli), 0 failed.
+
 ## Dosya Arama MVP (Saga #313, epic #27) — epic'in ilk kapsam kararı + ilk backend dilimi
 
 **Kapsam kararı (task'ın kendi ilk sorusu).** Arama, `/api/plan`

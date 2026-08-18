@@ -3,7 +3,7 @@ import os
 import re
 from enum import Enum
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.request_normalization import normalize_request_text, normalize_selected_folder
 
@@ -531,6 +531,9 @@ class SearchRequest(BaseModel):
     extension: str | None = None
     modifiedAfter: str | None = None
     modifiedBefore: str | None = None
+    # Saga #314: icerik arama (AC-4/AC-9) - bos/whitespace-only reddedilir,
+    # 500 karakterle sinirlanir.
+    contentContains: str | None = Field(default=None, max_length=500)
 
     @field_validator("sessionId")
     @classmethod
@@ -539,8 +542,18 @@ class SearchRequest(BaseModel):
             raise ValueError("must not be empty or whitespace-only")
         return value
 
+    @field_validator("contentContains")
+    @classmethod
+    def content_contains_not_blank_if_given(cls, value: str | None) -> str | None:
+        if value is not None and value.strip() == "":
+            raise ValueError("must not be empty or whitespace-only")
+        return value
+
 
 class SearchResponse(BaseModel):
     """Saga #313: Dosya arama endpoint'i yanıtı."""
 
     results: list[SearchResultItem]
+    # Saga #314 (AC-2): global 10sn timeout asilirsa True - o ana kadarki
+    # kismi sonuclar dondurulur, hata firlatilmaz.
+    partial: bool = False

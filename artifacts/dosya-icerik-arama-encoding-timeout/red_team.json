@@ -1,0 +1,61 @@
+{
+  "task_slug": "dosya-icerik-arama-encoding-timeout",
+  "reviewed_files": [
+    "backend/file_search.py",
+    "backend/models.py",
+    "backend/main.py",
+    "backend/tests/test_file_search.py",
+    "backend/tests/test_main_integration.py"
+  ],
+  "findings": [
+    {
+      "category": "reliability",
+      "severity": "medium",
+      "finding": "AC-8 (symlink escape) ve AC-5 (permission-denied) testleri Windows'ta pytest.mark.skipif ile atlaniyor, bu yuzden bu davranislar bu PR'da fiilen hic dogrulanmadi. verify_report.md bunu zaten not dusmus ama red_team.json'da da resmi bir bulgu olarak kayda gecmesi gerekiyor cunku Windows gelistirme ortaminda bu iki guvenlik-kritik dal surekli kor nokta kalir.",
+      "scenario": "Windows gelistirici makinesinde/CI'da symlink-escape testi hep skip edilir; _is_symlink_escaping_root() icinde gelecekte bir regresyon hicbir testte kirmizi gorunmez, sadece Linux/macOS kullanicilari etkilenene kadar fark edilmez."
+    },
+    {
+      "category": "architecture",
+      "severity": "low",
+      "finding": "search_files() artik return_partial bayragina gore iki farkli donus tipi (list[SearchResultItem] veya tuple[list[SearchResultItem], bool]) donduruyor -- union-return-type kod kokusu. Tek gercek cagiran (main.py::search_endpoint) her zaman return_partial=True ile cagiriyor; return_partial=False dali sadece test-only, uretimde kullanilmiyor.",
+      "scenario": "Yeni bir gelistirici search_files()'i return_partial vermeden cagirirsa (list bekleyerek) partial bilgisini sessizce kaybeder; tip checker yapilandirilmadigi icin bu hata derleme zamaninda yakalanamaz."
+    },
+    {
+      "category": "reliability",
+      "severity": "low",
+      "finding": "atdd.md Assumptions bolumu dosyalarin chunk/stream okundugunu varsayiyor, ama implementasyon entry.read_bytes() ile dosyanin TAMAMINI (10MB'a kadar) tek seferde bellege yukluyor. AC ihlali degil ama dokumante edilmemis bir sapma.",
+      "scenario": "1000 dosyalik taramada art arda ~10MB'lik dosyalar 3 encoding ile decode edilirse bellek profili ATDD varsayimindan daha agir olabilir."
+    },
+    {
+      "category": "correctness",
+      "severity": "low",
+      "finding": "code_diff.md'ye gore kalan kirmizi entegrasyon testi, gercek timeout yerine backend.main.search_files'i mock'layarak duzeltildi -- artik sadece endpoint wiring'i (partial bayraginin response'a kopyalanmasi) test ediliyor, gercek uctan uca 10sn timeout entegrasyon seviyesinde dogrulanmiyor.",
+      "scenario": "search_files cagri imzasi yanlislikla bozulursa (parametre adi degisirse) mock generic oldugu icin test yesil kalabilir, gercek timeout regresyonu entegrasyon testinde yakalanmaz."
+    }
+  ],
+  "approved_points": [
+    "Encoding fallback sirasi (utf-8 -> cp1254 -> latin-1) plan.md'nin risk notuyla birebir uyumlu uygulanmis; latin-1'in her byte dizisini basarili decode etme ozelligi kod yorumuyla belgelenmis ve bilincli olarak en sona konmus.",
+    "Davranis Sozlesmesi tablosundaki her satir kodda dogrulanabiliyor: 422, 200+partial:true, 200+bos liste, 410 -- dort farkli durum gercekten dort farkli status code ile ayrisiyor.",
+    "_is_symlink_escaping_root() kirik/cozulemeyen symlink hedefinde fail-closed davranarak True (disla) donduruyor -- dogru guvenlik varsayilani.",
+    "content_contains filtresi mevcut AND filtre zincirine (name/extension/date) bozmadan eklendi, Saga #313 geriye donuk uyumluluk korunmus."
+  ],
+  "alternative_approach": {
+    "recommended_direction": "search_files()'in union return type'ini (list | tuple) kaldirip her zaman kucuk bir NamedTuple/dataclass (SearchOutcome(results, partial)) dondurmesi yonune gidilmeli; return_partial parametresi tamamen kaldirilabilir cunku tek gercek cagiran zaten her zaman partial bilgisine ihtiyac duyuyor.",
+    "files_that_should_change": [
+      "backend/file_search.py -- return_partial parametresini kaldirip her zaman sabit bir SearchOutcome donmeli, olu kod dalini temizler",
+      "backend/tests/test_file_search.py -- return_partial=False cagrilarini yeni sabit donus tipine gore guncellemeli"
+    ],
+    "rationale": "Tek uretim cagrisi (main.py) her zaman return_partial=True kullaniyor; False dali sadece testler icin var ve gelecekte biri partial bilgisini beklemeden cagirirsa sessizce timeout durumunu kaybedebilir. Sabit donus tipi okunabilirligi artirir ve tek bir dogru kullanim sekli birakir."
+  },
+  "scope_review": {
+    "in_scope": true,
+    "notes": "Degisiklikler atdd.md'nin belirttigi 3 dosyayla (file_search.py, models.py, main.py) ve ilan edilen test dosyalariyla sinirli; security.py'ye dokunulmamis. Kapsam disi ilan edilen maddelerden hicbiri eklenmemis."
+  },
+  "risk_review": {
+    "residual_risks": [
+      "AC-8/AC-5 Windows'ta test-dogrulanmamis -- Linux/macOS ortaminda bir defa calistirilip gercek kapsam teyit edilmeli.",
+      "cp1254'un de cogu byte dizisini basarili ama muhtemelen yanlis decode edebilmesi kalinti bir risk -- heuristic eklenmedi, sadece siralama ile hafifletildi."
+    ]
+  },
+  "overall_assessment": "Implementasyon ATDD'nin 9 kabul kriterinin tamamini dogru bagliyor, davranis sozlesmesi tablosu kodda satir satir izlenebilir, plan.md'nin ongordugu encoding-sirasi riski dogru cozulmus. Bulunan sorunlar blocker seviyesinde degil: en onemlisi Windows'ta skip edilen AC-8/AC-5 testlerinin gercek dogrulama almamasi ve search_files()'in union return type kod kokusu."
+}
