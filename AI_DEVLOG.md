@@ -1,5 +1,14 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Naive tarih string'i 500 hatası düzeltmesi (Saga #335, epic #27)
+
+Saga #313'ün `verify_report.md`'sinde bilinen sınırlama olarak not düşülmüştü:
+`modifiedAfter`/`modifiedBefore` offset'siz (timezone-naive) bir ISO string
+ile gönderilirse, `file_search.py`'nin tz-aware (UTC) `st_mtime`
+karşılaştırmasıyla çakışıp `TypeError`→500'e düşüyordu. `backend/main.py`'de
+parse sonrası `tzinfo is None` ise UTC atanacak şekilde 4 satırlık minimal
+düzeltme yapıldı — `file_search.py`'ye dokunulmadı. 113/113 test yeşil (3 yeni).
+
 ## Dosya içeriğinde arama: timeout + encoding toleransı (Saga #314, epic #27)
 
 **Encoding fallback sırası — plan aşamasında bulunan risk.** `search_files()`

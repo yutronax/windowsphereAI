@@ -1,0 +1,29 @@
+{
+  "security_findings": [
+    {
+      "finding": "Duplicated normalization logic (tzinfo None check + replace) is written twice inline in search_endpoint, once for modifiedAfter and once for modifiedBefore, instead of a single shared helper.",
+      "severity": "low",
+      "scenario": "Not a security bug today because both copies are correct and symmetric (verified line-by-line: lines 409-410 and 420-421 in backend/main.py are identical in structure). But if a third naive-datetime-accepting field is added later (e.g. a future 'createdAfter'), a developer copying this pattern could paste it wrong (e.g. forget the tzinfo check, or check the wrong variable), and there is no test/type enforcement forcing all datetime inputs through one normalization path."
+    },
+    {
+      "finding": "datetime.fromisoformat is used directly, which (depending on Python version) has looser or stricter ISO 8601 parsing than the 'Z' suffix commonly emitted by JavaScript's Date.toISOString().",
+      "severity": "low",
+      "scenario": "A frontend client sending '2024-01-01T00:00:00Z' (trailing Z, no explicit +00:00) will fail differently across Python versions - accepted as UTC-aware in Python 3.11+, but raises ValueError (-> 422) on Python <3.11. This is out of scope per atdd.md ('Kapsam Dışı: Frontend'in tarih seçici formatı'), but the assumption that all offset-less strings only ever look like '2024-01-01T00:00:00' (no trailing Z) was not explicitly tested and could resurface as a similar bug class later."
+    }
+  ],
+  "alternative_approach": {
+    "recommended_direction": "Extract the repeated 'parse ISO 8601 -> raise 422 on failure -> default naive to UTC' logic into a single small private helper function (e.g. _parse_and_normalize_datetime(field_name, value) -> dt.datetime) and call it twice from search_endpoint, or better, move it into a Pydantic field_validator on the request model so normalization happens declaratively at the schema boundary rather than imperatively in the endpoint body.",
+    "files_that_should_change": [
+      "backend/main.py — extract the duplicated 8-line block (lines ~401-421) into one helper function or a pydantic validator on the SearchRequest model, so the naive->UTC rule is defined and tested in exactly one place"
+    ],
+    "rationale": "This specific fix is correct and appropriately minimal for a 2-line bugfix scope, so no rework is required now. But the duplication is a preventable future-bug vector: the two copies are only correct today because they were written together in the same task. A single helper/validator would make the naive->UTC contract impossible to violate by accident when the code is touched again (e.g. if a new date filter field is added in a later saga), and would also let the 90% unit-test target from atdd.md be met with genuine unit tests of the helper itself rather than only integration tests through the HTTP endpoint (verify_report.md explicitly notes this gap: 'ayrı bir unit-seviyeli normalizasyon fonksiyonu yazılmadı')."
+  },
+  "approved_points": [
+    "Confirmed in backend/file_search.py (lines 129-142, 186) that search_files() always builds tz-aware UTC datetimes from st_mtime, so main.py's guarantee of always passing tz-aware datetimes in (lines 409-410, 420-421) fully closes the naive/aware TypeError->500 gap described in atdd.md; no remaining code path can reach the comparison with a naive datetime.",
+    "modifiedAfter and modifiedBefore are normalized fully independently (separate if-blocks, separate variables) — verified this matches AC-3's requirement that a naive/aware mix normalizes both fields correctly; test_search_endpoint_combines_naive_modified_after_with_aware_modified_before exercises exactly this combination and asserts correct filtering on 3 files at 3 different boundaries, which is a real behavioral check, not just a status-code check.",
+    "The 422 path is untouched: the try/except around fromisoformat() still raises HTTPException(422, ...) before the new tzinfo-check line is ever reached, so malformed strings never reach the naive/aware logic — existing tests test_search_endpoint_returns_422_for_invalid_modified_after_format/_before (unmodified) still pass, confirming no regression on AC-4.",
+    "Scope is genuinely tight and matches atdd.md/plan.md 1:1 — code_diff.md shows exactly 4 new lines (2 lines x 2 fields) with no unrelated changes to backend/file_search.py, no new files, no changes to the 410/error-handling paths outside the two if-blocks.",
+    "Behavior contract table rows 1, 2, 3(410, unchanged elsewhere), 7 all have direct code/test correspondence; rows 4-6 are correctly marked N/A in atdd.md itself and don't apply to this diff, so there is no unaddressed contract row."
+  ],
+  "overall_assessment": "This is a correct, minimal, well-scoped bugfix. The naive->UTC normalization is symmetric and independent across both fields, the 422/410 paths are provably untouched, and file_search.py's tz-aware guarantee closes the loop so the described 500 can no longer occur. The only non-blocking observation is code duplication between the two nearly-identical parse blocks, which is a maintainability concern for future changes, not a correctness or security issue in this diff. No blocking findings."
+}

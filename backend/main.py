@@ -406,6 +406,8 @@ def search_endpoint(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"modifiedAfter geçersiz ISO 8601 formatı: '{payload.modifiedAfter}'",
             )
+        if modified_after.tzinfo is None:
+            modified_after = modified_after.replace(tzinfo=dt.timezone.utc)
 
     if payload.modifiedBefore is not None:
         try:
@@ -415,6 +417,8 @@ def search_endpoint(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"modifiedBefore geçersiz ISO 8601 formatı: '{payload.modifiedBefore}'",
             )
+        if modified_before.tzinfo is None:
+            modified_before = modified_before.replace(tzinfo=dt.timezone.utc)
 
     results, partial = search_files(
         allowed_root,

@@ -1028,6 +1028,125 @@ def test_search_endpoint_filters_by_modified_before(tmp_path):
     assert "dosya2.txt" not in filenames
 
 
+# --- Saga #335: tz-naive-tarih-500-fix (RED STEP) ---
+# `modifiedAfter`/`modifiedBefore` offset'siz (naive) ISO 8601 string'i
+# gonderildiginde `backend/main.py` naive bir `datetime` uretiyor,
+# `backend/file_search.py::search_files()` ise dosya `st_mtime`'ini HER
+# ZAMAN tz-aware (UTC) uretip karsilastiriyor -> naive/aware karsilastirmasi
+# Python'da TypeError firlatir, bu da yakalanmayan bir 500'e dusuyor. Henuz
+# duzeltme YAPILMADI, bu yuzden asagidaki testler simdi 500 (veya TestClient
+# icinde firlatilan TypeError) ile KIRMIZI olmalidir - bu BEKLENEN (red step).
+
+
+def test_search_endpoint_filters_by_naive_modified_after_defaults_to_utc(tmp_path):
+    """AC-1 [Critical]: naive modifiedAfter (offset yok) -> 500 DEGIL, 200 doner,
+    UTC varsayilip dogru filtrelenir."""
+    import time as time_module
+
+    file1 = tmp_path / "dosya1.txt"
+    file1.write_text("eski")
+    old_mtime = time_module.time() - 3600  # 1 saat once
+    file1_mtime_utc = dt.datetime.fromtimestamp(old_mtime, tz=dt.timezone.utc)
+    os.utime(file1, (old_mtime, old_mtime))
+
+    file2 = tmp_path / "dosya2.txt"
+    file2.write_text("yeni")
+
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    # file1'in mtime'indan 1 saniye SONRAsini, offset OLMADAN (naive) gonder.
+    naive_filter_time = (file1_mtime_utc + dt.timedelta(seconds=1)).replace(tzinfo=None)
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id, "modifiedAfter": naive_filter_time.isoformat()},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    filenames = [r["filename"] for r in body["results"]]
+    assert "dosya1.txt" not in filenames
+    assert "dosya2.txt" in filenames
+
+
+def test_search_endpoint_filters_by_naive_modified_before_defaults_to_utc(tmp_path):
+    """AC-2 [Critical]: naive modifiedBefore (offset yok) -> 500 DEGIL, 200 doner,
+    UTC varsayilip dogru filtrelenir."""
+    import time as time_module
+
+    file1 = tmp_path / "dosya1.txt"
+    file1.write_text("eski")
+    old_mtime = time_module.time() - 3600  # 1 saat once
+    file1_mtime_utc = dt.datetime.fromtimestamp(old_mtime, tz=dt.timezone.utc)
+    os.utime(file1, (old_mtime, old_mtime))
+
+    file2 = tmp_path / "dosya2.txt"
+    file2.write_text("yeni")
+
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    # file1'in mtime'indan 1 saniye SONRAsini, offset OLMADAN (naive) gonder
+    # -> file1 (daha eski) bu sinirin altinda kalmali, file2 (daha yeni) disarida.
+    naive_filter_time = (file1_mtime_utc + dt.timedelta(seconds=1)).replace(tzinfo=None)
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id, "modifiedBefore": naive_filter_time.isoformat()},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    filenames = [r["filename"] for r in body["results"]]
+    assert "dosya1.txt" in filenames
+    assert "dosya2.txt" not in filenames
+
+
+def test_search_endpoint_combines_naive_modified_after_with_aware_modified_before(tmp_path):
+    """AC-3 [High]: modifiedAfter naive VE modifiedBefore tz-aware (+03:00) birlikte
+    verilir -> 200 doner, ikisi de bagimsiz dogru normalize edilip AND ile birlesir."""
+    import time as time_module
+
+    file_too_old = tmp_path / "cok_eski.txt"
+    file_too_old.write_text("cok eski")
+    too_old_mtime = time_module.time() - 7200  # 2 saat once
+    os.utime(file_too_old, (too_old_mtime, too_old_mtime))
+
+    file_in_range = tmp_path / "aralikta.txt"
+    file_in_range.write_text("aralikta")
+    in_range_mtime = time_module.time() - 3600  # 1 saat once
+    os.utime(file_in_range, (in_range_mtime, in_range_mtime))
+
+    file_too_new = tmp_path / "cok_yeni.txt"
+    file_too_new.write_text("cok yeni")
+    # su anki (en yeni) mtime - filtrelerin disinda kalmali.
+
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    # modifiedAfter: cok_eski'nin biraz SONRASI, naive (offset yok).
+    naive_after = (
+        dt.datetime.fromtimestamp(too_old_mtime, tz=dt.timezone.utc) + dt.timedelta(seconds=1)
+    ).replace(tzinfo=None)
+    # modifiedBefore: cok_yeni'den biraz ONCESI, tz-aware (+03:00) -> UTC'ye
+    # cevrildiginde aralikta.txt'yi icine alan ama cok_yeni.txt'yi disarida
+    # birakan bir sinir.
+    aware_before_utc = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=1)
+    aware_before_plus3 = aware_before_utc.astimezone(dt.timezone(dt.timedelta(hours=3)))
+
+    response = client.post(
+        "/api/search",
+        json={
+            "sessionId": session_id,
+            "modifiedAfter": naive_after.isoformat(),
+            "modifiedBefore": aware_before_plus3.isoformat(),
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    filenames = [r["filename"] for r in body["results"]]
+    assert "cok_eski.txt" not in filenames
+    assert "aralikta.txt" in filenames
+    assert "cok_yeni.txt" not in filenames
+
+
 def test_search_endpoint_returns_422_for_invalid_modified_after_format(tmp_path):
     (tmp_path / "dosya.txt").write_text("test")
     session_id = _create_session(selected_folder=str(tmp_path))
