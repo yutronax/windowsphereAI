@@ -5,3 +5,5 @@ playwright-report/
 __pycache__/
 *.pyc
 .pytest_cache/
+.aider*
+.venv/
