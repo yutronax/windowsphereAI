@@ -125,3 +125,46 @@ Bu doküman onaylandıktan sonra, MVP çekirdek akış (kullanıcı girişi/ilk 
 ana sohbet arayüzü, uçtan uca bir dosya operasyonu) UI/UX detayına kadar
 Codex tarafından epic+task olarak üretilip Saga'ya işlenecek
 (proje id: 2, bkz. Saga `windows-ai-files`).
+
+## 6. Operasyon-özel `PlanStep` alanları için test konvansiyonu (Saga #319)
+
+**Sorun (referans projeden ders):** `referans/windows-ai-files-eski`'de
+tekrarlayan bir bug sınıfı vardı — şema bir parametre adı bildiriyordu
+(örn. "box"), gerçek `execute` fonksiyonu FARKLI bir isim okuyordu
+(left/top/right/bottom), alan sessizce yok sayılıyor, işlem YANLIŞ bir
+şeyi yapıyordu ama `success: True` raporluyordu.
+
+**Kural — bu projede `backend/models.py`'nin `PlanStep`'ine yeni bir
+operasyon-özel alan eklendiğinde (yalnızca belirli `operationType`
+değerleri için anlamlı, örn. gelecekteki Image için `cropBox`, Zip için
+`extractToFolder` — bkz. Saga #320-#329) ZORUNLU:**
+
+1. **Şema tarafı** — `newFileNames`/`mergedFileName` deseniyle aynı:
+   `model_validator(mode="after")` ile "alan SADECE bu operationType'ta
+   dolu olmalı, diğerlerinde None/eksik olmalı" kuralı eklenir
+   (bkz. `models.py`'de `new_file_names_only_for_rename`,
+   `merged_file_name_only_for_merge`).
+2. **Wiring testi (ZORUNLU, orchestrator seviyesinde, mock YOK)** —
+   `backend/tests/test_orchestrator.py`'ye alanın EN AZ İKİ farklı
+   değeriyle `apply_plan`'ı çağıran, ve GERÇEK dosya sisteminde İKİ
+   FARKLI somut çıktı (dosya adı/yolu/sayfa sayısı/içerik) gözlenen bir
+   test eklenir. Tek bir sabit değerle test etmek YETERSİZDİR — kod
+   alanı yoksayıp sabit bir davranış uygulasa bile öyle bir test yeşil
+   kalabilir. Örnekler (Saga #319'da eklendi):
+   - `test_apply_plan_rename_output_filename_changes_when_new_file_names_changes`
+     — üç farklı `newFileNames` değeri, üç farklı çıktı dosya adı.
+   - `test_apply_plan_merge_output_filename_changes_when_merged_file_name_changes`
+     — iki farklı `mergedFileName` değeri, iki farklı çıktı dosya adı,
+     birbirine sızmadığı da doğrulanıyor.
+3. **Negatif test** — alan zorunlu olduğu `operationType`'ta eksikken,
+   ve zorunlu OLMADIĞI bir `operationType`'ta doluyken `ValidationError`
+   fırlatıldığı `backend/tests/test_models.py`'de doğrulanır (mevcut
+   `newFileNames`/`mergedFileName` testleri örnek alınır).
+
+**Kapsam dışı bırakılan (bilinçli karar):** AST/statik-analiz tabanlı
+"her PlanStep alanı orchestrator'da okunuyor mu" otomatik kontrolü
+KURULMADI — orantısız karmaşıklık ve yanlış pozitif/negatif riski
+(bir alan helper fonksiyon üzerinden dolaylı okunabilir, statik analiz
+bunu kaçırabilir) nedeniyle. Bunun yerine bu dökümante edilmiş
+konvansiyon + red-team incelemesinin (bkz. `red-team` skill) her yeni
+operasyon-özel alan için bu üç maddeyi kontrol etmesi tercih edildi.

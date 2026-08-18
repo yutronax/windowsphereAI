@@ -488,6 +488,33 @@ def test_apply_plan_renames_a_file_in_place(session, tmp_path):
     assert transaction.status == "committed"
 
 
+def test_apply_plan_rename_output_filename_changes_when_new_file_names_changes(session, tmp_path):
+    _write_pdf(tmp_path, "one.pdf")
+    _write_pdf(tmp_path, "two.pdf")
+    _write_pdf(tmp_path, "three.pdf")
+    pdf_files = [
+        PdfFileMetadata(filename="one.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="two.pdf", createdAt="2026-08-02"),
+        PdfFileMetadata(filename="three.pdf", createdAt="2026-08-03"),
+    ]
+    plan = _plan(
+        [
+            _step(0, "2026-08", ["one.pdf"], operation_type=OperationType.RENAME, new_file_names=["alpha.pdf"]),
+            _step(1, "2026-08", ["two.pdf"], operation_type=OperationType.RENAME, new_file_names=["beta.pdf"]),
+            _step(2, "2026-08", ["three.pdf"], operation_type=OperationType.RENAME, new_file_names=["gamma.pdf"]),
+        ]
+    )
+
+    apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert (tmp_path / "alpha.pdf").exists()
+    assert not (tmp_path / "one.pdf").exists()
+    assert (tmp_path / "beta.pdf").exists()
+    assert not (tmp_path / "two.pdf").exists()
+    assert (tmp_path / "gamma.pdf").exists()
+    assert not (tmp_path / "three.pdf").exists()
+
+
 def test_apply_plan_rolls_back_a_rename_by_restoring_the_old_name(session, tmp_path, monkeypatch):
     _write_pdf(tmp_path, "a.pdf")
     _write_pdf(tmp_path, "b.pdf")
@@ -589,6 +616,38 @@ def test_apply_plan_merges_real_pdfs_into_one_file_with_the_correct_total_page_c
     assert transaction.status == "committed"
     assert len(transaction.operations) == 1
     assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_merge_output_filename_changes_when_merged_file_name_changes(session, tmp_path):
+    run1 = tmp_path / "run1"
+    run1.mkdir()
+    run2 = tmp_path / "run2"
+    run2.mkdir()
+
+    _write_real_pdf(run1, "s1.pdf", 1)
+    _write_real_pdf(run1, "s2.pdf", 1)
+    pdf_files_1 = [
+        PdfFileMetadata(filename="s1.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="s2.pdf", createdAt="2026-08-02"),
+    ]
+    plan_1 = _plan([_merge_step(0, ["s1.pdf", "s2.pdf"], "merged_a.pdf")])
+    apply_plan(session, plan_1, pdf_files_1, run1)
+
+    assert (run1 / "merged_a.pdf").exists()
+
+    _write_real_pdf(run2, "s3.pdf", 1)
+    _write_real_pdf(run2, "s4.pdf", 1)
+    pdf_files_2 = [
+        PdfFileMetadata(filename="s3.pdf", createdAt="2026-08-03"),
+        PdfFileMetadata(filename="s4.pdf", createdAt="2026-08-04"),
+    ]
+    plan_2 = _plan([_merge_step(0, ["s3.pdf", "s4.pdf"], "merged_b.pdf")])
+    apply_plan(session, plan_2, pdf_files_2, run2)
+
+    assert (run2 / "merged_b.pdf").exists()
+    assert (run1 / "merged_a.pdf").exists()
+    assert not (run2 / "merged_a.pdf").exists()
+    assert not (run1 / "merged_b.pdf").exists()
 
 
 def test_apply_plan_leaves_merge_sources_untouched(session, tmp_path):

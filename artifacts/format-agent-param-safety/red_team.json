@@ -1,0 +1,29 @@
+{
+  "security_findings": [
+    {
+      "finding": "merge wiring test uses two separate tmp_path subdirectories (run1/run2) rather than reusing one directory across both apply_plan calls, so it would not catch a hypothetical session-level cache bug keyed by something other than mergedFileName.",
+      "severity": "low",
+      "scenario": "A future refactor introducing a per-session destination cache keyed only by step.order (not mergedFileName) would still pass this test because run1/run2 are physically isolated."
+    },
+    {
+      "finding": "Flagged a possible stray backslash in _write_real_pdf's open() call as a potential syntax issue.",
+      "severity": "low",
+      "scenario": "Confirmed false positive: pytest already ran 211/211 green including this helper, so the source uses pathlib's '/' correctly; rendering artifact in the review, not a real bug."
+    }
+  ],
+  "alternative_approach": {
+    "recommended_direction": "Extract a shared parametrized test helper for the 'call apply_plan with N field values, assert N distinct outputs' pattern before Saga #320-#329 add more operation-specific fields, to avoid copy-pasted tests.",
+    "files_that_should_change": ["backend/tests/test_orchestrator.py"],
+    "rationale": "Policy (DESIGN_DECISIONS.md §6) without tooling degrades under repetition once 5+ near-identical wiring tests exist.",
+    "disposition": "Out of scope for #319 (pure test-suite maintainability, not blocking). Filed as Saga #332 (depends_on: [319], priority low)."
+  },
+  "approved_points": [
+    "Confirmed backend/models.py and backend/orchestrator.py untouched via git diff/status.",
+    "Both new tests exercise real apply_plan against a real filesystem, no mocking, and assert both presence of new filename and absence of old filename.",
+    "Merge test also checks cross-run non-contamination.",
+    "DESIGN_DECISIONS.md §6 accurately references the real validator names (new_file_names_only_for_rename, merged_file_name_only_for_merge).",
+    "Decision to skip AST/static-analysis auto-checking in favor of documented convention + red-team review is explicitly justified, not left implicit."
+  ],
+  "overall_assessment": "Clean, additive-only diff (tests + docs, zero production code changes). Proves existing RENAME/MERGE wiring with real-filesystem tests that would fail against a hardcoded-filename regression, and documents a specific convention for future operation-specific fields. No security/correctness issues in the diff itself.",
+  "ready_to_commit": true
+}

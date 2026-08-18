@@ -1,5 +1,27 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Format Agent parametre güvenlik ağı (Saga #319, epic #29) — kod boşluğu yok, konvansiyon + wiring testleri eklendi
+
+**Keşif sonucu: bug sınıfı bu projede henüz yok.** Referans projedeki
+(`referans/windows-ai-files-eski`) tekrarlayan hata — şemanın bir alan
+adı bildirmesi, orchestrator'ın FARKLI bir isim okuyup alanı sessizce
+yoksaması — bu projede `PlanStep.newFileNames` (RENAME) ve
+`PlanStep.mergedFileName` (MERGE) için ARANDI ve BULUNAMADI: her ikisi
+de `orchestrator.apply_plan`'da gerçekten okunuyor
+(`destination_path = allowed_root / step.mergedFileName`,
+`dict(zip(step.fileNames, step.newFileNames))`). Bu yüzden kod
+değişikliği yapılmadı — görev, AST/statik-analiz gibi orantısız bir
+otomatik kontrol kurmak yerine, gelecekteki format-agent görevleri
+(#320-#329, Word/Excel/Image/Zip) için dökümante edilmiş bir test
+konvansiyonu (`docs/DESIGN_DECISIONS.md` §6) + iki somut "alanı
+değiştir, çıktının değiştiğini gör" testi teslim etti.
+
+**Red-team bulgusu → takip task'ı.** Bağımsız inceleme, testlerin
+gerçekten wiring'i kanıtladığını onayladı (`ready_to_commit: true`) ama
+gelecekteki 5+ benzer testin kopyala-yapıştır'a dönüşeceğini işaret
+etti — bu görevi bloklamadı, Saga #332 (depends_on: [319], low öncelik)
+olarak ayrı bir takip task'ı açıldı.
+
 ## apply-plan endpoint (Saga #309, epic #25) — ürünün ilk gerçek uçtan uca dosya işlemi
 
 **Kilometre taşı: uygulama artık gerçekten bir şey yapıyor.** `POST
