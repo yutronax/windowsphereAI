@@ -156,6 +156,7 @@ export default function App() {
         planError={planError}
         onRetry={handleRetry}
         onApprovePlan={handleApprovePlan}
+        sessionId={sessionId ?? undefined}
       />
     );
   }

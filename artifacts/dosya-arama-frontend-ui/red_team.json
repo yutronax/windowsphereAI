@@ -1,0 +1,34 @@
+{
+  "security_findings": [
+    {
+      "finding": "KAPATILDI (2. tur dogrulama): Davranis sozlesmesi tablosundaki (atdd.md satir 47-50) 3 farkli hata senaryosu artik SearchPanel.tsx'te status koduna gore ayristiriliyor. 422 icin response.json() cagirilip body.detail okunuyor (satir 73-80, fallback jenerik mesaj), 410 icin sabit 'Secili klasor artik mevcut degil' metni (satir 81-82), fetch reddi (ag hatasi) icin sabit 'Sunucuya ulasilamadi. Lutfen tekrar deneyin.' metni (.catch bloğu, satir 96-98) donuyor. Ayrica isStale() kontrolu her dalda korunmus, race-condition regresyonu yok.",
+      "severity": "resolved",
+      "scenario": "Once: kullanici 422/410/network hatalarinin hepsinde ayni jenerik metni goruyordu. Simdi: SearchPanel.test.tsx'teki 3 ayri test ('shows the backend detail message ... 422', 'shows the folder no longer exists ... 410', 'shows an error message ... fetch rejects') gercek metin icerigini toHaveTextContent ile dogruluyor (satir 120, 145-147, 161) — sadece testid varligini degil. atdd.md tablosundaki satir 2 (422->backend detail), satir 3 (410->sabit mesaj), satir 5 (network->sabit mesaj) kodda birebir karsiligini buluyor. Dogrulandi, acik bulgu kalmadi."
+    },
+    {
+      "finding": "Gate 12 (gorsel regresyon) N/A ve gercek Tauri+backend ortaminda hic canli dogrulama yapilmamis; SearchPanel App icinde sadece sessionId varsa render ediliyor, ama sessionId'nin App.tsx'te ne zaman set edildigi (OnboardingScreen sonrasi) ile toggle butonunun gorunurlugu arasindaki gercek layout etkilesimi (orn. chat-input-area ile cakisma, mobil/dar ekran) hic gorulmedi.",
+      "severity": "low",
+      "scenario": "CSS/layout regresyonu (orn. toggle butonu chat-input-area'yi orten, SearchPanel'in .chat-input-area'ya yakin konumlandirilmasi input alanini gizler) sadece kullanicinin gercek uygulamada manuel test etmesiyle ortaya cikar; bu commit'in ardindan production'da fark edilmeden merge edilme riski var."
+    },
+    {
+      "finding": "SearchPanel fetch govdesinde sessionId disinda hicbir input sanitization/validation yok (nameContains, extension, modifiedAfter/Before dogrudan JSON.stringify ile gonderiliyor) - bu backend'in sorumlulugu olarak birakilmis ve atdd.md'de de acikca bu sekilde tasarlanmis (backend #313/#314 zaten AND ile validize ediyor), bu yuzden severity dusuk ama not edilmeye deger.",
+      "severity": "low",
+      "scenario": "Backend tarafinda date-format/regex validasyonu zayifsa (bu review kapsaminda incelenmedi), UI hicbir client-side kisitlama yapmadigi icin ham string'i oldugu gibi ileterek backend'e yuk bindirir; bu riskin gercek olup olmadigi backend/models.py::SearchRequest incelenmeden teyit edilemez."
+    }
+  ],
+  "alternative_approach": {
+    "recommended_direction": "Fix uygulandigi sekliyle kabul edilebilir (inline if/else zinciri, tek fonksiyon cikarilmamis). Kod tabaninin buyumeye devam etmesi durumunda (orn. 3'ten fazla hata kodu eklenirse) status->mesaj eslemesini mapSearchErrorToMessage(status, detail) gibi ayri bir saf fonksiyona cikarmak test edilebilirligi artirir, ama mevcut 3 dallı yapı icin bu simdi zorunlu degil — YAGNI.",
+    "files_that_should_change": [],
+    "rationale": "Ilk turda onerilen yon (status-bazli dallanma + testlerin metin icerigini dogrulamasi) fiilen uygulandi. Su an icin ek bir mimari degisiklik onerilmiyor; kod atdd.md ile birebir tutarli ve test kapsamı yeterli."
+  },
+  "approved_points": [
+    "SearchPanel.tsx satir 73-85: response.status'e gore 422/410/diger olarak dallanan hata isleme mantigi eklendi; 422'de response.json() ile body.detail okunuyor ve isStale() kontrolu await sonrasinda tekrar yapiliyor (satir 75) — stale bir 422 yanitinin state'i ezmesi engellenmis, race-condition korumasi bozulmamis.",
+    "SearchPanel.test.tsx'e eklenen 2 yeni test (satir 135-149 icin 422, satir 151-163 icin 410) gercekten toHaveTextContent ile tam metin eslesmesi yapiyor, sadece testid/role varligini kontrol etmiyor; boylece gelecekte mesaj metni yanlislikla degisirse/jenerik hale donerse test kirilir.",
+    "Mevcut network-hatasi testi (satir 112-122, AC-4) de toHaveTextContent('Sunucuya ulasilamadi. Lutfen tekrar deneyin.') ile guncellenmis, ayri bir regresyon degil dogrulandi.",
+    "atdd.md Davranis Sozlesmesi tablosundaki satir 2 (422->backend detail), satir 3 (410->sabit mesaj) ve satir 5 (ag hatasi->sabit mesaj) artik kodda birebir karsiligini buluyor; satir 4 ve 6 zaten 'Silindi' olarak isaretli, kapsam disi.",
+    "vite.config.ts, App.tsx entegrasyonu, requestId/latestRequestIdRef deseni ve scope siniri (contentContains yok, tiklama yok) ilk turda dogrulanmisti, bu turda tekrar incelenmedi (talimat geregi) ve degismedi."
+  ],
+  "overall_assessment": "Ikinci tur dogrulama: ilk turdaki medium-severity bulgu (jenerik hata mesaji, 3 senaryonun ayirt edilmemesi) tamamen kapatildi. SearchPanel.tsx artik status koduna gore 422/410/network hatalarini ayristiriyor, backend'in detail alanini okuyor, ve SearchPanel.test.tsx'teki yeni testler gercek metin icerigini (toHaveTextContent) dogruluyor — sadece testid kontrolu degil. atdd.md'deki Davranis Sozlesmesi tablosunun 2, 3 ve 5. satirlarinin hepsi kodda birebir karsiligini buluyor. Geriye kalan 2 bulgu (Gate 12 gorsel regresyon N/A, client-side input validation yoklugu) low severity ve ilk turdan degismedi, taniden bilinen/kabul edilebilir riskler.",
+  "verdict": "approve",
+  "ready_to_commit": true
+}

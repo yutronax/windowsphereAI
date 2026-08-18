@@ -1,5 +1,29 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Dosya Arama frontend UI (Saga #334, epic #27)
+
+**Bağımsız red-team turu gerçek bir sözleşme boşluğu buldu.** İlk implementasyon
+turu, `atdd.md`'nin Davranış Sözleşmesi tablosunda tanımlı 3 ayrı hata mesajını
+(422 → backend `detail`, 410 → "klasör artık yok", ağ hatası → "sunucuya
+ulaşılamadı") tek jenerik "Arama sırasında bir hata oluştu." mesajına
+indirgemişti. `SearchPanel.test.tsx` sadece hata testid'inin VARLIĞINI kontrol
+ettiği için (metin içeriğini değil) bu sapma testlerde yeşil geçmişti — ikinci
+bir subagent turu `response.status`'a göre dallanan mantığı ekledi, testler
+`toHaveTextContent` ile metin içeriğini doğrulayacak şekilde güçlendirildi.
+Bağımsız red-team ikinci turda düzeltmeyi doğruladı (`ready_to_commit: true`).
+
+**`sessionId` App→ChatScreen'e hiç geçirilmiyordu.** Plan aşamasında koda
+bakılarak bulunan bir boşluk — ATDD'nin "Unknowns" bölümünde işaretlenmişti,
+`App.tsx`/`ChatScreen.tsx` ikisi de güncellendi.
+
+**Bilinen sınırlama:** Gerçek Tauri+backend ortamında canlı görsel doğrulama
+yapılamadı (dev server tarayıcı önizlemesinde `@tauri-apps/plugin-dialog`
+native klasör seçici çalışmıyor, akış "Backend ulaşılamadı"da tıkanıyor) —
+151 geçen RTL testi yeterli görüldü ama kullanıcı gerçek uygulamada bir kez
+manuel kontrol etmeli.
+
+`npx vitest run` (proje geneli): 151 passed, 0 failed.
+
 ## Naive tarih string'i 500 hatası düzeltmesi (Saga #335, epic #27)
 
 Saga #313'ün `verify_report.md`'sinde bilinen sınırlama olarak not düşülmüştü:

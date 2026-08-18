@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type UIEvent } from 'react';
 import PlanCard, { type Plan } from './PlanCard';
 import ResultCard, { type TransactionResult } from './ResultCard';
+import SearchPanel from '../search/SearchPanel';
 
 export type ChatMessage = {
   id: string;
@@ -36,6 +37,9 @@ type Props = {
   // tıklamadan asla tetiklenmez (PlanCard'ın fail-closed canApprove
   // mantığıyla birlikte).
   onApprovePlan?: (messageId: string) => void;
+  // Saga #334: SearchPanel'in fetch çağrısı için gerekli — verilmezse
+  // arama paneli açılamaz (toggle butonu gizlenir).
+  sessionId?: string;
 };
 
 const BOTTOM_THRESHOLD_PX = 24;
@@ -49,6 +53,7 @@ export default function ChatScreen({
   planError = null,
   onRetry,
   onApprovePlan,
+  sessionId,
 }: Props) {
   const isControlled = controlledMessages !== undefined;
   const [internalMessages, setInternalMessages] = useState<ChatMessage[]>(initialMessages);
@@ -66,6 +71,7 @@ export default function ChatScreen({
   const [editingPlanMessageId, setEditingPlanMessageId] = useState<string | null>(null);
   const [staleMessageIds, setStaleMessageIds] = useState<Set<string>>(new Set());
   const [isAtBottom, setIsAtBottom] = useState(true);
+  const [isSearchPanelOpen, setIsSearchPanelOpen] = useState(false);
   const nextMessageIdRef = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
@@ -261,6 +267,18 @@ export default function ChatScreen({
           font-size: 13px;
           cursor: pointer;
         }
+        .chat-search-toggle-button {
+          align-self: flex-start;
+          margin: 4px 16px 0;
+          height: 32px;
+          padding: 0 14px;
+          border-radius: 8px;
+          background-color: #111827;
+          color: #fff;
+          border: none;
+          font-size: 13px;
+          cursor: pointer;
+        }
       `}</style>
       <ul
         ref={listRef}
@@ -333,6 +351,17 @@ export default function ChatScreen({
           </button>
         </div>
       )}
+      {sessionId && (
+        <button
+          type="button"
+          className="chat-search-toggle-button"
+          data-testid="chat-search-toggle-button"
+          onClick={() => setIsSearchPanelOpen((current) => !current)}
+        >
+          {isSearchPanelOpen ? 'Aramayı kapat' : 'Dosya ara'}
+        </button>
+      )}
+      {isSearchPanelOpen && sessionId && <SearchPanel sessionId={sessionId} />}
       <div className="chat-input-area">
         <textarea
           ref={textareaRef}
