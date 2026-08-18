@@ -1,5 +1,35 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## DELETE yedek toplam boyut sınırı (Saga #312, epic #26) — kod yazımı ilk kez Haiku subagent'larıyla
+
+**Süreç notu.** 2026-08-18'de kullanıcı kalıcı bir kural netleştirdi: kod/
+test yazımı HER ZAMAN Haiku modelli ayrı bir subagent'a devredilir, ana
+oturum (Sonnet) kendisi asla `Edit`/`Write` ile implementasyon yazmaz —
+sadece keşif+ATDD/plan+doğrulama+red-team-benzeri inceleme yapar. Bu, o
+kuralla yapılan ilk task.
+
+**Bulduğu değer: ana oturumun bağımsız incelemesi gerçek bir sorunu
+yakaladı.** İlk Haiku implementasyon turu, ATDD'de HİÇ olmayan bir
+"bilinmeyen yedek klasörü" özel-durumu icat etmişti — threshold zaten
+altına inildiğinde bile TÜM bilinen adayları körü körüne siliyordu
+(gereğinden fazla veri kaybı riski, boyut sınırının amacını boşa
+çıkarıyordu). Kök neden: yazdığı testin kendi varsayımı ("phantom"
+klasörlü senaryoda İKİ transaction'ın da silinmesi gerektiği) aslında
+basit/doğru mantıkla (her purge sonrası gerçek toplam boyutu yeniden
+hesapla, eşik altına inince dur) çelişiyordu — implementasyon bu
+çelişkiyi "her zaman tümünü sil" gibi tehlikeli bir kısayolla çözmüştü.
+Üçüncü bir Haiku çağrısıyla hem kod hem test doğru mantığa göre
+düzeltildi: fonksiyon artık HER purge sonrası gerçek boyutu yeniden
+ölçüp eşik altına inince duruyor.
+
+**Özellik:** `purge_oversized_delete_backups` — mevcut süre-bazlı
+`purge_expired_delete_backups`e (Saga #300/#302) ek olarak, DELETE
+yedek klasörünün TOPLAM boyutu bir eşiği (varsayılan 2000 MB) aşarsa
+en eski `committed` saf-DELETE transaction'lardan başlayarak, eşik
+altına inene kadar purge eder. CAS+rmtree güvenlik deseni ortak bir
+yardımcıya (`_purge_one_transaction_backup`) çıkarılıp iki fonksiyon
+arasında paylaşıldı, kod tekrarı yok. 268/268 test yeşil (7 yeni).
+
 ## Bulk-onay eşiği (Saga #311, epic #26) — süreç değişikliği: yalın mimariyle ilk task
 
 **Süreç notu (asıl önemli kısım).** 2026-08-18'de kullanıcıyla birlikte

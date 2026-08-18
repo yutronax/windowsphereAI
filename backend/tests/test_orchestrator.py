@@ -24,6 +24,7 @@ from backend.orchestrator import (
     TransactionRevertError,
     apply_plan,
     purge_expired_delete_backups,
+    # purge_oversized_delete_backups,  # RED: function doesn't exist yet (will be imported after implementation)
     recover_incomplete_transactions,
     revert_transaction,
 )
@@ -1908,3 +1909,253 @@ def test_retry_on_transient_io_error_calls_function_once_without_retries(session
         result = _retry_on_transient_io_error(mock_func)
         assert result == "Success"
         assert mock_sleep.call_count == 0
+
+
+# Saga #312: purge_oversized_delete_backups — toplam boyut sınırlaması testleri
+
+
+def _create_backup_files_of_size(backup_dir: Path, size_mb: float) -> None:
+    """Create files in backup_dir totaling approximately size_mb megabytes."""
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    # Create a single file with the specified size
+    size_bytes = int(size_mb * 1024 * 1024)
+    (backup_dir / "backup.bin").write_bytes(b"x" * size_bytes)
+
+
+def test_purge_oversized_delete_backups_does_nothing_when_total_size_is_under_threshold(session, tmp_path):
+    """Senaryo 1: Toplam boyut < max_total_mb → hiçbir şey silinmez, boş liste"""
+    from backend.orchestrator import purge_oversized_delete_backups
+
+    transaction = _apply_a_delete_plan(session, tmp_path, "a.pdf")
+    backup_dir = tmp_path / ".windows-ai-files-backup" / str(transaction.id)
+
+    # Create backup files totaling 500 MB (under the 2000 MB threshold)
+    _create_backup_files_of_size(backup_dir, 500.0)
+
+    purged_ids = purge_oversized_delete_backups(session, tmp_path, max_total_mb=2000.0)
+
+    assert purged_ids == []
+    assert backup_dir.exists()
+    assert transaction.status == "committed"
+
+
+def test_purge_oversized_delete_backups_deletes_oldest_first_until_under_threshold(session, tmp_path):
+    """Senaryo 2: Toplam boyut > max_total_mb, 3 aday (eski→yeni) → en eskiden başlanarak sırayla silinir"""
+    from backend.orchestrator import purge_oversized_delete_backups
+
+    # Create 3 DELETE-only transactions with different created_at times
+    # Transaction 1: oldest, 800 MB
+    t1 = _apply_a_delete_plan(session, tmp_path, "old.pdf")
+    t1.created_at = dt.datetime.utcnow() - dt.timedelta(days=10)
+    backup_dir_1 = tmp_path / ".windows-ai-files-backup" / str(t1.id)
+    _create_backup_files_of_size(backup_dir_1, 800.0)
+    session.commit()
+
+    # Transaction 2: middle, 700 MB
+    t2 = _apply_a_delete_plan(session, tmp_path, "middle.pdf")
+    t2.created_at = dt.datetime.utcnow() - dt.timedelta(days=5)
+    backup_dir_2 = tmp_path / ".windows-ai-files-backup" / str(t2.id)
+    _create_backup_files_of_size(backup_dir_2, 700.0)
+    session.commit()
+
+    # Transaction 3: newest, 600 MB
+    t3 = _apply_a_delete_plan(session, tmp_path, "new.pdf")
+    t3.created_at = dt.datetime.utcnow() - dt.timedelta(days=1)
+    backup_dir_3 = tmp_path / ".windows-ai-files-backup" / str(t3.id)
+    _create_backup_files_of_size(backup_dir_3, 600.0)
+    session.commit()
+
+    # Total: 800 + 700 + 600 = 2100 MB (over 2000 MB threshold)
+    # After deleting t1 (800 MB): 1300 MB remaining (under threshold)
+    purged_ids = purge_oversized_delete_backups(session, tmp_path, max_total_mb=2000.0)
+
+    # Only the oldest transaction should be purged
+    assert t1.id in purged_ids
+    assert t2.id not in purged_ids
+    assert t3.id not in purged_ids
+    assert len(purged_ids) == 1
+
+    # Verify backup directories
+    assert not backup_dir_1.exists()  # oldest was deleted
+    assert backup_dir_2.exists()  # middle still exists
+    assert backup_dir_3.exists()  # newest still exists
+
+    # Verify transaction statuses
+    session.expire_all()
+    assert session.get(Transaction, t1.id).status == "backup_purged"
+    assert session.get(Transaction, t2.id).status == "committed"
+    assert session.get(Transaction, t3.id).status == "committed"
+
+
+def test_purge_oversized_delete_backups_deletes_multiple_when_needed_to_reach_threshold(session, tmp_path):
+    """Senaryo 2b: Sınırın altına inmek için birden fazla işlem silinebilir"""
+    from backend.orchestrator import purge_oversized_delete_backups
+
+    # Create 3 DELETE-only transactions
+    # Transaction 1: oldest, 900 MB
+    t1 = _apply_a_delete_plan(session, tmp_path, "old.pdf")
+    t1.created_at = dt.datetime.utcnow() - dt.timedelta(days=10)
+    backup_dir_1 = tmp_path / ".windows-ai-files-backup" / str(t1.id)
+    _create_backup_files_of_size(backup_dir_1, 900.0)
+    session.commit()
+
+    # Transaction 2: middle, 800 MB
+    t2 = _apply_a_delete_plan(session, tmp_path, "middle.pdf")
+    t2.created_at = dt.datetime.utcnow() - dt.timedelta(days=5)
+    backup_dir_2 = tmp_path / ".windows-ai-files-backup" / str(t2.id)
+    _create_backup_files_of_size(backup_dir_2, 800.0)
+    session.commit()
+
+    # Transaction 3: newest, 600 MB
+    t3 = _apply_a_delete_plan(session, tmp_path, "new.pdf")
+    t3.created_at = dt.datetime.utcnow() - dt.timedelta(days=1)
+    backup_dir_3 = tmp_path / ".windows-ai-files-backup" / str(t3.id)
+    _create_backup_files_of_size(backup_dir_3, 600.0)
+    session.commit()
+
+    # Total: 900 + 800 + 600 = 2300 MB (over 2000 MB threshold)
+    # After deleting t1 (900 MB): 1400 MB remaining (under threshold)
+    purged_ids = purge_oversized_delete_backups(session, tmp_path, max_total_mb=2000.0)
+
+    assert t1.id in purged_ids
+    assert len(purged_ids) == 1
+    assert not backup_dir_1.exists()
+    assert backup_dir_2.exists()
+    assert backup_dir_3.exists()
+
+
+def test_purge_oversized_delete_backups_stops_as_soon_as_true_recomputed_size_is_under_threshold(session, tmp_path):
+    """Senaryo 3: Adayları EN ESKİ'den başlayarak purge et; her purge'dan sonra
+    gerçek toplam boyutu yeniden hesapla ve eşik altına inince DUR.
+
+    Phantom/unknown yedeklerin boyutu toplam hesaplamada DAİMA sayılır ama
+    purgeable değildir — bu durumda, ilk candidate (t1) purge'dan sonra bile
+    toplam (phantom 1500 MB hâlâ var) eşik altında kalır, bu yüzden t2 asla
+    dokunulmaz."""
+    from backend.orchestrator import purge_oversized_delete_backups
+
+    # Transaction 1: oldest, 500 MB
+    t1 = _apply_a_delete_plan(session, tmp_path, "file1.pdf")
+    t1.created_at = dt.datetime.utcnow() - dt.timedelta(days=10)
+    backup_dir_1 = tmp_path / ".windows-ai-files-backup" / str(t1.id)
+    _create_backup_files_of_size(backup_dir_1, 500.0)
+    session.commit()
+
+    # Transaction 2: newest, 300 MB
+    t2 = _apply_a_delete_plan(session, tmp_path, "file2.pdf")
+    t2.created_at = dt.datetime.utcnow() - dt.timedelta(days=1)
+    backup_dir_2 = tmp_path / ".windows-ai-files-backup" / str(t2.id)
+    _create_backup_files_of_size(backup_dir_2, 300.0)
+    session.commit()
+
+    # Create a large "phantom" backup (simulating old backup from another source)
+    # that won't be in the candidates list but takes up space
+    phantom_backup = tmp_path / ".windows-ai-files-backup" / "9999"
+    _create_backup_files_of_size(phantom_backup, 1500.0)
+
+    # Total: 500 + 300 + 1500 = 2300 MB (over 2000 MB threshold)
+    # After purging JUST t1 (oldest): 2300 - 500 = 1800 MB (now <= 2000 MB threshold)
+    # → function stops, t2 is never purged
+    purged_ids = purge_oversized_delete_backups(session, tmp_path, max_total_mb=2000.0)
+
+    # Only t1 should be purged (oldest, and purging it brings us under threshold)
+    assert t1.id in purged_ids
+    assert t2.id not in purged_ids
+    assert len(purged_ids) == 1
+
+    # t1 backup should be deleted, t2 backup should remain
+    assert not backup_dir_1.exists()
+    assert backup_dir_2.exists()
+
+    # Phantom backup should still exist (it's not a known transaction)
+    assert phantom_backup.exists()
+
+
+def test_purge_oversized_delete_backups_skips_mixed_operation_transactions(session, tmp_path):
+    """Senaryo 4: Karışık operasyonlu transaction → hiç dokunulmaz, boyut hesabına dahil olmaz"""
+    from backend.orchestrator import purge_oversized_delete_backups
+
+    # Create one pure DELETE transaction (500 MB)
+    t_pure = _apply_a_delete_plan(session, tmp_path, "pure_delete.pdf")
+    t_pure.created_at = dt.datetime.utcnow() - dt.timedelta(days=10)
+    backup_dir_pure = tmp_path / ".windows-ai-files-backup" / str(t_pure.id)
+    _create_backup_files_of_size(backup_dir_pure, 500.0)
+    session.commit()
+
+    # Create one mixed operation transaction (DELETE + MOVE, 1600 MB)
+    # This won't have a backup_dir (or should be skipped)
+    _write_pdf(tmp_path, "file1.pdf")
+    _write_pdf(tmp_path, "file2.pdf")
+    pdf_files = [
+        PdfFileMetadata(filename="file1.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="file2.pdf", createdAt="2026-08-02"),
+    ]
+    plan = _plan(
+        [
+            _step(0, "2026-08", ["file1.pdf"], operation_type=OperationType.DELETE),
+            _step(1, "2026-08", ["file2.pdf"], operation_type=OperationType.MOVE),
+        ]
+    )
+    t_mixed = apply_plan(session, plan, pdf_files, tmp_path)
+    t_mixed.created_at = dt.datetime.utcnow() - dt.timedelta(days=5)
+    session.commit()
+
+    # Note: mixed operation transaction has no backup_dir, so it won't be
+    # counted toward total size or be a purge candidate anyway
+
+    # Total should only count pure DELETE backup: 500 MB (under 2000 MB threshold)
+    purged_ids = purge_oversized_delete_backups(session, tmp_path, max_total_mb=2000.0)
+
+    assert purged_ids == []
+    assert backup_dir_pure.exists()
+    assert t_pure.status == "committed"
+    assert t_mixed.status == "committed"
+
+
+def test_purge_oversized_delete_backups_respects_backup_dir_existence_check(session, tmp_path):
+    """Multi-root scenario: candidates where backup_dir doesn't exist are skipped"""
+    from backend.orchestrator import purge_oversized_delete_backups
+
+    # Create transaction in tmp_path
+    t1 = _apply_a_delete_plan(session, tmp_path, "file1.pdf")
+    t1.created_at = dt.datetime.utcnow() - dt.timedelta(days=10)
+    backup_dir_1 = tmp_path / ".windows-ai-files-backup" / str(t1.id)
+    _create_backup_files_of_size(backup_dir_1, 800.0)
+    session.commit()
+
+    # Now delete the backup directory to simulate it belonging to a different root
+    shutil.rmtree(backup_dir_1)
+
+    # Call purge with a different root (or after the backup is gone)
+    purged_ids = purge_oversized_delete_backups(session, tmp_path, max_total_mb=2000.0)
+
+    # Transaction should not be purged (backup_dir doesn't exist)
+    assert t1.id not in purged_ids
+    assert t1.status == "committed"
+
+
+def test_purge_oversized_delete_backups_returns_list_of_purged_transaction_ids(session, tmp_path):
+    """Verify that the function returns the list of purged transaction IDs in order"""
+    from backend.orchestrator import purge_oversized_delete_backups
+
+    # Create 2 DELETE transactions
+    t1 = _apply_a_delete_plan(session, tmp_path, "a.pdf")
+    t1.created_at = dt.datetime.utcnow() - dt.timedelta(days=10)
+    backup_dir_1 = tmp_path / ".windows-ai-files-backup" / str(t1.id)
+    _create_backup_files_of_size(backup_dir_1, 600.0)
+    session.commit()
+
+    t2 = _apply_a_delete_plan(session, tmp_path, "b.pdf")
+    t2.created_at = dt.datetime.utcnow() - dt.timedelta(days=5)
+    backup_dir_2 = tmp_path / ".windows-ai-files-backup" / str(t2.id)
+    _create_backup_files_of_size(backup_dir_2, 600.0)
+    session.commit()
+
+    # Total: 1200 MB (under 2000 MB, should return empty)
+    purged_ids = purge_oversized_delete_backups(session, tmp_path, max_total_mb=2000.0)
+    assert purged_ids == []
+
+    # Now call with lower threshold
+    purged_ids = purge_oversized_delete_backups(session, tmp_path, max_total_mb=800.0)
+    assert t1.id in purged_ids
+    assert len(purged_ids) == 1

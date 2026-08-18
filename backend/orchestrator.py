@@ -731,6 +731,43 @@ def recover_incomplete_transactions(session: Session) -> list[Transaction]:
 DEFAULT_DELETE_BACKUP_RETENTION_DAYS = 30
 
 
+def _purge_backup_dir_size_mb(backup_base_dir: Path) -> float:
+    """Hesapla backup_base_dir altındaki TÜM dosyaların toplam boyutunu MB cinsinden."""
+    total_bytes = 0
+    if backup_base_dir.exists():
+        for file_path in backup_base_dir.rglob("*"):
+            if file_path.is_file():
+                total_bytes += file_path.stat().st_size
+    return total_bytes / (1024 * 1024)
+
+
+def _purge_one_transaction_backup(
+    session: Session, transaction: Transaction, backup_dir: Path
+) -> bool:
+    """Saga #302 CAS+rmtree desenini kapsüller: "committed" -> "purging" -> "backup_purged"
+    başarılı olursa True döndürür, başarısızsa "purging" -> "committed"e geri döner."""
+    if not _claim_transaction_status(
+        session, transaction.id, from_status="committed", to_status="purging"
+    ):
+        # Yarışı kaybettik (ör. `revert_transaction` araya girdi)
+        return False
+    try:
+        shutil.rmtree(backup_dir)
+    except OSError:
+        # Fiziksel silme başarısız oldu — telafi edici CAS ile satırı "committed"a geri döndür
+        _claim_transaction_status(
+            session, transaction.id, from_status="purging", to_status="committed"
+        )
+        return False
+    if not _claim_transaction_status(
+        session, transaction.id, from_status="purging", to_status="backup_purged"
+    ):
+        # Teorik olarak imkansız ama savunmacı: devam etmiyoruz
+        return False
+    transaction.status = "backup_purged"
+    return True
+
+
 def purge_expired_delete_backups(
     session: Session,
     allowed_root: Path,
@@ -802,43 +839,80 @@ def purge_expired_delete_backups(
             # hâlâ geçerli olabilecek bir transaction'ı YANLIŞLIKLA
             # kilitlemektense hiçbir şey yapmamak daha güvenli.
             continue
-        # Saga #302 red-team bulgusu (medium): claim UPDATE'ini `rmtree`
-        # boyunca commit etmeden AÇIK tutmak, SQLite'ın TÜM `app.db`
-        # dosyası üzerindeki RESERVED yazma kilidini -sadece bu satır değil-
-        # potansiyel olarak uzun süren bir dosya sistemi çağrısı boyunca
-        # tutardı (uygulamadaki BAŞKA HİÇBİR endpoint o pencerede yazamaz).
-        # Bunun yerine ÜÇ-durumlu, HER ADIMI ANINDA COMMIT EDEN bir CAS
-        # kullanılır: "committed" -> "purging" (kısa kilit, hemen commit) ->
-        # `rmtree` KİLİT TUTULMADAN çalışır -> başarılıysa "purging" ->
-        # "backup_purged", başarısızsa telafi edici "purging" -> "committed"
-        # (satır bir SONRAKİ çalıştırmada tekrar denenebilir kalır).
-        if not _claim_transaction_status(
-            session, transaction.id, from_status="committed", to_status="purging"
-        ):
-            # Yarışı kaybettik (ör. `revert_transaction` araya girdi) —
-            # hiçbir dosyaya dokunmadan sıradaki adaya geç.
+        if _purge_one_transaction_backup(session, transaction, backup_dir):
+            purged_ids.append(transaction.id)
+
+    session.commit()
+    return purged_ids
+
+
+def purge_oversized_delete_backups(
+    session: Session,
+    allowed_root: Path,
+    *,
+    max_total_mb: float = 2000.0,
+) -> list[int]:
+    """Saga #312: `purge_expired_delete_backups`'a ek olarak bir toplam-boyut
+    sınırı: `allowed_root/.windows-ai-files-backup/` altındaki TÜM yedeklerin
+    toplam boyutu `max_total_mb` eşiğini (varsayılan 2000 MB) aşarsa, süresi
+    henüz dolmamış olsa bile EN ESKİ (created_at artan) saf-DELETE
+    `"committed"` transaction'lardan başlayarak, toplam boyut eşiğin ALTINA
+    inene kadar veya aday kalmayana kadar purge edilir.
+
+    Mevcut `purge_expired_delete_backups`'ın imzası/davranışı DEĞİŞMEZ — bu
+    ayrı, tamamen ek bir fonksiyon. Toplam boyut `max_total_mb`'yi AŞMIYORSA
+    fonksiyon hiçbir şey yapmaz, boş liste döner (dosya sistemine hiç
+    dokunulmaz).
+
+    Adaylar (status=="committed", TÜM operasyonları DELETE olan, bu
+    `allowed_root` altında backup_dir gerçekten var olan) EN ESKİ `created_at`
+    ten başlanarak sırayla purge edilir.
+
+    Her purge edilen transaction, `purge_expired_delete_backups` ile AYNI
+    güvenlik disiplinini kullanır: `_claim_transaction_status` ile 3 durumlu
+    CAS (`committed`→`purging`→`backup_purged`), `rmtree` KİLİT TUTULMADAN
+    çağrılır, başarısızlıkta telafi edici geri-dönüş."""
+    backup_base_dir = allowed_root / _DELETE_BACKUP_DIRNAME
+
+    # Toplam boyutu hesapla
+    total_size_mb = _purge_backup_dir_size_mb(backup_base_dir)
+    if total_size_mb <= max_total_mb:
+        # Eşik altında — hiçbir şey yapma
+        return []
+
+    # Toplam boyutu aşıyor — adayları bul
+    candidates = session.scalars(
+        select(Transaction).where(Transaction.status == "committed")
+    ).all()
+
+    # Adayları filtrele: sadece saf DELETE transaction'ları ve bu allowed_root'ta backup_dir'i olanlar
+    purge_candidates: list[tuple[Transaction, Path]] = []
+    for transaction in candidates:
+        operations = transaction.operations
+        if not operations:
             continue
-        try:
-            shutil.rmtree(backup_dir)
-        except OSError:
-            # Fiziksel silme başarısız oldu — telafi edici CAS ile satırı
-            # "committed"a geri döndür (bir sonraki çalıştırmada tekrar
-            # denenebilir); bu geri-dönüş HER ZAMAN başarılı olmalı çünkü
-            # satır şu an "purging" durumunda ve BAŞKA HİÇBİR işlem onu bu
-            # durumdan çıkaramaz (sadece bu fonksiyon "purging" yazar).
-            _claim_transaction_status(
-                session, transaction.id, from_status="purging", to_status="committed"
-            )
+        if not all(operation.operation_type == OperationType.DELETE.value for operation in operations):
             continue
-        if not _claim_transaction_status(
-            session, transaction.id, from_status="purging", to_status="backup_purged"
-        ):
-            # Teorik olarak imkansız (bu satırı "purging"e SADECE biz
-            # geçirdik) ama savunmacı: dosya zaten silindi, DB durumu
-            # senkronsuz kalmasın diye devam etmiyoruz, sıradaki adaya geç.
+        backup_dir = allowed_root / _DELETE_BACKUP_DIRNAME / str(transaction.id)
+        if not backup_dir.exists():
+            # Bu `allowed_root` altında hiç yok — atla
             continue
-        transaction.status = "backup_purged"
-        purged_ids.append(transaction.id)
+        purge_candidates.append((transaction, backup_dir))
+
+    # Adayları created_at artan (EN ESKİ ilk) sırasıyla sırala
+    purge_candidates.sort(key=lambda x: x[0].created_at)
+
+    purged_ids: list[int] = []
+    for transaction, backup_dir in purge_candidates:
+        # Bu transaction'ı purge et
+        if _purge_one_transaction_backup(session, transaction, backup_dir):
+            purged_ids.append(transaction.id)
+
+        # Her purge'dan sonra gerçek toplam boyutu yeniden hesapla ve eşiği kontrol et
+        total_size_mb = _purge_backup_dir_size_mb(backup_base_dir)
+        if total_size_mb <= max_total_mb:
+            # Eşik altına indik — durur
+            break
 
     session.commit()
     return purged_ids
