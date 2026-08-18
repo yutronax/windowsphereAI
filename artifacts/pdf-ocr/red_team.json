@@ -1,0 +1,31 @@
+{
+  "task": "Saga #306 - PDF OCR destegi ekle",
+  "verdict": "Ready To Commit",
+  "reviewed_files": [
+    "backend/pdf_ocr.py",
+    "backend/tests/test_pdf_ocr.py",
+    "requirements.txt",
+    "artifacts/pdf-ocr/atdd.md",
+    "artifacts/pdf-ocr/plan.md",
+    "artifacts/pdf-ocr/verify_report.md"
+  ],
+  "blocking_findings": [],
+  "out_of_scope_findings": [
+    {
+      "id": 1,
+      "severity": "low",
+      "title": "ocr_pdf_file, orchestrator.py'deki allowed_root/is_path_allowed whitelist kontrolunden gecmiyor",
+      "detail": "Diger operasyonlar (MERGE/SPLIT/COPY/DELETE vb.) orchestrator.py icinde allowed_root'a gore path dogrulamasi yapiyor; ocr_pdf_file bagimsiz bir modul oldugu icin boyle bir kontrol icermiyor. Bu, modul su an hicbir HTTP endpoint'ine baglanmadigi surece istismar edilemez.",
+      "disposition": "out-of-scope, takip Saga task'i acildi",
+      "recommendation": "OCR orchestrator'a OperationType.OCR olarak entegre edilirken allowed_root/is_path_allowed zorunlu kilinmali, raw Path parametresi hicbir zaman dogrudan istek girdisinden alinmamali."
+    },
+    {
+      "id": 2,
+      "severity": "low",
+      "title": "Boyut/sayfa sayisi limiti yok",
+      "detail": "ocr_pdf_file, cok sayfali/buyuk PDF'lerde herhangi bir ust sinir uygulamiyor.",
+      "disposition": "MVP kapsaminda kabul edilebilir, kapsam disi"
+    }
+  ],
+  "notes": "Dar kapsam (orchestrator entegrasyonu YOK, gercek Tesseract/Poppler bagimliligi YOK) ATDD'de bilincli olarak belgelendi ve bu red-team incelemesiyle tutarli bulundu."
+}

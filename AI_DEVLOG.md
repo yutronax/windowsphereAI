@@ -1354,3 +1354,35 @@ gerçek paketlemede Tauri'nin WebView2 (Windows) kullanacağını, bunun
 Playwright'ın Chromium'undan farklı bir motor olabileceğini not etti —
 bu, henüz gerçek Tauri paketlemesi olmadığı için (Saga #279, release-blocker)
 doğrudan test edilemedi, ileride #279 kapatılınca yeniden doğrulanmalı.
+
+## pdf-ocr (Saga #306, epic #29)
+
+**Kapsam kararı — sadece çekirdek OCR fonksiyonu, orchestrator entegrasyonu
+yok.** Saga #299 kararıyla ayrı bir epic olmaktan çıkarılıp Format Agent
+Sistemi'nin PDF alt-özelliği olarak buraya taşınan görev, bilinçli olarak
+dar tutuldu: `backend/pdf_ocr.py` `pdf_discovery.py` paternini takip eden
+bağımsız bir modül — `OperationType.OCR` olarak `models.py`/`orchestrator.py`/
+`plan_generation.py`'ye TAM entegrasyon bu görevde YAPILMADI.
+
+**Tesseract/Poppler sistem bağımlılığı riski.** `pytesseract` ve `pdf2image`
+sadece Python wrapper'ları; gerçek çalışma zamanında sistemde Tesseract
+binary'si (+ `tur.traineddata`) ve Poppler (`pdftoppm`) kurulu olmalı, bu
+ortamda kurulu olduğu doğrulanmadı. Mitigasyon: OCR motor çağrısı
+(`_run_ocr_engine`) ve PDF→görüntü dönüşümü (`_pdf_to_images`) ayrı,
+izole fonksiyonlara çıkarıldı; TÜM testler bunları mock'ladı — test suite'i
+YEŞİL olmak için gerçek Tesseract/Poppler kurulumu GEREKMİYOR. Prod
+dağıtımı için kurulum ayrı bir packaging adımı (proje zaten .exe
+paketleme gündeminde).
+
+**Red-team bulgusu — path validation eksik, kapsam dışı bırakıldı.**
+`ocr_pdf_file`, diğer operasyonların (MERGE/SPLIT/COPY/DELETE) kullandığı
+`allowed_root`/`is_path_allowed` whitelist kontrolünden geçmiyor. Şu an
+hiçbir HTTP endpoint'ine bağlı olmadığı için istismar edilemez; ileride
+orchestrator'a entegre edilirken zorunlu kılınmalı — takip görevi
+Saga #307 olarak açıldı (`depends_on: [306]`).
+
+Codex/Copilot kotası dolu olduğu için test (red) ve implementasyon (green)
+adımları ayrı genel-amaçlı subagent'lara delegasyon disipliniyle yazdırıldı,
+ana akış sonucu bağımsız olarak kendi pytest çalıştırmasıyla doğruladı.
+
+6 yeni test, 6/6 yeşil (`backend/tests/test_pdf_ocr.py`).
