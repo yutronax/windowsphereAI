@@ -47,6 +47,10 @@ class OperationType(str, Enum):
     # Saga #320: REDACT - MERGE/SPLIT ile AYNI "1 kaynak PDF, COPY semantigiyle
     # rollback (sadece hedefi sil)" deseni, ama TAM OLARAK 1 kaynak -> 1 hedef.
     REDACT = "Karart"
+    # Saga #324: EXCEL_SORT - MERGE/REDACT ile AYNI "1 kaynak -> 1 hedef,
+    # kaynak asla degismez" deseni, ama Excel (.xlsx) sayfasi uzerinde
+    # satir sirasi degistirir (formul-guvenlik-agi ile korunur).
+    EXCEL_SORT = "Excel Sırala"
 
 
 class RedactionRegion(BaseModel):
@@ -115,6 +119,13 @@ class PlanStep(BaseModel):
     # olduğunda dolu olmalı, diğer operationType'larda None kalmalı).
     redactionRegions: list["RedactionRegion"] | None = None
     redactedFileName: str | None = None
+    # Saga #324: EXCEL_SORT icin - siralanacak sutun + yon + cikti dosya adi,
+    # mergedFileName/redactedFileName ile AYNI desende (SADECE
+    # operationType==EXCEL_SORT olduğunda dolu olmalı, diğer operationType'larda
+    # None kalmalı).
+    sortColumn: str | None = None
+    sortAscending: bool | None = None
+    sortedFileName: str | None = None
 
     @field_validator("mergedFileName")
     @classmethod
@@ -128,6 +139,13 @@ class PlanStep(BaseModel):
     def redacted_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
         if value is not None and ("/" in value or "\\" in value):
             raise ValueError("redactedFileName must not contain path separators")
+        return value
+
+    @field_validator("sortedFileName")
+    @classmethod
+    def sorted_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
+        if value is not None and ("/" in value or "\\" in value):
+            raise ValueError("sortedFileName must not contain path separators")
         return value
 
     @field_validator("order", "affectedFileCount")
@@ -283,6 +301,37 @@ class PlanStep(BaseModel):
                 raise ValueError("redactionRegions must be omitted unless operationType is REDACT")
             if self.redactedFileName is not None:
                 raise ValueError("redactedFileName must be omitted unless operationType is REDACT")
+        return self
+
+    @model_validator(mode="after")
+    def excel_sort_fields_only_for_excel_sort(self) -> "PlanStep":
+        # Saga #324: mergedFileName/redactedFileName ile AYNI desen -
+        # sortColumn/sortAscending/sortedFileName SADECE EXCEL_SORT icin
+        # zorunlu, diger operationType'larda tamamen yasak.
+        if self.operationType == OperationType.EXCEL_SORT:
+            if self.sortColumn is None or self.sortColumn.strip() == "":
+                raise ValueError("sortColumn is required when operationType is EXCEL_SORT")
+            if self.sortAscending is None:
+                raise ValueError("sortAscending is required when operationType is EXCEL_SORT")
+            if self.sortedFileName is None or self.sortedFileName.strip() == "":
+                raise ValueError("sortedFileName is required when operationType is EXCEL_SORT")
+            if len(self.fileNames) != 1:
+                raise ValueError("fileNames must contain exactly 1 entry when operationType is EXCEL_SORT")
+            normalized_sorted = os.path.normcase(self.sortedFileName)
+            normalized_sources = [os.path.normcase(name) for name in self.fileNames]
+            if normalized_sorted in normalized_sources:
+                raise ValueError(
+                    f"sortedFileName ('{self.sortedFileName}') collides with one of this "
+                    "step's fileNames (case-insensitive) — sort output must not overwrite "
+                    "a source file"
+                )
+        else:
+            if self.sortColumn is not None:
+                raise ValueError("sortColumn must be omitted unless operationType is EXCEL_SORT")
+            if self.sortAscending is not None:
+                raise ValueError("sortAscending must be omitted unless operationType is EXCEL_SORT")
+            if self.sortedFileName is not None:
+                raise ValueError("sortedFileName must be omitted unless operationType is EXCEL_SORT")
         return self
 
     @model_validator(mode="after")

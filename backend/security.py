@@ -141,10 +141,13 @@ def validate_plan_paths(
             _validate_single_path(allowed_root / step.mergedFileName, allowed_root, "Birleştirme hedefi")
         if step.operationType == OperationType.REDACT:
             _validate_single_path(allowed_root / step.redactedFileName, allowed_root, "Karartma hedefi")
+        if step.operationType == OperationType.EXCEL_SORT:
+            _validate_single_path(allowed_root / step.sortedFileName, allowed_root, "Sıralama hedefi")
 
     validate_rename_destinations(plan, pdf_files, allowed_root)
     validate_merge_destinations(plan, pdf_files, allowed_root)
     validate_redact_destinations(plan, pdf_files, allowed_root)
+    validate_excel_sort_destinations(plan, pdf_files, allowed_root)
 
 
 def _normalize_filename(name: str) -> str:
@@ -341,4 +344,65 @@ def validate_redact_destinations(
                 allowed_root=str(allowed_root),
                 reason="planın bilmediği, zaten var olan bir dosyayla çakışıyor",
                 description="Karartma hedefi",
+            )
+
+
+def validate_excel_sort_destinations(
+    plan: PlanSkeleton,
+    pdf_files: list[PdfFileMetadata],
+    allowed_root: Path,
+) -> None:
+    """Saga #324: `validate_redact_destinations` ile BİREBİR aynı iskelet,
+    `sortedFileName` için - (a) planın bilmediği zaten var olan bir
+    dosyayla çakışamaz, (b) plan genelinde birden fazla MERGE/RENAME/REDACT/
+    EXCEL_SORT step'i AYNI hedefi üretemez (zincirleme çakışma). Tüm
+    karşılaştırmalar `_normalize_filename` (Windows case-insensitive)
+    üzerinden yapılır."""
+    excel_sort_destinations: list[str] = [
+        _normalize_filename(step.sortedFileName)
+        for step in plan.steps
+        if step.operationType == OperationType.EXCEL_SORT
+    ]
+    redact_destinations: list[str] = [
+        _normalize_filename(step.redactedFileName)
+        for step in plan.steps
+        if step.operationType == OperationType.REDACT
+    ]
+    merge_destinations: list[str] = [
+        _normalize_filename(step.mergedFileName)
+        for step in plan.steps
+        if step.operationType == OperationType.MERGE
+    ]
+    rename_destinations: list[str] = [
+        _normalize_filename(dest_name)
+        for step in plan.steps
+        if step.operationType == OperationType.RENAME
+        for dest_name in (step.newFileNames or [])
+    ]
+    all_destinations = excel_sort_destinations + redact_destinations + merge_destinations + rename_destinations
+
+    for dest_index, dest_norm in enumerate(excel_sort_destinations):
+        for other_index, other_norm in enumerate(all_destinations):
+            if other_index != dest_index and dest_norm == other_norm:
+                raise PathWhitelistError(
+                    offending_path=dest_norm,
+                    allowed_root=str(allowed_root),
+                    reason="planda zincirleme hedef çakışmasına (birden fazla MERGE/RENAME/REDACT/EXCEL_SORT step'i aynı hedefi üretemez) izin verilmiyor",
+                    description="Sıralama hedefi",
+                )
+
+    known_filenames = {_normalize_filename(pdf_file.filename) for pdf_file in pdf_files}
+    for step in plan.steps:
+        if step.operationType != OperationType.EXCEL_SORT:
+            continue
+        sorted_name = step.sortedFileName
+        if _normalize_filename(sorted_name) in known_filenames:
+            continue
+        candidate = allowed_root / sorted_name
+        if candidate.exists():
+            raise PathWhitelistError(
+                offending_path=str(candidate),
+                allowed_root=str(allowed_root),
+                reason="planın bilmediği, zaten var olan bir dosyayla çakışıyor",
+                description="Sıralama hedefi",
             )

@@ -1,5 +1,39 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Excel sıralama + formül güvenlik ağı (Saga #324, epic #29) — projenin ilk Excel desteği
+
+**Finansal veri bozulması riski kapatıldı.** Referans projedeki
+(`referans/windows-ai-files-eski/core/agents/excel_agent.py` — kod
+taşınmadı) bilinen ders: openpyxl formülü düz metin olarak taşır; satır
+fiziksel olarak yer değiştirdiğinde formül metnindeki hücre
+referansları (`=C2+C3`) OTOMATİK GÜNCELLENMEZ — sıralama sonrası formül
+artık BAŞKA bir satırın verisini sessizce (hata vermeden) hesaplar.
+Muhasebeci kullanıcılar için bu doğrudan bir finansal hata riski.
+
+**Yeni `backend/excel_sort.py`, projenin ilk Excel operasyonu.**
+`OperationType.EXCEL_SORT` MERGE/SPLIT/REDACT ile aynı desende
+(`PlanStep` alanları + validator'lar, `_SUPPORTED_OPERATION_TYPES`,
+geçici-dosya-yaz + atomik `Path.replace`) eklendi. Path doğrulaması
+merkezi kaldı (Saga #307/#319 konvansiyonu, `DESIGN_DECISIONS.md` §6)
+— `excel_sort.py` hiçbir whitelist mantığı içermiyor.
+
+**Sütun çözümleme: önce başlık metni, sonra harf.** Kullanıcı doğal
+olarak sütun başlığıyla konuşur ("Tutar sütununa göre sırala") — bu
+yüzden `resolve_sort_column` önce header satırında (case-insensitive)
+tam metin eşleşmesi dener, bulamazsa bare Excel sütun harfi ("C", "AA")
+olarak yorumlar.
+
+**Formül tespiti gerçek (`cell.data_type == "f"`), string-heuristik
+değil.** Sıralanacak veri aralığında herhangi bir hücre formülse
+işlem SIFIR satır değiştirmeden reddedilir, çıktı dosyası hiç
+yazılmaz — sessiz kısmi/yanlış sonuç yerine açık hata.
+
+Token bütçesi kısıtı nedeniyle bu görevde ayrı bir bağımsız red-team
+turu ATLANDI (ana akış tarafından kod doğrudan gözden geçirildi,
+testler kendi çalıştırıldı) — düşük-risk, göreceli izole bir modül
+olduğu için kabul edilebilir bir istisna. 256/256 test yeşil (openpyxl
+requirements.txt'e eklendi).
+
 ## PDF gerçek redaksiyon / KVKK (Saga #320, epic #29) — güvenlik-kritik, rasterize+karart, sahte siyah kutu DEĞİL
 
 **Güvenlik motivasyonu.** Referans projedeki (`referans/windows-ai-files-eski/core/agents/pdf_agent.py`)

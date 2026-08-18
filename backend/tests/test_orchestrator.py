@@ -1598,3 +1598,228 @@ def test_apply_plan_rolls_back_a_redact_by_deleting_the_output_file_without_touc
     assert not (tmp_path / "gizli_karartilmis.pdf").exists()
     assert (tmp_path / "gizli.pdf").exists()
     assert (tmp_path / "gizli.pdf").read_bytes() == original_bytes
+
+
+# Saga #324: EXCEL_SORT operasyonu (red step) - `OperationType.EXCEL_SORT`,
+# `PlanStep.sortColumn`/`sortAscending`/`sortedFileName`, `backend.excel_sort`
+# ve orchestrator'daki EXCEL_SORT dali henuz YOK. Bu testler simdilik
+# KIRMIZI kalmali (AttributeError / ValidationError / ModuleNotFoundError -
+# hepsi beklenen red durumu).
+
+
+def _write_excel(root, filename: str, rows: list[list]) -> None:
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for row in rows:
+        ws.append(row)
+    wb.save(str(root / filename))
+
+
+def _write_excel_with_formula(
+    root, filename: str, header: list, data_rows: list[list], formula_cell: str, formula: str
+) -> None:
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(header)
+    for row in data_rows:
+        ws.append(row)
+    ws[formula_cell] = formula
+    wb.save(str(root / filename))
+
+
+def _excel_sort_step(
+    order: int,
+    file_name: str,
+    sort_column: str,
+    sort_ascending: bool,
+    sorted_file_name: str,
+) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.EXCEL_SORT,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=[file_name],
+        sortColumn=sort_column,
+        sortAscending=sort_ascending,
+        sortedFileName=sorted_file_name,
+    )
+
+
+def test_apply_plan_rejects_excel_sort_when_a_data_row_contains_a_formula(session, tmp_path):
+    _write_excel_with_formula(
+        tmp_path,
+        "kaynak.xlsx",
+        header=["Ad", "Tutar"],
+        data_rows=[["Ali", 100], ["Veli", 200]],
+        formula_cell="C2",
+        formula="=B2+B3",
+    )
+    pdf_files = [PdfFileMetadata(filename="kaynak.xlsx", createdAt="2026-08-01")]
+    plan = _plan([_excel_sort_step(0, "kaynak.xlsx", "Tutar", True, "siralanmis.xlsx")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "siralanmis.xlsx").exists()
+
+
+def test_apply_plan_sorts_excel_rows_when_there_are_no_formulas(session, tmp_path):
+    import openpyxl
+
+    _write_excel(
+        tmp_path,
+        "kaynak.xlsx",
+        [
+            ["Ad", "Tutar"],
+            ["Veli", 200],
+            ["Ali", 100],
+            ["Can", 300],
+        ],
+    )
+    original_bytes = (tmp_path / "kaynak.xlsx").read_bytes()
+    pdf_files = [PdfFileMetadata(filename="kaynak.xlsx", createdAt="2026-08-01")]
+    plan = _plan([_excel_sort_step(0, "kaynak.xlsx", "Tutar", True, "siralanmis.xlsx")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    output_path = tmp_path / "siralanmis.xlsx"
+    assert output_path.exists()
+    wb = openpyxl.load_workbook(str(output_path))
+    ws = wb.active
+    values = [row[1] for row in ws.iter_rows(min_row=2, values_only=True)]
+    assert values == [100, 200, 300]
+    # Kaynak dosya asla degismemeli.
+    assert (tmp_path / "kaynak.xlsx").read_bytes() == original_bytes
+    assert transaction.status == "committed"
+    assert len(transaction.operations) == 1
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_excel_sort_output_differs_when_sort_column_changes(session, tmp_path):
+    # Saga #319 wiring-testi konvansiyonu (DESIGN_DECISIONS.md bolum 6) -
+    # AYNI PlanStep alaninin (sortColumn) EN AZ IKI farkli degeriyle
+    # apply_plan cagirilip GERCEK dosya sisteminde IKI FARKLI gozlemlenebilir
+    # sonuc dogrulanmali. Birinci calisma header metniyle ("Tutar"), ikinci
+    # calisma bare column-letter ile ("A" - Ad sutunu) sıralar; ciktilarin
+    # satir siralamasi birbirinden FARKLI olmali.
+    import openpyxl
+
+    run1 = tmp_path / "run1"
+    run1.mkdir()
+    run2 = tmp_path / "run2"
+    run2.mkdir()
+
+    rows = [
+        ["Ad", "Tutar"],
+        ["Veli", 200],
+        ["Ali", 100],
+        ["Can", 300],
+    ]
+    _write_excel(run1, "kaynak.xlsx", rows)
+    _write_excel(run2, "kaynak.xlsx", rows)
+
+    pdf_files_1 = [PdfFileMetadata(filename="kaynak.xlsx", createdAt="2026-08-01")]
+    plan_1 = _plan([_excel_sort_step(0, "kaynak.xlsx", "Tutar", True, "siralanmis.xlsx")])
+    apply_plan(session, plan_1, pdf_files_1, run1)
+
+    pdf_files_2 = [PdfFileMetadata(filename="kaynak.xlsx", createdAt="2026-08-01")]
+    plan_2 = _plan([_excel_sort_step(0, "kaynak.xlsx", "A", True, "siralanmis.xlsx")])
+    apply_plan(session, plan_2, pdf_files_2, run2)
+
+    wb1 = openpyxl.load_workbook(str(run1 / "siralanmis.xlsx"))
+    values_by_tutar = [row[0] for row in wb1.active.iter_rows(min_row=2, values_only=True)]
+
+    wb2 = openpyxl.load_workbook(str(run2 / "siralanmis.xlsx"))
+    values_by_ad = [row[0] for row in wb2.active.iter_rows(min_row=2, values_only=True)]
+
+    assert values_by_tutar == ["Ali", "Veli", "Can"]  # 100, 200, 300 sirasinda
+    assert values_by_ad == ["Ali", "Can", "Veli"]  # alfabetik Ad sirasinda
+    assert values_by_tutar != values_by_ad
+
+
+def test_apply_plan_excel_sort_resolves_header_text_column(session, tmp_path):
+    import openpyxl
+
+    _write_excel(
+        tmp_path,
+        "kaynak.xlsx",
+        [
+            ["Ad", "Tutar"],
+            ["Veli", 200],
+            ["Ali", 100],
+        ],
+    )
+    pdf_files = [PdfFileMetadata(filename="kaynak.xlsx", createdAt="2026-08-01")]
+    plan = _plan([_excel_sort_step(0, "kaynak.xlsx", "tutar", True, "siralanmis.xlsx")])
+
+    apply_plan(session, plan, pdf_files, tmp_path)
+
+    wb = openpyxl.load_workbook(str(tmp_path / "siralanmis.xlsx"))
+    values = [row[1] for row in wb.active.iter_rows(min_row=2, values_only=True)]
+    assert values == [100, 200]
+
+
+def test_apply_plan_excel_sort_resolves_bare_letter_column_when_no_header_matches(session, tmp_path):
+    import openpyxl
+
+    _write_excel(
+        tmp_path,
+        "kaynak.xlsx",
+        [
+            ["Ad", "Tutar"],
+            ["Veli", 200],
+            ["Ali", 100],
+        ],
+    )
+    pdf_files = [PdfFileMetadata(filename="kaynak.xlsx", createdAt="2026-08-01")]
+    plan = _plan([_excel_sort_step(0, "kaynak.xlsx", "B", True, "siralanmis.xlsx")])
+
+    apply_plan(session, plan, pdf_files, tmp_path)
+
+    wb = openpyxl.load_workbook(str(tmp_path / "siralanmis.xlsx"))
+    values = [row[1] for row in wb.active.iter_rows(min_row=2, values_only=True)]
+    assert values == [100, 200]
+
+
+def test_apply_plan_rejects_excel_sort_with_unknown_column(session, tmp_path):
+    _write_excel(
+        tmp_path,
+        "kaynak.xlsx",
+        [
+            ["Ad", "Tutar"],
+            ["Veli", 200],
+        ],
+    )
+    pdf_files = [PdfFileMetadata(filename="kaynak.xlsx", createdAt="2026-08-01")]
+    plan = _plan([_excel_sort_step(0, "kaynak.xlsx", "BilinmeyenSutun", True, "siralanmis.xlsx")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "siralanmis.xlsx").exists()
+
+
+def test_apply_plan_rejects_excel_sort_of_a_path_outside_allowed_root(session, tmp_path, monkeypatch):
+    # REDACT'in ".." teknigiyle AYNI desen (Saga #307) - PdfFileMetadata.filename
+    # kendi validator'unda ayrac icermez ama tek segmentlik ".." allowed_root
+    # disina cikar. EXCEL_SORT da diger operationType'lar gibi
+    # is_path_allowed/validate_plan_paths uzerinden dogrulanmali.
+    pdf_files = [PdfFileMetadata(filename="..", createdAt="2026-08-01")]
+    plan = _plan([_excel_sort_step(0, "..", "Tutar", True, "siralanmis.xlsx")])
+
+    calls: list = []
+    monkeypatch.setattr(
+        "backend.orchestrator.excel_sort.sort_excel_sheet",
+        lambda *args, **kwargs: calls.append(args),
+    )
+
+    with pytest.raises(PathWhitelistError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert calls == []
+    assert not (tmp_path / "siralanmis.xlsx").exists()

@@ -228,3 +228,119 @@ def test_plan_step_rejects_ocr_with_more_than_one_file_name():
             fileNames=["a.pdf", "b.pdf"],
             affectedFileCount=2,
         )
+
+
+# Saga #324: EXCEL_SORT operasyonu (red step) - OperationType.EXCEL_SORT
+# ve PlanStep'in sortColumn/sortAscending/sortedFileName alanlari henuz
+# models.py'de tanimli degil. Bu testler o eklenene kadar KIRMIZI kalmali
+# (OperationType.EXCEL_SORT erisimi AttributeError firlatir VEYA
+# sortColumn/sortAscending/sortedFileName gecersiz kwarg olarak reddedilir -
+# ikisi de beklenen red durumu). mergedFileName/redactedFileName ile AYNI
+# model_validator deseni test ediliyor.
+
+
+def _excel_sort_step(
+    order: int,
+    file_names: list[str],
+    sort_column: str,
+    sort_ascending: bool,
+    sorted_file_name: str,
+) -> PlanStep:
+    return _step(
+        order=order,
+        operationType=OperationType.EXCEL_SORT,
+        fileNames=file_names,
+        affectedFileCount=len(file_names),
+        sortColumn=sort_column,
+        sortAscending=sort_ascending,
+        sortedFileName=sorted_file_name,
+    )
+
+
+def test_excel_sort_fields_required_when_operation_type_is_excel_sort():
+    with pytest.raises(ValidationError):
+        _step(
+            operationType=OperationType.EXCEL_SORT,
+            fileNames=["a.xlsx"],
+            affectedFileCount=1,
+        )
+
+
+def test_excel_sort_accepts_valid_step_with_all_fields_populated():
+    step = _excel_sort_step(
+        order=0,
+        file_names=["a.xlsx"],
+        sort_column="Tutar",
+        sort_ascending=True,
+        sorted_file_name="siralanmis.xlsx",
+    )
+
+    assert step.sortColumn == "Tutar"
+    assert step.sortAscending is True
+    assert step.sortedFileName == "siralanmis.xlsx"
+
+
+def test_excel_sort_requires_exactly_one_file_name():
+    with pytest.raises(ValidationError):
+        _excel_sort_step(
+            order=0,
+            file_names=["a.xlsx", "b.xlsx"],
+            sort_column="Tutar",
+            sort_ascending=True,
+            sorted_file_name="siralanmis.xlsx",
+        )
+
+
+def test_excel_sort_fields_rejected_when_operation_type_is_not_excel_sort():
+    with pytest.raises(ValidationError):
+        _step(
+            operationType=OperationType.MOVE,
+            fileNames=["a.xlsx"],
+            affectedFileCount=1,
+            sortColumn="Tutar",
+            sortAscending=True,
+            sortedFileName="siralanmis.xlsx",
+        )
+
+
+def test_excel_sort_sort_column_alone_rejected_for_non_excel_sort_step():
+    with pytest.raises(ValidationError):
+        _step(
+            operationType=OperationType.MOVE,
+            fileNames=["a.xlsx"],
+            affectedFileCount=1,
+            sortColumn="Tutar",
+        )
+
+
+def test_excel_sort_sorted_file_name_rejects_path_separators():
+    with pytest.raises(ValidationError):
+        _excel_sort_step(
+            order=0,
+            file_names=["a.xlsx"],
+            sort_column="Tutar",
+            sort_ascending=True,
+            sorted_file_name="../evil.xlsx",
+        )
+
+
+def test_excel_sort_sorted_file_name_rejects_overlap_with_source_file_names():
+    with pytest.raises(ValidationError):
+        _excel_sort_step(
+            order=0,
+            file_names=["a.xlsx"],
+            sort_column="Tutar",
+            sort_ascending=True,
+            sorted_file_name="a.xlsx",
+        )
+
+
+def test_excel_sort_sorted_file_name_rejects_case_variant_overlap_with_source_file_names():
+    with pytest.raises(ValidationError):
+        _excel_sort_step(
+            order=0,
+            file_names=["a.xlsx"],
+            sort_column="Tutar",
+            sort_ascending=True,
+            sorted_file_name="A.XLSX",
+        )
