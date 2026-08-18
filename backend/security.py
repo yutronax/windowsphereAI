@@ -139,9 +139,12 @@ def validate_plan_paths(
         _validate_single_path(allowed_root / step.targetFolder, allowed_root, "Hedef klasör")
         if step.operationType == OperationType.MERGE:
             _validate_single_path(allowed_root / step.mergedFileName, allowed_root, "Birleştirme hedefi")
+        if step.operationType == OperationType.REDACT:
+            _validate_single_path(allowed_root / step.redactedFileName, allowed_root, "Karartma hedefi")
 
     validate_rename_destinations(plan, pdf_files, allowed_root)
     validate_merge_destinations(plan, pdf_files, allowed_root)
+    validate_redact_destinations(plan, pdf_files, allowed_root)
 
 
 def _normalize_filename(name: str) -> str:
@@ -283,4 +286,59 @@ def validate_merge_destinations(
                 allowed_root=str(allowed_root),
                 reason="planın bilmediği, zaten var olan bir dosyayla çakışıyor",
                 description="Birleştirme hedefi",
+            )
+
+
+def validate_redact_destinations(
+    plan: PlanSkeleton,
+    pdf_files: list[PdfFileMetadata],
+    allowed_root: Path,
+) -> None:
+    """Saga #320: `validate_merge_destinations` ile BİREBİR aynı ilkeler,
+    `redactedFileName` için - (a) planın bilmediği zaten var olan bir
+    dosyayla çakışamaz, (b) plan genelinde birden fazla MERGE/RENAME/REDACT
+    step'i AYNI hedefi üretemez (zincirleme çakışma). Tüm karşılaştırmalar
+    `_normalize_filename` (Windows case-insensitive) üzerinden yapılır."""
+    redact_destinations: list[str] = [
+        _normalize_filename(step.redactedFileName)
+        for step in plan.steps
+        if step.operationType == OperationType.REDACT
+    ]
+    merge_destinations: list[str] = [
+        _normalize_filename(step.mergedFileName)
+        for step in plan.steps
+        if step.operationType == OperationType.MERGE
+    ]
+    rename_destinations: list[str] = [
+        _normalize_filename(dest_name)
+        for step in plan.steps
+        if step.operationType == OperationType.RENAME
+        for dest_name in (step.newFileNames or [])
+    ]
+    all_destinations = redact_destinations + merge_destinations + rename_destinations
+
+    for dest_index, dest_norm in enumerate(redact_destinations):
+        for other_index, other_norm in enumerate(all_destinations):
+            if other_index != dest_index and dest_norm == other_norm:
+                raise PathWhitelistError(
+                    offending_path=dest_norm,
+                    allowed_root=str(allowed_root),
+                    reason="planda zincirleme hedef çakışmasına (birden fazla MERGE/RENAME/REDACT step'i aynı hedefi üretemez) izin verilmiyor",
+                    description="Karartma hedefi",
+                )
+
+    known_filenames = {_normalize_filename(pdf_file.filename) for pdf_file in pdf_files}
+    for step in plan.steps:
+        if step.operationType != OperationType.REDACT:
+            continue
+        redacted_name = step.redactedFileName
+        if _normalize_filename(redacted_name) in known_filenames:
+            continue
+        candidate = allowed_root / redacted_name
+        if candidate.exists():
+            raise PathWhitelistError(
+                offending_path=str(candidate),
+                allowed_root=str(allowed_root),
+                reason="planın bilmediği, zaten var olan bir dosyayla çakışıyor",
+                description="Karartma hedefi",
             )

@@ -770,3 +770,78 @@ def test_revert_endpoint_returns_200_with_revert_failed_status_when_the_physical
 
     assert response.status_code == 200
     assert response.json() == {"transactionId": transaction.id, "status": "revert_failed"}
+
+
+def _build_minimal_real_pdf_bytes() -> bytes:
+    # Saga #320 red-team bulgusu 3: REDACT icin sayfa-sayisi dogrulamasi
+    # gercek bir pypdf.PdfReader gerektiriyor - "%PDF-1.4 fake" sahte
+    # bayti burada yeterli degil. test_pdf_redact.py/test_orchestrator.py
+    # ile AYNI el-yapimi minimal PDF teknigi (reportlab kurulu degil).
+    objects = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        3: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>",
+        4: b"<< /Length 4 >>\nstream\n\nendstream",
+    }
+    out = bytearray()
+    out += b"%PDF-1.4\n"
+    offsets: dict[int, int] = {}
+    for obj_num in sorted(objects):
+        offsets[obj_num] = len(out)
+        out += f"{obj_num} 0 obj\n".encode()
+        out += objects[obj_num]
+        out += b"\nendobj\n"
+    xref_offset = len(out)
+    max_obj = max(objects)
+    out += f"xref\n0 {max_obj + 1}\n".encode()
+    out += b"0000000000 65535 f \n"
+    for obj_num in range(1, max_obj + 1):
+        out += f"{offsets.get(obj_num, 0):010d} 00000 n \n".encode()
+    out += b"trailer\n"
+    out += f"<< /Size {max_obj + 1} /Root 1 0 R >>\n".encode()
+    out += b"startxref\n"
+    out += f"{xref_offset}\n".encode()
+    out += b"%%EOF"
+    return bytes(out)
+
+
+def test_apply_plan_endpoint_returns_a_warning_for_a_redact_step(tmp_path):
+    # Saga #320 red-team bulgusu 3 (AC6/P1): REDACT ciktisi rasterize
+    # edilmis bir sayfa icerir (buyur, artik metin-aranabilir/kopyalanabilir
+    # degil) - TransactionApplyResponse'un bunu `warnings` alaninda acikca
+    # bildirmesi gerekir, aksi halde istemci sessizce kesfetmemis olur.
+    db_session = _in_memory_db_session()
+    (tmp_path / "gizli.pdf").write_bytes(_build_minimal_real_pdf_bytes())
+    session_id = _create_session(selected_folder=str(tmp_path))
+    redact_plan = {
+        "dateSource": "created_at",
+        "sortOrder": "ascending",
+        "steps": [
+            {
+                "order": 0,
+                "operationType": "Karart",
+                "targetFolder": "2026-08",
+                "affectedFileCount": 1,
+                "fileNames": ["gizli.pdf"],
+                "redactionRegions": [{"page": 1, "x0": 0, "y0": 0, "x1": 300, "y1": 300}],
+                "redactedFileName": "gizli_karartilmis.pdf",
+            }
+        ],
+    }
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post(
+            "/api/transactions/apply",
+            json={"sessionId": session_id, "plan": redact_plan},
+        )
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "committed"
+    assert len(body["warnings"]) == 1
+    assert "gizli_karartilmis.pdf" in body["warnings"][0]
+    assert (tmp_path / "gizli_karartilmis.pdf").exists()

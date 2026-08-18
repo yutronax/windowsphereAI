@@ -6,7 +6,15 @@ from sqlalchemy.orm import Session
 
 from backend.db import create_db_engine, create_session_factory
 from backend.db_models import Base, Transaction
-from backend.models import DateSource, OperationType, PdfFileMetadata, PlanSkeleton, PlanStep, SortOrder
+from backend.models import (
+    DateSource,
+    OperationType,
+    PdfFileMetadata,
+    PlanSkeleton,
+    PlanStep,
+    RedactionRegion,
+    SortOrder,
+)
 import datetime as dt
 
 from backend.orchestrator import (
@@ -1392,3 +1400,201 @@ def test_revert_transaction_and_purge_expired_delete_backups_do_not_lose_the_rac
 
         assert txn2_id not in purged_ids
         assert backup_dir2.exists()
+
+
+# Saga #320: REDACT operasyonu - MERGE/SPLIT ile AYNI "tek kaynak PDF, COPY
+# semantigiyle rollback (sadece hedefi sil)" deseni, ama N kaynak -> 1 hedef
+# (MERGE) ya da 1 kaynak -> N hedef (SPLIT) DEGIL - TAM OLARAK 1 kaynak -> 1
+# hedef, hedef sayfanin rasterize edilip uzerine opak siyah kutu(lar)
+# cizilmis hali disindaki TUM sayfalar vektorel olarak KORUNUR. Bu testler
+# simdilik KIRMIZI kalmali - `OperationType.REDACT`, `RedactionRegion`,
+# `PlanStep.redactionRegions`/`redactedFileName`, `backend.pdf_redact` ve
+# orchestrator'daki REDACT dali henuz YOK.
+#
+# `reportlab` bu venv'de kurulu degil - gercek cikarilabilir metin iceren
+# PDF'ler, `test_pdf_redact.py`deki `_build_pdf_bytes` ile AYNI teknikle
+# (standart PDF nesne modelini dogrudan bayt olarak el ile insa ederek)
+# uretiliyor (deneysel dogrulandi: `pypdf.PdfReader(...).extract_text()`
+# bu PDF'lerden metni basariyla cikarabiliyor).
+
+
+def _build_text_pdf_bytes(page_texts: list[str]) -> bytes:
+    n = len(page_texts)
+    font_obj = 3
+    first_page_obj = 4
+    first_content_obj = 4 + n
+
+    objects: dict[int, bytes] = {}
+    objects[1] = b"<< /Type /Catalog /Pages 2 0 R >>"
+    kids = " ".join(f"{first_page_obj + i} 0 R" for i in range(n))
+    objects[2] = f"<< /Type /Pages /Kids [{kids}] /Count {n} >>".encode()
+    objects[3] = b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+
+    for i in range(n):
+        page_num = first_page_obj + i
+        content_num = first_content_obj + i
+        objects[page_num] = (
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] "
+            f"/Resources << /Font << /F1 {font_obj} 0 R >> >> "
+            f"/Contents {content_num} 0 R >>"
+        ).encode()
+
+    for i, text in enumerate(page_texts):
+        content_num = first_content_obj + i
+        escaped = text.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
+        stream = f"BT /F1 24 Tf 20 150 Td ({escaped}) Tj ET".encode()
+        objects[content_num] = (
+            f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream"
+        )
+
+    out = bytearray()
+    out += b"%PDF-1.4\n"
+    offsets: dict[int, int] = {}
+    for obj_num in sorted(objects):
+        offsets[obj_num] = len(out)
+        out += f"{obj_num} 0 obj\n".encode()
+        out += objects[obj_num]
+        out += b"\nendobj\n"
+
+    xref_offset = len(out)
+    max_obj = max(objects)
+    out += f"xref\n0 {max_obj + 1}\n".encode()
+    out += b"0000000000 65535 f \n"
+    for obj_num in range(1, max_obj + 1):
+        out += f"{offsets.get(obj_num, 0):010d} 00000 n \n".encode()
+    out += b"trailer\n"
+    out += f"<< /Size {max_obj + 1} /Root 1 0 R >>\n".encode()
+    out += b"startxref\n"
+    out += f"{xref_offset}\n".encode()
+    out += b"%%EOF"
+    return bytes(out)
+
+
+def _write_text_pdf(root, filename: str, page_texts: list[str]) -> None:
+    (root / filename).write_bytes(_build_text_pdf_bytes(page_texts))
+
+
+def _redact_step(
+    order: int,
+    file_name: str,
+    redacted_file_name: str,
+    regions: list[RedactionRegion] | None = None,
+) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.REDACT,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=[file_name],
+        redactionRegions=regions or [RedactionRegion(page=1, x0=0, y0=0, x1=300, y1=300)],
+        redactedFileName=redacted_file_name,
+    )
+
+
+REDACT_SENSITIVE_TEXT = "12345678901"
+
+
+def test_apply_plan_redacts_a_region_and_the_output_no_longer_contains_the_original_text(session, tmp_path):
+    from pypdf import PdfReader
+
+    _write_text_pdf(
+        tmp_path,
+        "gizli.pdf",
+        [
+            f"TC Kimlik No: {REDACT_SENSITIVE_TEXT}",
+            "ikinci sayfa - bu metin karartilmiyor",
+        ],
+    )
+    source_size_before = (tmp_path / "gizli.pdf").stat().st_size
+    pdf_files = [PdfFileMetadata(filename="gizli.pdf", createdAt="2026-08-01")]
+    plan = _plan(
+        [_redact_step(0, "gizli.pdf", "gizli_karartilmis.pdf", [RedactionRegion(page=1, x0=0, y0=0, x1=300, y1=300)])]
+    )
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    output_path = tmp_path / "gizli_karartilmis.pdf"
+    assert output_path.exists()
+    reader = PdfReader(str(output_path))
+    assert len(reader.pages) == 2
+    assert REDACT_SENSITIVE_TEXT not in reader.pages[0].extract_text()
+    # Karartilmayan diger sayfa hala metin-aranabilir olmali (rasterize
+    # EDILMEMIS, vektorel olarak korunmus).
+    assert "ikinci sayfa" in reader.pages[1].extract_text()
+    # Rasterize edilmis (goruntu iceren) bir sayfa, kucuk bir metin-only
+    # sayfadan cok daha buyuk cikti uretir.
+    assert output_path.stat().st_size > source_size_before
+    assert transaction.status == "committed"
+    assert len(transaction.operations) == 1
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_leaves_redact_source_untouched(session, tmp_path):
+    _write_text_pdf(tmp_path, "gizli.pdf", [f"TC: {REDACT_SENSITIVE_TEXT}"])
+    original_bytes = (tmp_path / "gizli.pdf").read_bytes()
+    pdf_files = [PdfFileMetadata(filename="gizli.pdf", createdAt="2026-08-01")]
+    plan = _plan([_redact_step(0, "gizli.pdf", "gizli_karartilmis.pdf")])
+
+    apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert (tmp_path / "gizli.pdf").exists()
+    assert (tmp_path / "gizli.pdf").read_bytes() == original_bytes
+
+
+def test_apply_plan_rejects_redact_of_a_path_outside_allowed_root(session, tmp_path, monkeypatch):
+    # OCR testindeki AYNI ".." tekniği (Saga #307) - PdfFileMetadata.filename
+    # kendi validator'unda ayrac icermez ama tek segmentlik ".." allowed_root
+    # disina cikar. REDACT'in de diger operationType'lar gibi
+    # is_path_allowed/validate_plan_paths uzerinden dogrulanmasi gerekir.
+    pdf_files = [PdfFileMetadata(filename="..", createdAt="2026-08-01")]
+    plan = _plan([_redact_step(0, "..", "gizli_karartilmis.pdf")])
+
+    calls: list[Path] = []
+
+    def fake_redact_pdf_page(pdf_path, page_number, regions):
+        calls.append(pdf_path)
+        return b"%PDF-1.4 fake-redacted"
+
+    monkeypatch.setattr("backend.orchestrator.redact_pdf_page", fake_redact_pdf_page)
+
+    with pytest.raises(PathWhitelistError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert calls == []
+    assert not (tmp_path / "gizli_karartilmis.pdf").exists()
+
+
+def test_apply_plan_rejects_redact_when_page_number_exceeds_page_count(session, tmp_path):
+    _write_real_pdf(tmp_path, "kisa.pdf", 1)
+    pdf_files = [PdfFileMetadata(filename="kisa.pdf", createdAt="2026-08-01")]
+    plan = _plan(
+        [_redact_step(0, "kisa.pdf", "kisa_karartilmis.pdf", [RedactionRegion(page=5, x0=0, y0=0, x1=100, y1=100)])]
+    )
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "kisa_karartilmis.pdf").exists()
+    assert (tmp_path / "kisa.pdf").exists()
+
+
+def test_apply_plan_rolls_back_a_redact_by_deleting_the_output_file_without_touching_the_source(session, tmp_path):
+    _write_text_pdf(tmp_path, "gizli.pdf", [f"TC: {REDACT_SENSITIVE_TEXT}"])
+    original_bytes = (tmp_path / "gizli.pdf").read_bytes()
+    pdf_files = [
+        PdfFileMetadata(filename="gizli.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="c.pdf", createdAt="2026-08-03"),
+    ]
+    plan = _plan(
+        [
+            _redact_step(0, "gizli.pdf", "gizli_karartilmis.pdf"),
+            _step(1, "2026-08", ["c.pdf"]),  # c.pdf pdf_files'ta ama diskte yok - bu step basarisiz olur
+        ]
+    )
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "gizli_karartilmis.pdf").exists()
+    assert (tmp_path / "gizli.pdf").exists()
+    assert (tmp_path / "gizli.pdf").read_bytes() == original_bytes

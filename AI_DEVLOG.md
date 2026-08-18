@@ -1,5 +1,45 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## PDF gerçek redaksiyon / KVKK (Saga #320, epic #29) — güvenlik-kritik, rasterize+karart, sahte siyah kutu DEĞİL
+
+**Güvenlik motivasyonu.** Referans projedeki (`referans/windows-ai-files-eski/core/agents/pdf_agent.py`)
+`_redact`, PDF üzerine sadece siyah bir dikdörtgen ÇİZİYORDU — metin
+katmanı hâlâ metin katmanı olarak kalıyordu, yani kopyala-yapıştır veya
+`extract_text()` ile hassas veri (TC kimlik no, hesap no, vergi no —
+KVKK kapsamı) hâlâ çıkarılabiliyordu. Yarım bir redaksiyon, hiç
+redaksiyon yapmamaktan DAHA KÖTÜ — kullanıcı (mali müşavir/avukat) dosyayı
+güvenli sanıp paylaşır. Bu görev, o koddan HİÇBİR SATIR kopyalamadan,
+sıfırdan yeni bir `OperationType.REDACT` tasarladı: hedef sayfa rasterize
+edilir (pdf2image), belirtilen bölge(ler) üzerine opak kutu çizilir
+(PIL), ve o TEK sayfa çıktı PDF'inde orijinal vektör/metin sayfasının
+YERİNE (yanına değil) konur — diğer sayfalar dokunulmadan vektör/aranabilir
+kalır.
+
+**Path validasyonu merkezi kaldı.** `backend/pdf_redact.py` hiçbir
+allowed_root/whitelist mantığı içermiyor — MERGE/SPLIT/OCR'daki AYNI
+ders (Saga #306/#307) uygulanarak, `redactedFileName` doğrulaması
+doğrudan `backend/security.py`'nin `validate_plan_paths`/yeni
+`validate_redact_destinations`'ına eklendi, `orchestrator.py`'nin
+`apply_plan`'ı kaynak+hedef için `is_path_allowed` üzerinden geçiyor.
+
+**Bağımsız red-team turu 1 HIGH + 1 MEDIUM bulgu buldu, ikisi de aynı
+görevde düzeltildi (regresyon testleriyle):** (1) `RedactionRegion`'ın
+dokümante ettiği koordinat uzayı (PDF nokta, sol-alt orijin) ile
+`redact_pdf_page`'in GERÇEKTE çizdiği uzay (ham piksel, sol-üst orijin,
+sabit DPI) TUTARSIZDI — dokümante edilen sözleşmeyi izleyen bir
+kullanıcı/LLM kutuyu YANLIŞ yere çizerdi, metin katmanı yok olsa da
+hassas veri GÖRSEL OLARAK açıkta kalabilirdi (kritik: "metin gitti" ile
+"güvenli" AYNI ŞEY DEĞİL). Düzeltme: gerçek `mediabox` (nokta) boyutu
+render edilen görüntünün piksel boyutuna oranlanıp her bölge doğru
+piksel konumuna (Y-flip dahil) dönüştürülüyor. (2) Sayfa dışı bölge
+kontrolü yoktu (AC7) — artık gerçek sayfa boyutunu aşan bölge çizim
+başlamadan `ValueError` ile reddediliyor. Ayrıntı: `artifacts/pdf-redact/verify_report.md`.
+
+**Kapsam dışı bırakılan (bilinçli karar).** Otomatik PII tespiti (TC
+kimlik no'yu kendiliğinden bulup önerme) bu görevde YAPILMADI —
+kullanıcı/LLM bölgeyi açıkça belirtmeli. Ayrı bir gelecek görev olarak
+Saga'ya not edildi (depends_on: [320]).
+
 ## Format Agent parametre güvenlik ağı (Saga #319, epic #29) — kod boşluğu yok, konvansiyon + wiring testleri eklendi
 
 **Keşif sonucu: bug sınıfı bu projede henüz yok.** Referans projedeki

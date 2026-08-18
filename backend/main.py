@@ -343,6 +343,19 @@ def apply_plan_endpoint(
             operations=[],
         )
 
+    # Saga #320 red-team bulgusu 3: REDACT step'leri icin, cikan dosyanin
+    # sekil degistirdigini (rasterize sayfa, artik metin-aranabilir/
+    # kopyalanabilir degil, dosya buyudu) belirten bir uyari eklenir.
+    # `apply_plan` bu bilgiyi Transaction ORM'inde tasimadigi icin,
+    # zaten burada elimizde olan dogrulanmis `payload.plan.steps`
+    # taranarak minimal-degisiklikle olusturulur.
+    warnings = [
+        f"'{step.redactedFileName}' dosyasinin {step.redactionRegions[0].page}. sayfasi artik "
+        "bir goruntu - metin olarak aranabilir/kopyalanabilir degil ve dosya boyutu buyudu."
+        for step in payload.plan.steps
+        if step.operationType == OperationType.REDACT
+    ]
+
     return TransactionApplyResponse(
         id=transaction.id,
         status=transaction.status,
@@ -350,4 +363,5 @@ def apply_plan_endpoint(
             AppliedFileOperation(destination_path=op.destination_path, status=op.status)
             for op in transaction.operations
         ],
+        warnings=warnings,
     )

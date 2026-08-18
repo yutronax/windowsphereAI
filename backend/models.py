@@ -44,6 +44,49 @@ class OperationType(str, Enum):
     # cikti dosyasi.
     SPLIT = "Böl"
     OCR = "OCR"
+    # Saga #320: REDACT - MERGE/SPLIT ile AYNI "1 kaynak PDF, COPY semantigiyle
+    # rollback (sadece hedefi sil)" deseni, ama TAM OLARAK 1 kaynak -> 1 hedef.
+    REDACT = "Karart"
+
+
+class RedactionRegion(BaseModel):
+    """Saga #320: REDACT edilecek TEK bir sayfa uzerindeki dikdortgen bolge.
+
+    Koordinatlar PDF NOKTA uzayindadir (72 nokta/inch, sayfanin
+    `mediabox`'iyla AYNI birim ve koken sozlesmesi) - x0/y0 sayfanin
+    SOL-ALT kosesi, x1/y1 SAG-UST kosesi (PDF'in kendi koordinat
+    sistemi, GORUNTU/piksel uzayi DEGIL). `pdf_redact.redact_pdf_page`
+    bunlari rasterize edilen goruntunun piksel uzayina (sol-ust kokenli)
+    donusturur - bkz. Saga #320 red-team bulgusu 1 (once yanlislikla
+    dogrudan piksel uzayinda cizdiriliyordu)."""
+
+    page: int
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+    @field_validator("page")
+    @classmethod
+    def page_at_least_one(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("page must be >= 1")
+        return value
+
+    @field_validator("x0", "y0", "x1", "y1")
+    @classmethod
+    def coordinate_non_negative(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("coordinates must be >= 0")
+        return value
+
+    @model_validator(mode="after")
+    def x1_greater_than_x0_and_y1_greater_than_y0(self) -> "RedactionRegion":
+        if self.x1 <= self.x0:
+            raise ValueError("x1 must be greater than x0")
+        if self.y1 <= self.y0:
+            raise ValueError("y1 must be greater than y0")
+        return self
 
 
 class PlanStep(BaseModel):
@@ -67,12 +110,24 @@ class PlanStep(BaseModel):
     # newFileNames ile AYNI desende (SADECE operationType==MERGE olduğunda
     # dolu olmalı, diğer operationType'larda None kalmalı).
     mergedFileName: str | None = None
+    # Saga #320: REDACT icin - karartilacak bolgeler ve cikti dosya adi,
+    # mergedFileName ile AYNI desende (SADECE operationType==REDACT
+    # olduğunda dolu olmalı, diğer operationType'larda None kalmalı).
+    redactionRegions: list["RedactionRegion"] | None = None
+    redactedFileName: str | None = None
 
     @field_validator("mergedFileName")
     @classmethod
     def merged_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
         if value is not None and ("/" in value or "\\" in value):
             raise ValueError("mergedFileName must not contain path separators")
+        return value
+
+    @field_validator("redactedFileName")
+    @classmethod
+    def redacted_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
+        if value is not None and ("/" in value or "\\" in value):
+            raise ValueError("redactedFileName must not contain path separators")
         return value
 
     @field_validator("order", "affectedFileCount")
@@ -201,6 +256,33 @@ class PlanStep(BaseModel):
                 )
         elif self.mergedFileName is not None:
             raise ValueError("mergedFileName must be omitted unless operationType is MERGE")
+        return self
+
+    @model_validator(mode="after")
+    def redact_fields_only_for_redact(self) -> "PlanStep":
+        # Saga #320: mergedFileName/newFileNames ile AYNI desen -
+        # redactionRegions/redactedFileName SADECE REDACT icin zorunlu,
+        # diger operationType'larda tamamen yasak.
+        if self.operationType == OperationType.REDACT:
+            if not self.redactionRegions:
+                raise ValueError("redactionRegions is required (non-empty) when operationType is REDACT")
+            if self.redactedFileName is None or self.redactedFileName.strip() == "":
+                raise ValueError("redactedFileName is required when operationType is REDACT")
+            if len(self.fileNames) != 1:
+                raise ValueError("fileNames must contain exactly 1 entry when operationType is REDACT")
+            normalized_redacted = os.path.normcase(self.redactedFileName)
+            normalized_sources = [os.path.normcase(name) for name in self.fileNames]
+            if normalized_redacted in normalized_sources:
+                raise ValueError(
+                    f"redactedFileName ('{self.redactedFileName}') collides with one of this "
+                    "step's fileNames (case-insensitive) — redact output must not overwrite "
+                    "a source file"
+                )
+        else:
+            if self.redactionRegions is not None:
+                raise ValueError("redactionRegions must be omitted unless operationType is REDACT")
+            if self.redactedFileName is not None:
+                raise ValueError("redactedFileName must be omitted unless operationType is REDACT")
         return self
 
     @model_validator(mode="after")
@@ -335,6 +417,12 @@ class TransactionApplyResponse(BaseModel):
     id: int
     status: str
     operations: list[AppliedFileOperation]
+    # Saga #320 red-team bulgusu 3 (AC6/P1): REDACT adimi ciktisi ARTIK
+    # rasterize edilmis bir sayfa icerir - metin katmani kaybolur (bu
+    # ISTENEN garanti) ama YAN ETKI olarak dosya buyur ve o sayfa artik
+    # aranabilir/kopyalanabilir DEGILDIR. İstemcinin bunu sessizce
+    # kesfetmemesi icin her REDACT step'i icin bir uyari metni.
+    warnings: list[str] = []
 
 
 class PlanRequest(BaseModel):

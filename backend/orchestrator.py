@@ -11,6 +11,7 @@ from backend.db_models import FileOperation, Transaction
 from backend.file_operations import create_transaction, record_file_operation
 from backend.models import OperationType, PdfFileMetadata, PlanSkeleton, PlanStep
 from backend.pdf_ocr import ocr_pdf_file
+from backend.pdf_redact import redact_pdf_page
 from backend.security import is_path_allowed, validate_plan_paths
 
 
@@ -50,6 +51,7 @@ _SUPPORTED_OPERATION_TYPES = {
     OperationType.MERGE,
     OperationType.SPLIT,
     OperationType.OCR,
+    OperationType.REDACT,
 }
 
 # DELETE'in fiziksel yedeklerinin saklandığı, `allowed_root` altında gizli
@@ -138,6 +140,40 @@ def _forward_split_page(reader_page, destination_path: Path) -> None:
         raise
 
 
+def _forward_redact(source_path: Path, page_number: int, regions: list, destination_path: Path) -> None:
+    # Saga #320: MERGE/SPLIT ile AYNI gecici-dosya-yaz + atomik-tasi deseni.
+    # Kaynagin TUM sayfalari vektorel olarak korunur, SADECE `page_number`
+    # rasterize edilmis (uzerine opak siyah kutu(lar) cizilmis) sayfayla
+    # degistirilir.
+    import io
+
+    from pypdf import PdfReader, PdfWriter
+
+    redacted_page_bytes = redact_pdf_page(source_path, page_number, regions)
+
+    fd, temp_path_str = tempfile.mkstemp(
+        suffix=".tmp", prefix=destination_path.name + ".", dir=str(destination_path.parent)
+    )
+    temp_path = Path(temp_path_str)
+    os.close(fd)
+    try:
+        source_reader = PdfReader(str(source_path))
+        redacted_reader = PdfReader(io.BytesIO(redacted_page_bytes))
+
+        writer = PdfWriter()
+        for page_index, page in enumerate(source_reader.pages):
+            if page_index + 1 == page_number:
+                writer.add_page(redacted_reader.pages[0])
+            else:
+                writer.add_page(page)
+        writer.write(str(temp_path))
+        writer.close()
+        temp_path.replace(destination_path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
 _FORWARD_OPERATIONS = {
     OperationType.MOVE: _forward_move,
     OperationType.COPY: _forward_copy,
@@ -177,6 +213,9 @@ _ROLLBACK_OPERATIONS = {
     # her cikti dosyasi icin bagimsiz olarak sadece hedefi siler (ATDD S2,
     # SPLIT'e ozel yeni bir rollback fonksiyonu GEREKMIYOR).
     OperationType.SPLIT: _rollback_copy,
+    # Saga #320: REDACT rollback'i de COPY ile AYNI - kaynak hic degismedi,
+    # rollback SADECE hedefteki karartilmis dosyayi siler (ATDD S2).
+    OperationType.REDACT: _rollback_copy,
 }
 
 
@@ -478,6 +517,31 @@ def apply_plan(
                     session.commit()
                     applied.append(operation)
                 continue
+            if step.operationType == OperationType.REDACT:
+                source_path = allowed_root / files[0].filename
+                destination_path = allowed_root / step.redactedFileName
+                region = step.redactionRegions[0]
+                from pypdf import PdfReader
+
+                reader = PdfReader(str(source_path))
+                if region.page > len(reader.pages):
+                    raise PlanApplicationError(
+                        f"REDACT sayfa numarası ({region.page}) gerçek sayfa sayısını "
+                        f"({len(reader.pages)}) aşıyor: '{source_path.name}'"
+                    )
+                operation = record_file_operation(
+                    session,
+                    transaction,
+                    operation_type=step.operationType.value,
+                    source_path=str(source_path),
+                    destination_path=str(destination_path),
+                    backup_path=str(destination_path),
+                )
+                _forward_redact(source_path, region.page, step.redactionRegions, destination_path)
+                operation.status = "completed"
+                session.commit()
+                applied.append(operation)
+                continue
             if step.operationType == OperationType.OCR:
                 source_path = allowed_root / files[0].filename
                 if not is_path_allowed(source_path, allowed_root):
@@ -497,6 +561,7 @@ def apply_plan(
                 OperationType.RENAME,
                 OperationType.MERGE,
                 OperationType.SPLIT,
+                OperationType.REDACT,
             ):
                 target_dir = allowed_root / step.targetFolder
                 target_dir.mkdir(parents=True, exist_ok=True)
