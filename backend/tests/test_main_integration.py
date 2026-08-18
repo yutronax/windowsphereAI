@@ -1,4 +1,6 @@
+import datetime as dt
 import json
+import os
 import uuid
 
 from fastapi.testclient import TestClient
@@ -845,3 +847,277 @@ def test_apply_plan_endpoint_returns_a_warning_for_a_redact_step(tmp_path):
     assert len(body["warnings"]) == 1
     assert "gizli_karartilmis.pdf" in body["warnings"][0]
     assert (tmp_path / "gizli_karartilmis.pdf").exists()
+
+
+# Saga #313: Dosya arama endpoint'i testleri
+
+
+def test_search_endpoint_returns_404_for_unknown_session_id():
+    response = client.post(
+        "/api/search",
+        json={"sessionId": str(uuid.uuid4())},
+    )
+
+    assert response.status_code == 404
+
+
+def test_search_endpoint_returns_410_when_selected_folder_no_longer_exists(tmp_path):
+    missing_folder = tmp_path / "silinmis-klasor"
+    session_id = _create_session(selected_folder=str(missing_folder))
+
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id},
+    )
+
+    assert response.status_code == 410
+
+
+def test_search_endpoint_returns_200_with_all_files_when_no_filters_applied(tmp_path):
+    (tmp_path / "dosya1.txt").write_text("merhaba")
+    (tmp_path / "dosya2.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "test.doc").write_bytes(b"fake doc")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["results"]) == 3
+    filenames = [r["filename"] for r in body["results"]]
+    assert "dosya1.txt" in filenames
+    assert "dosya2.pdf" in filenames
+    assert "test.doc" in filenames
+
+
+def test_search_endpoint_ignores_hidden_files(tmp_path):
+    (tmp_path / "dosya1.txt").write_text("merhaba")
+    (tmp_path / ".gizli").write_text("gizli dosya")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["results"]) == 1
+    assert body["results"][0]["filename"] == "dosya1.txt"
+
+
+def test_search_endpoint_filters_by_name_contains_case_insensitive(tmp_path):
+    (tmp_path / "fatura_01.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "FATURA_02.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "rapor.txt").write_text("rapor")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id, "nameContains": "fatura"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["results"]) == 2
+    filenames = {r["filename"] for r in body["results"]}
+    assert "fatura_01.pdf" in filenames
+    assert "FATURA_02.pdf" in filenames
+
+
+def test_search_endpoint_filters_by_extension_with_dot(tmp_path):
+    (tmp_path / "dosya1.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "dosya2.PDF").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "dosya3.txt").write_text("txt")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id, "extension": ".pdf"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["results"]) == 2
+    filenames = {r["filename"] for r in body["results"]}
+    assert "dosya1.pdf" in filenames
+    assert "dosya2.PDF" in filenames
+
+
+def test_search_endpoint_filters_by_extension_without_dot(tmp_path):
+    (tmp_path / "dosya1.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "dosya2.PDF").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "dosya3.txt").write_text("txt")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id, "extension": "pdf"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["results"]) == 2
+    filenames = {r["filename"] for r in body["results"]}
+    assert "dosya1.pdf" in filenames
+    assert "dosya2.PDF" in filenames
+
+
+def test_search_endpoint_filters_by_modified_after(tmp_path):
+    import time as time_module
+
+    file1 = tmp_path / "dosya1.txt"
+    file1.write_text("eski")
+    old_mtime = time_module.time() - 3600  # 1 saat önce
+    file1_mtime = dt.datetime.fromtimestamp(old_mtime, tz=dt.timezone.utc)
+
+    file2 = tmp_path / "dosya2.txt"
+    file2.write_text("yeni")
+
+    # file1'in mtime'ını geriye al
+    os.utime(file1, (old_mtime, old_mtime))
+
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    # file1'den SONRA (biraz daha sonra) dosyaları ara - file1'in mtime'ından
+    # SONRA olanları. >= olduğu için, file1_mtime'dan 1 saniye sonrasını seçiyoruz.
+    filter_time = file1_mtime + dt.timedelta(seconds=1)
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id, "modifiedAfter": filter_time.isoformat()},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    # file1 GEÇ (mtime'ı filter_time'dan daha eski), file2 VAR
+    filenames = [r["filename"] for r in body["results"]]
+    assert "dosya1.txt" not in filenames
+    assert "dosya2.txt" in filenames
+
+
+def test_search_endpoint_filters_by_modified_before(tmp_path):
+    import time as time_module
+
+    file1 = tmp_path / "dosya1.txt"
+    file1.write_text("eski")
+    old_mtime = time_module.time() - 3600  # 1 saat önce
+    file1_mtime = dt.datetime.fromtimestamp(old_mtime, tz=dt.timezone.utc)
+
+    file2 = tmp_path / "dosya2.txt"
+    file2.write_text("yeni")
+
+    # file2'nin mtime'ını ileride al
+    os.utime(file1, (old_mtime, old_mtime))
+
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    # file1'den daha eski dosyaları ara (file1_mtime'dan önce)
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id, "modifiedBefore": file1_mtime.isoformat()},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    # file1 VAR, file2 GEÇ
+    filenames = [r["filename"] for r in body["results"]]
+    assert "dosya1.txt" in filenames
+    assert "dosya2.txt" not in filenames
+
+
+def test_search_endpoint_returns_422_for_invalid_modified_after_format(tmp_path):
+    (tmp_path / "dosya.txt").write_text("test")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id, "modifiedAfter": "not-a-valid-iso-date"},
+    )
+
+    assert response.status_code == 422
+    assert "modifiedAfter" in response.json()["detail"]
+
+
+def test_search_endpoint_returns_422_for_invalid_modified_before_format(tmp_path):
+    (tmp_path / "dosya.txt").write_text("test")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id, "modifiedBefore": "invalid-date"},
+    )
+
+    assert response.status_code == 422
+    assert "modifiedBefore" in response.json()["detail"]
+
+
+def test_search_endpoint_combines_filters_with_and_logic(tmp_path):
+    (tmp_path / "fatura_2026.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "fatura_2026.txt").write_text("txt")
+    (tmp_path / "rapor_2026.pdf").write_bytes(b"%PDF-1.4 fake")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    # nameContains="fatura" AND extension="pdf"
+    response = client.post(
+        "/api/search",
+        json={
+            "sessionId": session_id,
+            "nameContains": "fatura",
+            "extension": "pdf",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["results"]) == 1
+    assert body["results"][0]["filename"] == "fatura_2026.pdf"
+
+
+def test_search_endpoint_returns_correct_search_result_item_fields(tmp_path):
+    test_file = tmp_path / "test.txt"
+    test_file.write_text("merhaba dünya")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["results"]) == 1
+    result = body["results"][0]
+
+    # SearchResultItem alanlarını kontrol et
+    assert "filename" in result
+    assert result["filename"] == "test.txt"
+    assert "extension" in result
+    assert result["extension"] == ".txt"
+    assert "modifiedAt" in result
+    # ISO 8601 formatında olmalı
+    dt.datetime.fromisoformat(result["modifiedAt"])
+    assert "sizeBytes" in result
+    assert isinstance(result["sizeBytes"], int)
+    assert result["sizeBytes"] > 0
+    # Mutlak path İSTEMCİYE SIZDIRILMAMALI (Saga #283)
+    assert str(tmp_path) not in result["filename"]
+
+
+def test_search_endpoint_results_are_sorted_by_filename(tmp_path):
+    (tmp_path / "zebra.txt").write_text("z")
+    (tmp_path / "apple.txt").write_text("a")
+    (tmp_path / "banana.txt").write_text("b")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    filenames = [r["filename"] for r in body["results"]]
+    assert filenames == ["apple.txt", "banana.txt", "zebra.txt"]

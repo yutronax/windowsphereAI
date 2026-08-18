@@ -1,3 +1,4 @@
+import datetime as dt
 import logging
 import os
 import uuid
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session as DbSession, sessionmaker
 from backend.config import load_setup_config
 from backend.db import create_db_engine, create_session_factory
 from backend.db_models import Transaction
+from backend.file_search import search_files
 from backend.models import (
     AppliedFileOperation,
     ApplyPlanRequest,
@@ -20,6 +22,8 @@ from backend.models import (
     PlanSkeleton,
     RevertTransactionRequest,
     RevertTransactionResponse,
+    SearchRequest,
+    SearchResponse,
     SessionContext,
     SessionRequest,
     TransactionApplyResponse,
@@ -365,3 +369,59 @@ def apply_plan_endpoint(
         ],
         warnings=warnings,
     )
+
+
+def get_session_for_search(payload: SearchRequest) -> SessionContext:
+    """`get_session_or_404` ve `get_session_for_apply` ile aynı mantık ama
+    SearchRequest şeması olduğu için ayrı bir dependency — Saga #313."""
+    session = _sessions.get(payload.sessionId)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Oturum bulunamadı")
+    return session
+
+
+@app.post("/api/search")
+def search_endpoint(
+    payload: SearchRequest,
+    session: SessionContext = Depends(get_session_for_search),
+) -> SearchResponse:
+    """Saga #313: Dosya arama endpoint'i — salt-okunur, session.selectedFolder'da
+    ad/uzantı/tarih filtrelerine göre dosya arar. /api/plan akışından bağımsız."""
+    allowed_root = Path(session.selectedFolder)
+    if not allowed_root.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Seçili klasör artık mevcut değil",
+        )
+
+    # modifiedAfter/modifiedBefore ISO 8601 string'lerini datetime'a çevir
+    modified_after: dt.datetime | None = None
+    modified_before: dt.datetime | None = None
+
+    if payload.modifiedAfter is not None:
+        try:
+            modified_after = dt.datetime.fromisoformat(payload.modifiedAfter)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"modifiedAfter geçersiz ISO 8601 formatı: '{payload.modifiedAfter}'",
+            )
+
+    if payload.modifiedBefore is not None:
+        try:
+            modified_before = dt.datetime.fromisoformat(payload.modifiedBefore)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"modifiedBefore geçersiz ISO 8601 formatı: '{payload.modifiedBefore}'",
+            )
+
+    results = search_files(
+        allowed_root,
+        name_contains=payload.nameContains,
+        extension=payload.extension,
+        modified_after=modified_after,
+        modified_before=modified_before,
+    )
+
+    return SearchResponse(results=results)

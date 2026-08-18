@@ -406,6 +406,37 @@ class PdfFileMetadata(BaseModel):
         return value
 
 
+class SearchResultItem(BaseModel):
+    """Saga #313: Dosya arama sonucu — `filename`, `extension`, `modifiedAt`,
+    `sizeBytes` içerir. Mutlak path İÇERMEZ (Saga #283 ilkesiyle tutarlı)."""
+
+    filename: str
+    extension: str
+    modifiedAt: str
+    sizeBytes: int
+
+    @field_validator("filename")
+    @classmethod
+    def filename_has_no_path_separators(cls, value: str) -> str:
+        if "/" in value or "\\" in value:
+            raise ValueError("must not contain path separators")
+        return value
+
+    @field_validator("modifiedAt")
+    @classmethod
+    def modified_at_not_blank(cls, value: str) -> str:
+        if value.strip() == "":
+            raise ValueError("must not be empty or whitespace-only")
+        return value
+
+    @field_validator("sizeBytes")
+    @classmethod
+    def size_bytes_non_negative(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("must be non-negative")
+        return value
+
+
 class TransactionSummary(BaseModel):
     """Saga #294: `GET /api/transactions`'ın döndürdüğü, geçmiş bir
     işlemin ÖZETİ — tam `FileOperation` satırları (kaynak/hedef tam
@@ -490,3 +521,26 @@ class PlanRequest(BaseModel):
         if value.strip() == "":
             raise ValueError("must not be empty or whitespace-only")
         return value
+
+
+class SearchRequest(BaseModel):
+    """Saga #313: Dosya arama endpoint'i için istek şeması."""
+
+    sessionId: str
+    nameContains: str | None = None
+    extension: str | None = None
+    modifiedAfter: str | None = None
+    modifiedBefore: str | None = None
+
+    @field_validator("sessionId")
+    @classmethod
+    def session_id_not_blank(cls, value: str) -> str:
+        if value.strip() == "":
+            raise ValueError("must not be empty or whitespace-only")
+        return value
+
+
+class SearchResponse(BaseModel):
+    """Saga #313: Dosya arama endpoint'i yanıtı."""
+
+    results: list[SearchResultItem]

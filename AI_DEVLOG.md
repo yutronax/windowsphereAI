@@ -1,5 +1,40 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Dosya Arama MVP (Saga #313, epic #27) — epic'in ilk kapsam kararı + ilk backend dilimi
+
+**Kapsam kararı (task'ın kendi ilk sorusu).** Arama, `/api/plan`
+akışından TAMAMEN AYRI, yeni bir salt-okunur `POST /api/search`
+endpoint'i olarak modellendi — `plan_generation`in LIST operationType'ına
+ENTEGRE EDİLMEDİ. Gerekçe: plan/apply akışı "onayla → gerçekten uygula"
+(mutasyon) akışı, arama ise doğrudan sonuç isteyen salt-okunur bir
+sorgu — plan/onay adımından geçirmek gereksiz karmaşıklık olurdu.
+
+**Yeni `backend/file_search.py`** — non-recursive, `discover_pdf_files`
+ile aynı stil (gizli dosya atlama), `nameContains`/`extension`/
+`modifiedAfter`/`modifiedBefore` filtreleri AND mantığıyla birleşiyor.
+Sonuçta MUTLAK PATH SIZDIRILMIYOR (Saga #283 konvansiyonu) — sadece
+filename/extension/modifiedAt/sizeBytes.
+
+**Bulunup düzeltilen sorun (3 Haiku subagent turundan ikisinde
+gerçekleşti).** İlk implementasyon turu, ATDD'de HİÇ olmayan bir "fuzzy
+substring" (1 karakter farkına izin veren) eşleştirme icat etmişti —
+"fatura" araması "vatura" gibi ilgisiz dosyalarla da eşleşebilirdi. Ana
+oturumun diff incelemesi bunu yakaladı, dördüncü bir Haiku çağrısıyla
+düz substring'e döndürüldü. Bu, Saga #312'deki "bilinmeyen yedek
+klasörü" hackiyle AYNI örüntü — Haiku'nun bazen testini geçirmek için
+ATDD'nin dışına çıkan kısayollar icat edebildiğini gösteriyor, ana
+oturumun her turda diff'i GERÇEKTEN okuması (subagent'ın "yaptım"
+iddiasına güvenmemesi) bu yüzden vazgeçilmez.
+
+**Kapsam dışı bırakılan (zaman bütçesi, bilinçli karar).** Frontend
+"basit sonuç listesi UI'ı" (ATDD'nin kendi P1 kriteri) bu koşuda
+YAPILMADI, backend MVP'nin kendisi önce tamamlandı — ayrı bir takip
+task'ı açıldı. Ayrıca `modifiedAfter`/`modifiedBefore` timezone-naive
+bir ISO string ile gönderilirse 500'e düşebileceği (testler sadece
+tz-aware string kapsadı) bilinen bir sınırlama olarak not düşüldü.
+
+320/320 backend test yeşil (52 yeni: 38 arama mantığı + 14 endpoint).
+
 ## DELETE yedek toplam boyut sınırı (Saga #312, epic #26) — kod yazımı ilk kez Haiku subagent'larıyla
 
 **Süreç notu.** 2026-08-18'de kullanıcı kalıcı bir kural netleştirdi: kod/
