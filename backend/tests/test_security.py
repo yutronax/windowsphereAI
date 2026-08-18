@@ -268,3 +268,93 @@ def test_validate_rename_destinations_allows_a_case_only_self_rename(tmp_path):
     pdf_files = [PdfFileMetadata(filename="kaynak.pdf", createdAt="2026-08-01")]
 
     validate_plan_paths(_rename_plan("KAYNAK.pdf"), pdf_files, tmp_path)
+
+
+# Saga #304: MERGE operasyonu hedefi (mergedFileName) icin whitelist/derinlik/
+# sistem-koruma + validate_rename_destinations'a benzer cakisma/zincir kontrolleri.
+
+
+def _merge_plan(merged_file_name: str, file_names: list[str] | None = None) -> PlanSkeleton:
+    step = PlanStep(
+        order=0,
+        operationType=OperationType.MERGE,
+        targetFolder="2026-08",
+        affectedFileCount=len(file_names or ["a.pdf", "b.pdf"]),
+        fileNames=file_names or ["a.pdf", "b.pdf"],
+        mergedFileName=merged_file_name,
+    )
+    return PlanSkeleton(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+
+
+def test_validate_plan_paths_rejects_when_merged_file_name_escapes_root(tmp_path):
+    step = PlanStep.model_construct(
+        order=0,
+        operationType=OperationType.MERGE,
+        targetFolder="2026-08",
+        affectedFileCount=2,
+        fileNames=["a.pdf", "b.pdf"],
+        mergedFileName=r"..\..\evil.pdf",
+    )
+    plan = PlanSkeleton.model_construct(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(plan, pdf_files, tmp_path)
+
+
+def test_validate_plan_paths_rejects_merge_target_colliding_with_an_existing_unknown_file(tmp_path):
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "b.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "onemli_dosya.pdf").write_bytes(b"%PDF-1.4 onemli veri")
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(_merge_plan("onemli_dosya.pdf"), pdf_files, tmp_path)
+
+
+def test_validate_plan_paths_allows_merge_target_that_does_not_exist_yet(tmp_path):
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "b.pdf").write_bytes(b"%PDF-1.4 fake")
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+
+    validate_plan_paths(_merge_plan("birlesik.pdf"), pdf_files, tmp_path)
+
+
+def test_validate_plan_paths_rejects_chain_collision_between_merge_and_rename_targets(tmp_path):
+    # Plan genelinde MERGE ve RENAME step'leri AYNI hedefe (normalize
+    # edilmis) cikamaz - validate_rename_destinations'daki zincirleme
+    # cakisma kontrolunun ayni ilkesi MERGE icin de gecerli.
+    merge_step = PlanStep(
+        order=0,
+        operationType=OperationType.MERGE,
+        targetFolder="2026-08",
+        affectedFileCount=2,
+        fileNames=["a.pdf", "b.pdf"],
+        mergedFileName="c.pdf",
+    )
+    rename_step = PlanStep(
+        order=1,
+        operationType=OperationType.RENAME,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["d.pdf"],
+        newFileNames=["C.PDF"],
+    )
+    plan = PlanSkeleton(steps=[merge_step, rename_step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+        PdfFileMetadata(filename="d.pdf", createdAt="2026-08-03"),
+    ]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(plan, pdf_files, tmp_path)

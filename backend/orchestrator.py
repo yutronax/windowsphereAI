@@ -1,5 +1,7 @@
 import datetime as dt
+import os
 import shutil
+import tempfile
 from pathlib import Path
 
 from sqlalchemy import select
@@ -44,6 +46,7 @@ _SUPPORTED_OPERATION_TYPES = {
     OperationType.DELETE,
     OperationType.RENAME,
     OperationType.LIST,
+    OperationType.MERGE,
 }
 
 # DELETE'in fiziksel yedeklerinin saklandığı, `allowed_root` altında gizli
@@ -72,6 +75,41 @@ def _forward_delete(source_path: Path, destination_path: Path) -> None:
     destination_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(str(source_path), str(destination_path))
     source_path.unlink()
+
+
+def _forward_merge(source_paths: list[Path], destination_path: Path) -> None:
+    # Saga #304: N kaynak PDF'i sırayla append edip TEK bir yeni PDF'e yazar
+    # — pypdf'in basit "reader'ları sırayla append et, tek dosyaya yaz" akışı
+    # (bkz. ATDD S6). Kaynaklara HİÇ dokunulmaz.
+    #
+    # Red-team bulgusu (Saga #304): writer.write() destination_path'e
+    # DOĞRUDAN yazarsa, yazma yarıda kesilirse (disk dolu, izin hatası vb.)
+    # destination_path'te YARIM/BOZUK bir dosya kalır — çağıran kod
+    # (apply_plan) rollback-temizliğini SADECE _forward_merge başarıyla
+    # DÖNDÜKTEN SONRA işaretler, yani başarısız bir yazmadan sonra ortada
+    # kalan artık dosya için hiçbir temizlik yolu yoktur. Bunun yerine
+    # AYNI klasörde bir geçici dosyaya yazılır, SONRA `Path.replace` ile
+    # (aynı dosya sistemi içinde atomik) gerçek hedefe taşınır — yazma
+    # tamamlanmadan destination_path'e hiçbir şey dokunmaz. Yazma
+    # başarısız olursa geçici dosya temizlenir, destination_path hiç
+    # oluşturulmamış olur.
+    from pypdf import PdfWriter
+
+    fd, temp_path_str = tempfile.mkstemp(
+        suffix=".tmp", prefix=destination_path.name + ".", dir=str(destination_path.parent)
+    )
+    temp_path = Path(temp_path_str)
+    os.close(fd)
+    try:
+        writer = PdfWriter()
+        for source_path in source_paths:
+            writer.append(str(source_path))
+        writer.write(str(temp_path))
+        writer.close()
+        temp_path.replace(destination_path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
 
 
 _FORWARD_OPERATIONS = {
@@ -106,6 +144,9 @@ _ROLLBACK_OPERATIONS = {
     # RENAME rollback'i de MOVE ile aynı: hedefi (yeni isim) kaynağa
     # (eski isim, backup_path) geri taşı.
     OperationType.RENAME: _rollback_move,
+    # Saga #304: MERGE rollback'i COPY ile AYNI — kaynaklar hiç değişmedi,
+    # rollback SADECE hedefteki yeni birleşik dosyayı siler (ATDD S2).
+    OperationType.MERGE: _rollback_copy,
 }
 
 
@@ -286,11 +327,35 @@ def apply_plan(
             # gösterimi) oluyor — bkz. ATDD.
             if step.operationType == OperationType.LIST:
                 continue
+            # Saga #304: MERGE de LIST'e benzer bir ÖZEL DURUM ama LIST'in
+            # aksine GERÇEKTEN bir dosya sistemi işlemi yapar — mevcut
+            # per-dosya forward/rollback dispatch sözleşmesi ("1 kaynak → 1
+            # hedef") MERGE'in "N kaynak → 1 hedef" doğasına ZORLA
+            # sığdırılamaz (bkz. ATDD S1). Tek bir FileOperation kaydı
+            # (N tane değil) oluşturulur.
+            if step.operationType == OperationType.MERGE:
+                source_paths = [allowed_root / f.filename for f in files]
+                destination_path = allowed_root / step.mergedFileName
+                operation = record_file_operation(
+                    session,
+                    transaction,
+                    operation_type=step.operationType.value,
+                    source_path=";".join(str(p) for p in source_paths),
+                    destination_path=str(destination_path),
+                    backup_path=str(destination_path),
+                )
+                _forward_merge(source_paths, destination_path)
+                operation.status = "completed"
+                session.commit()
+                applied.append(operation)
+                continue
             # Saga #289/#290: DELETE ve RENAME'in gerçek bir hedef klasörü
             # yok — targetFolder (YYYY-MM) şema gereği hâlâ zorunlu ama
             # ikisinde de kullanılmıyor (bkz. ATDD "bilinen sınırlama").
+            # Saga #304: MERGE de aynı şekilde — allowed_root'un KÖK
+            # seviyesine yazar, dated bir alt klasör kavramı yok.
             # Sadece MOVE/COPY için gerçek hedef klasör oluşturulur.
-            if step.operationType not in (OperationType.DELETE, OperationType.RENAME):
+            if step.operationType not in (OperationType.DELETE, OperationType.RENAME, OperationType.MERGE):
                 target_dir = allowed_root / step.targetFolder
                 target_dir.mkdir(parents=True, exist_ok=True)
             # RENAME: fileNames[i] -> newFileNames[i] eşleşmesi (Saga #290).

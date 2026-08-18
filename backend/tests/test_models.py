@@ -109,3 +109,77 @@ def test_new_file_names_rejects_overlap_with_source_file_names():
             affectedFileCount=2,
             newFileNames=["b.pdf", "c.pdf"],
         )
+
+
+# Saga #304: MERGE operasyonu - mergedFileName alanının SADECE MERGE icin
+# zorunlu olmasi, path separator yasagi, fileNames >= 2 kisiti.
+
+
+def test_merged_file_name_required_when_operation_type_is_merge():
+    with pytest.raises(ValidationError):
+        _step(
+            operationType=OperationType.MERGE,
+            fileNames=["a.pdf", "b.pdf"],
+            affectedFileCount=2,
+        )
+
+
+def test_merged_file_name_rejected_when_operation_type_is_not_merge():
+    with pytest.raises(ValidationError):
+        _step(mergedFileName="birlesik.pdf")
+
+
+def test_merged_file_name_accepted_for_valid_merge_step():
+    step = _step(
+        operationType=OperationType.MERGE,
+        fileNames=["a.pdf", "b.pdf"],
+        affectedFileCount=2,
+        mergedFileName="birlesik.pdf",
+    )
+
+    assert step.mergedFileName == "birlesik.pdf"
+
+
+def test_merged_file_name_rejects_path_separators():
+    with pytest.raises(ValidationError):
+        _step(
+            operationType=OperationType.MERGE,
+            fileNames=["a.pdf", "b.pdf"],
+            affectedFileCount=2,
+            mergedFileName="../evil.pdf",
+        )
+
+
+def test_merge_rejects_fewer_than_two_file_names():
+    with pytest.raises(ValidationError):
+        _step(
+            operationType=OperationType.MERGE,
+            fileNames=["a.pdf"],
+            affectedFileCount=1,
+            mergedFileName="birlesik.pdf",
+        )
+
+
+def test_merged_file_name_rejects_overlap_with_source_file_names():
+    # Red-team bulgusu (Saga #304): mergedFileName, AYNI step'teki
+    # fileNames girdilerinden biriyle ayniysa, _forward_merge kaynak
+    # dosyayi hem okur hem AYNI path'e yazar - kaynak icerigi bozulabilir.
+    with pytest.raises(ValidationError):
+        _step(
+            operationType=OperationType.MERGE,
+            fileNames=["a.pdf", "b.pdf"],
+            affectedFileCount=2,
+            mergedFileName="a.pdf",
+        )
+
+
+def test_merged_file_name_rejects_case_variant_overlap_with_source_file_names():
+    # Case-insensitive Windows dosya sistemi - A.PDF de a.pdf ile ayni
+    # gercek dosyayi temsil eder.
+    with pytest.raises(ValidationError):
+        _step(
+            operationType=OperationType.MERGE,
+            fileNames=["a.pdf", "b.pdf"],
+            affectedFileCount=2,
+            mergedFileName="A.PDF",
+        )

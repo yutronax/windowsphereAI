@@ -1,5 +1,49 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## pdf-birlestirme-merge-operasyonu (Saga #304, epic #29)
+
+**Yeni bir "format agent" katmanı İCAT EDİLMEDİ — MERGE mevcut
+Orchestrator dispatch desenine, LIST'e benzer bir özel durum olarak
+entegre edildi.** Asıl mimari zorluk: mevcut per-dosya forward/rollback
+sözleşmesi (`_FORWARD_OPERATIONS[op](source_path, destination_path)`)
+KESİNLİKLE "1 kaynak → 1 hedef" varsayıyordu — MERGE ise "N kaynak → 1
+hedef" (N PDF okunur, TEK yeni bir dosya yazılır). `apply_plan`'ın ana
+döngüsüne LIST'e benzer (ama gerçekten iş yapan) bir özel dal eklendi:
+adım başına TEK bir `FileOperation` kaydı (N tane değil).
+
+**Kaynaklara dokunulmaz — MERGE, COPY'nin rollback semantiğini
+paylaşıyor.** En az sürpriz ilkesi: "birleştir" isteği orijinal
+dosyaları SİLMEZ/TAŞIMAZ, sadece yeni bir birleşik dosya oluşturur.
+Rollback bu yüzden `_rollback_copy`yi (sadece hedefteki yeni dosyayı
+sil) doğrudan yeniden kullanıyor — kod tekrarı yok.
+
+**RENAME'in güvenlik disiplini (Saga #290) MERGE'e birebir genişletildi:**
+`mergedFileName` hem whitelist/derinlik/sistem-koruması hem de
+çakışma/zincir kontrollerinden (`validate_merge_destinations`,
+`validate_rename_destinations`in kardeşi) geçiyor.
+
+**`PLAN_SYSTEM_PROMPT`a "birleştir" → "Birleştir" eşlemesi eklendi**
+(Saga #292'nin çözdüğü AYNI boşluk sınıfı) — bu olmadan LLM gerçek bir
+kullanıcı isteğinden MERGE'i asla seçemezdi.
+
+Codex/Copilot kotası dolu olduğu için (2026-09-15'e kadar, proje
+hafızası) test+implementasyon genel bir kodlama subagent'ına
+delegasyon disipliniyle (2026-08-18 saga-oto kalıcı kuralı) yazdırıldı
+— red→green sırası subagent tarafından gözlemlendi (14 test önce
+kırmızı, sonra yeşil), ana akış sonucu BAĞIMSIZ olarak kendi
+`pytest` çalıştırmasıyla ayrıca doğruladı.
+
+**Red-team GERÇEK bir HIGH bulgu buldu, HEMEN düzeltildi:**
+`mergedFileName`, AYNI step'teki bir kaynak dosyayla çakışabiliyordu —
+RENAME'in zaten var olan self-overlap koruması MERGE'e HİÇ taşınmamıştı.
+Bu, `_forward_merge`in bir kaynak dosyayı hem okuyup hem AYNI path'e
+yazmasına, kaynağı BOZMASINA yol açabilirdi ("kaynaklara dokunulmaz"
+garantisinin ihlali). Düzeltme: `models.py`ye RENAME'inkiyle AYNI
+desende bir çakışma reddi eklendi. İlişkili bir bulgu da (yarıda
+kesilen yazmanın hedefte yarım dosya bırakması) aynı turda düzeltildi:
+`_forward_merge` artık geçici-dosya-yaz + atomik-taşı deseni kullanıyor.
+4 yeni regresyon testi. Toplam 18 yeni test, 177/177 yeşil.
+
 ## requirements-txt-pdf-kutuphane-secimi (Saga #303, epic #29)
 
 **Proje ilk kez bir `requirements.txt`'e kavuştu** — backend şimdiye

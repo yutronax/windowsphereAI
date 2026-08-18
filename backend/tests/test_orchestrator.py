@@ -53,6 +53,20 @@ def _write_pdf(root, filename: str) -> None:
     (root / filename).write_bytes(b"%PDF-1.4 fake")
 
 
+def _write_real_pdf(root, filename: str, page_count: int) -> None:
+    # Saga #304: MERGE testleri gercek pypdf ile olusturulmus gercek PDF'ler
+    # gerektiriyor (sayfa sayisi dogrulamasi icin) - _write_pdf'in sahte
+    # bayt icerigi pypdf.PdfReader ile acilamaz.
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    for _ in range(page_count):
+        writer.add_blank_page(width=200, height=200)
+    with open(root / filename, "wb") as f:
+        writer.write(f)
+    writer.close()
+
+
 def test_apply_plan_moves_files_into_target_folder_and_records_completed_operations(session, tmp_path):
     _write_pdf(tmp_path, "a.pdf")
     _write_pdf(tmp_path, "b.pdf")
@@ -537,6 +551,127 @@ def test_apply_plan_rejects_cross_step_chained_renames_without_losing_data(sessi
     assert (tmp_path / "a.pdf").read_bytes() == b"A-icerik"
     assert (tmp_path / "b.pdf").read_bytes() == b"B-ORIJINAL-ONEMLI-VERI"
     assert not (tmp_path / "c.pdf").exists()
+
+
+# Saga #304: MERGE operasyonu - N kaynak PDF -> 1 yeni birlesik PDF,
+# kaynaklara dokunulmaz, rollback COPY semantigiyle (sadece hedefi sil).
+
+
+def _merge_step(order: int, file_names: list[str], merged_file_name: str) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.MERGE,
+        targetFolder="2026-08",
+        affectedFileCount=len(file_names),
+        fileNames=file_names,
+        mergedFileName=merged_file_name,
+    )
+
+
+def test_apply_plan_merges_real_pdfs_into_one_file_with_the_correct_total_page_count(session, tmp_path):
+    from pypdf import PdfReader
+
+    _write_real_pdf(tmp_path, "a.pdf", 2)
+    _write_real_pdf(tmp_path, "b.pdf", 3)
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+    plan = _plan([_merge_step(0, ["a.pdf", "b.pdf"], "birlesik.pdf")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    merged_path = tmp_path / "birlesik.pdf"
+    assert merged_path.exists()
+    reader = PdfReader(str(merged_path))
+    assert len(reader.pages) == 5
+    assert transaction.status == "committed"
+    assert len(transaction.operations) == 1
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_leaves_merge_sources_untouched(session, tmp_path):
+    _write_real_pdf(tmp_path, "a.pdf", 1)
+    _write_real_pdf(tmp_path, "b.pdf", 1)
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+    plan = _plan([_merge_step(0, ["a.pdf", "b.pdf"], "birlesik.pdf")])
+
+    apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert (tmp_path / "a.pdf").exists()
+    assert (tmp_path / "b.pdf").exists()
+
+
+def test_apply_plan_rolls_back_a_merge_by_deleting_the_merged_file_without_touching_sources(session, tmp_path):
+    _write_real_pdf(tmp_path, "a.pdf", 1)
+    _write_real_pdf(tmp_path, "b.pdf", 1)
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+        PdfFileMetadata(filename="c.pdf", createdAt="2026-08-03"),
+    ]
+    plan = _plan(
+        [
+            _merge_step(0, ["a.pdf", "b.pdf"], "birlesik.pdf"),
+            _step(1, "2026-08", ["c.pdf"]),  # c.pdf pdf_files'ta ama diskte yok - bu step basarisiz olur
+        ]
+    )
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "birlesik.pdf").exists()
+    assert (tmp_path / "a.pdf").exists()
+    assert (tmp_path / "b.pdf").exists()
+
+
+def test_apply_plan_merge_leaves_no_temp_files_behind_on_success(session, tmp_path):
+    # Red-team bulgusu (Saga #304): _forward_merge artik gecici dosyaya
+    # yazip ATOMIK rename ile hedefe tasiyor - basarili bir merge sonrasi
+    # klasorde SADECE birlesik.pdf, a.pdf, b.pdf kalmali, hicbir ".tmp"
+    # artik dosya birakilmamali.
+    _write_real_pdf(tmp_path, "a.pdf", 1)
+    _write_real_pdf(tmp_path, "b.pdf", 1)
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+    plan = _plan([_merge_step(0, ["a.pdf", "b.pdf"], "birlesik.pdf")])
+
+    apply_plan(session, plan, pdf_files, tmp_path)
+
+    remaining = {p.name for p in tmp_path.iterdir()}
+    assert remaining == {"a.pdf", "b.pdf", "birlesik.pdf"}
+
+
+def test_forward_merge_leaves_no_partial_file_at_destination_when_write_fails(tmp_path, monkeypatch):
+    # _forward_merge'i dogrudan cagirip PdfWriter.write'in yazma sirasinda
+    # basarisiz oldugunu simule ediyoruz (disk dolu / izin hatasi benzeri).
+    # Gecici-dosya + atomik-rename deseni sayesinde gercek destination_path'te
+    # HICBIR yarim/bozuk dosya kalmamali.
+    from pypdf import PdfWriter
+
+    from backend.orchestrator import _forward_merge
+
+    _write_real_pdf(tmp_path, "a.pdf", 1)
+    _write_real_pdf(tmp_path, "b.pdf", 1)
+    destination = tmp_path / "birlesik.pdf"
+
+    def _boom(self, path):
+        raise OSError("simulated disk full")
+
+    monkeypatch.setattr(PdfWriter, "write", _boom)
+
+    with pytest.raises(OSError):
+        _forward_merge([tmp_path / "a.pdf", tmp_path / "b.pdf"], destination)
+
+    assert not destination.exists()
+    # Hicbir ".tmp" artik dosyasi da kalmamis olmali.
+    leftovers = [p for p in tmp_path.iterdir() if p.name not in {"a.pdf", "b.pdf"}]
+    assert leftovers == []
 
 
 def test_recover_incomplete_transactions_marks_physically_moved_files_as_completed(session, tmp_path):

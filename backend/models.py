@@ -39,6 +39,7 @@ class OperationType(str, Enum):
     DELETE = "Sil"
     RENAME = "Yeniden Adlandır"
     LIST = "Listele"
+    MERGE = "Birleştir"
 
 
 class PlanStep(BaseModel):
@@ -58,6 +59,17 @@ class PlanStep(BaseModel):
     # alanın MOVE/COPY/DELETE'te anlamı yok — şema netliği için
     # kısıtlandı).
     newFileNames: list[str] | None = None
+    # Saga #304: MERGE için N kaynak PDF'in birleştirileceği yeni dosya adı —
+    # newFileNames ile AYNI desende (SADECE operationType==MERGE olduğunda
+    # dolu olmalı, diğer operationType'larda None kalmalı).
+    mergedFileName: str | None = None
+
+    @field_validator("mergedFileName")
+    @classmethod
+    def merged_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
+        if value is not None and ("/" in value or "\\" in value):
+            raise ValueError("mergedFileName must not contain path separators")
+        return value
 
     @field_validator("order", "affectedFileCount")
     @classmethod
@@ -151,6 +163,40 @@ class PlanStep(BaseModel):
                         )
         elif self.newFileNames is not None:
             raise ValueError("newFileNames must be omitted unless operationType is RENAME")
+        return self
+
+    @model_validator(mode="after")
+    def merged_file_name_only_for_merge(self) -> "PlanStep":
+        # Saga #304: RENAME'in newFileNames'iyle AYNI desen — mergedFileName
+        # SADECE MERGE için zorunlu, diğer operationType'larda tamamen
+        # yasak (şema netliği için). Ayrıca en az 2 dosya birleştirilmeden
+        # (fileNames uzunluğu < 2) MERGE anlamsız — burada şema seviyesinde
+        # reddedilir.
+        if self.operationType == OperationType.MERGE:
+            if self.mergedFileName is None:
+                raise ValueError("mergedFileName is required when operationType is MERGE")
+            if self.mergedFileName.strip() == "":
+                raise ValueError("mergedFileName must not be empty or whitespace-only")
+            if len(self.fileNames) < 2:
+                raise ValueError("fileNames must contain at least 2 entries when operationType is MERGE")
+            # Red-team bulgusu (Saga #304): mergedFileName, AYNI step'teki
+            # fileNames (kaynak) girdilerinden BİRİYLE çakışırsa,
+            # orchestrator._forward_merge kaynak dosyayı hem okumak
+            # (PdfWriter.append) hem de AYNI path'e yazmak (hedef) zorunda
+            # kalır — bu kaynak dosyanın içeriğini bozabilir/kesebilir,
+            # "kaynak dosyalara asla dokunulmaz" garantisini ihlal eder.
+            # RENAME'in newFileNames/fileNames çakışma kontrolüyle AYNI
+            # desen (os.path.normcase, case-insensitive).
+            normalized_merged = os.path.normcase(self.mergedFileName)
+            normalized_sources = [os.path.normcase(name) for name in self.fileNames]
+            if normalized_merged in normalized_sources:
+                raise ValueError(
+                    f"mergedFileName ('{self.mergedFileName}') collides with one of this "
+                    "step's fileNames (case-insensitive) — merge output must not overwrite "
+                    "a source file"
+                )
+        elif self.mergedFileName is not None:
+            raise ValueError("mergedFileName must be omitted unless operationType is MERGE")
         return self
 
 

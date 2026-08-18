@@ -18,17 +18,22 @@ PLAN_SYSTEM_PROMPT = (
     '- "kopyala", "yedekle", "çoğalt" → "Kopyala"\n'
     '- "sil", "temizle", "kaldır" → "Sil"\n'
     '- "yeniden adlandır", "ismini değiştir" → "Yeniden Adlandır"\n'
-    '- "listele", "göster", "say" → "Listele"\n\n'
+    '- "listele", "göster", "say" → "Listele"\n'
+    '- "birleştir", "tek dosya yap" → "Birleştir"\n\n'
     "Sadece şu JSON şemasında yanıt ver: "
     '{"dateSource": "created_at", "sortOrder": "ascending"|"descending", '
     '"steps": [{"order": <negatif olmayan tamsayı>, "operationType": '
-    '"Taşı"|"Kopyala"|"Sil"|"Yeniden Adlandır"|"Listele", "targetFolder": '
+    '"Taşı"|"Kopyala"|"Sil"|"Yeniden Adlandır"|"Listele"|"Birleştir", "targetFolder": '
     '<"YYYY-MM" formatında string>, "affectedFileCount": <negatif olmayan '
     'tamsayı>, "fileNames": [<bu step\'e ait TAM dosya adlarının listesi>], '
     '"newFileNames": [<SADECE operationType "Yeniden Adlandır" ise, '
     "fileNames ile AYNI sırada ve uzunlukta yeni dosya adları listesi; "
     "başka HERHANGİ bir operationType'ta bu alanı TAMAMEN ATLA, JSON'a "
-    'hiç koyma>]}]}. dateSource ve sortOrder alanları AÇIKÇA belirtilmeli, '
+    'hiç koyma>], "mergedFileName": <SADECE operationType "Birleştir" ise, '
+    "bu step'teki fileNames'in birleştirileceği TEK yeni dosya adı (path "
+    "ayracı OLMAYAN bir bare dosya adı, ör. \"birlesik.pdf\"); başka "
+    "HERHANGİ bir operationType'ta bu alanı TAMAMEN ATLA, JSON'a hiç "
+    'koyma>}]}. dateSource ve sortOrder alanları AÇIKÇA belirtilmeli, '
     "her targetFolder kesinlikle YYYY-MM formatında olmalı — 'Sil'/'Yeniden "
     "Adlandır'/'Listele' için targetFolder GERÇEKTEN KULLANILMAZ ama şema "
     "gereği yine de geçerli bir YYYY-MM string'i olmalı (ör. o step'teki "

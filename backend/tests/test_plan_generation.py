@@ -232,3 +232,21 @@ def test_empty_pdf_list_still_produces_a_plan_skeleton_with_date_source_and_sort
 
     assert result.dateSource == DateSource.CREATED_AT
     assert result.sortOrder == SortOrder.ASCENDING
+
+
+# Saga #304: PLAN_SYSTEM_PROMPT'a MERGE eslemesi + mergedFileName sema
+# aciklamasi eklendigini dogrular.
+
+
+def test_system_prompt_maps_birlestir_request_to_merge_operation_type():
+    from backend.plan_generation import PLAN_SYSTEM_PROMPT
+
+    assert "birleştir" in PLAN_SYSTEM_PROMPT
+    assert "tek dosya yap" in PLAN_SYSTEM_PROMPT
+    assert "Birleştir" in PLAN_SYSTEM_PROMPT
+
+
+def test_system_prompt_documents_merged_file_name_schema():
+    from backend.plan_generation import PLAN_SYSTEM_PROMPT
+
+    assert "mergedFileName" in PLAN_SYSTEM_PROMPT
