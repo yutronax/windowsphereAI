@@ -1,5 +1,32 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## requirements-txt-pdf-kutuphane-secimi (Saga #303, epic #29)
+
+**Proje ilk kez bir `requirements.txt`'e kavuştu** — backend şimdiye
+kadar sadece elle kurulmuş paketlerle çalışıyordu, hiçbir yerde
+sabitlenmiş değildi.
+
+**PDF merge/split için `pypdf` seçildi, `PyMuPDF` DEĞİL.** Ortamda her
+ikisi de kuruluydu ama `PyMuPDF`in AGPL-3.0 lisansı, projenin planlanan
+ticari satış modeliyle (proje hafızası: "Ürünleştirme Planı") gerçek
+bir hukuki risk taşıyordu — AGPL, kaynağı kapalı ticari dağıtım için
+uygun değil. `pypdf` saf Python + izin verici lisanslı, hız farkı bu
+ölçekte gözlemlenebilir bir sorun değil. `PyMuPDF`/`pypdfium2`
+(ortamda kurulu ama kullanılmayacak) bilinçli olarak `requirements.txt`e
+EKLENMEDİ.
+
+Bağımsız bir subagent'a delegasyon disiplini (2026-08-18 saga-oto
+kuralı) burada da uygulandı — dosya yazımı ve kurulum doğrulaması bir
+subagent tarafından yapıldı, ana akış sonucu KENDİ bağımsız
+`pip install -r requirements.txt` çalıştırmasıyla ayrıca doğruladı.
+
+**Red-team önerisiyle runtime/test bağımlılıkları ayrıldı:**
+`requirements.txt` artık sadece runtime paketlerini (fastapi, uvicorn,
+sqlalchemy, openai, pydantic, pypdf) içeriyor; yeni `requirements-dev.txt`
+(`-r requirements.txt` ile) `pytest`/`pytest-mock`u ekliyor — proje
+ticari kapalı-kod dağıtımı planladığı için gelecekteki bir paketleme
+adımının test bağımlılıklarına hiç ihtiyacı olmamalı.
+
 ## delete-backup-retention-politikasi (Saga #300, epic #28)
 
 **Kod keşfinde task'ın kendi açıklamasından daha kritik bir bulgu
