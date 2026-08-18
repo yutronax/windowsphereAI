@@ -1,5 +1,24 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Bulk-onay eşiği (Saga #311, epic #26) — süreç değişikliği: yalın mimariyle ilk task
+
+**Süreç notu (asıl önemli kısım).** 2026-08-18'de kullanıcıyla birlikte
+`saga-oto`'nun mimarisi yeniden şekillendirildi — önceki "her task için
+ayrı, kendi içinde yine subagent'lar çağıran otonom bir pipeline agent'ı"
+deseni kaldırıldı (bkz. Saga #309/#319/#320/#324'te 100-170K token/task).
+Bu task, yeni yalın akışla (ana oturum kendisi keşfeder+ATDD/plan yazar+
+küçük görevlerde doğrudan kodu/testi yazar+doğrular+commit eder, sadece
+gerçekten büyük/riskli görevlerde ayrı subagent/red-team) yapılan İLK
+task — hiçbir Agent-tool subagent'ı ÇAĞRILMADI, tüm iş bu oturumun
+kendi bağlamında yapıldı.
+
+**Özellik:** `PlanCard`'da toplam `affectedFileCount` 20'yi aşan planlar
+artık tek tıkla değil, `ResultCard`'ın revert onayındaki AYNI iki-aşamalı
+desenle (confirm/cancel çift buton) onaylanıyor — "yanlış klasör, 1000
+dosya" riskine karşı ek bir görsel/etkileşimsel fren. Backend'e hiç
+dokunulmadı, `affectedFileCount` zaten mevcut şemada. 141/141 frontend
+test yeşil (3 yeni).
+
 ## Kilitli-dosya/antivirüs geçici I/O toleransı (Saga #310, epic #26) — ilk aider-bridge denemesi
 
 **Token maliyetini düşürmek için yeni bir araç denendi: Aider + Ollama

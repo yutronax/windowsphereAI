@@ -155,4 +155,52 @@ describe('PlanCard (plan-adimlari-kart / Saga #262)', () => {
     fireEvent.click(button);
     expect(onApprove).not.toHaveBeenCalled();
   });
+
+  it('approves in a single click when total affectedFileCount is at or below the bulk-confirm threshold (Saga #311, AC-1)', () => {
+    const onApprove = vi.fn();
+    const plan: Plan = {
+      steps: [{ order: 1, operationType: 'Taşı', targetFolder: 'X', affectedFileCount: 20 }],
+      securityStatus: 'approved',
+    };
+    render(<PlanCard plan={plan} onApprove={onApprove} />);
+
+    fireEvent.click(screen.getByTestId('plan-approve-button'));
+    expect(onApprove).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId('plan-bulk-confirm-button')).not.toBeInTheDocument();
+  });
+
+  it('requires a second explicit confirmation when total affectedFileCount exceeds the bulk-confirm threshold (Saga #311, AC-2)', () => {
+    const onApprove = vi.fn();
+    const plan: Plan = {
+      steps: [
+        { order: 1, operationType: 'Taşı', targetFolder: 'X', affectedFileCount: 15 },
+        { order: 2, operationType: 'Sil', targetFolder: 'Y', affectedFileCount: 6 },
+      ],
+      securityStatus: 'approved',
+    };
+    render(<PlanCard plan={plan} onApprove={onApprove} />);
+
+    fireEvent.click(screen.getByTestId('plan-approve-button'));
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(screen.getByTestId('plan-bulk-confirm-button')).toBeVisible();
+    expect(screen.getByTestId('plan-bulk-confirm-button')).toHaveTextContent('21');
+  });
+
+  it('calls onApprove only after the second bulk-confirm click, and cancel does not call onApprove (Saga #311, AC-3)', () => {
+    const onApprove = vi.fn();
+    const plan: Plan = {
+      steps: [{ order: 1, operationType: 'Taşı', targetFolder: 'X', affectedFileCount: 25 }],
+      securityStatus: 'approved',
+    };
+    render(<PlanCard plan={plan} onApprove={onApprove} />);
+
+    fireEvent.click(screen.getByTestId('plan-approve-button'));
+    fireEvent.click(screen.getByTestId('plan-bulk-confirm-cancel-button'));
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(screen.getByTestId('plan-approve-button')).toBeVisible();
+
+    fireEvent.click(screen.getByTestId('plan-approve-button'));
+    fireEvent.click(screen.getByTestId('plan-bulk-confirm-button'));
+    expect(onApprove).toHaveBeenCalledOnce();
+  });
 });

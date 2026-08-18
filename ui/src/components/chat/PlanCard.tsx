@@ -31,12 +31,18 @@ const DEFAULT_REJECTION_MESSAGE = 'Bu plan güvenlik kontrolünden geçemedi.';
 const PENDING_MESSAGE = 'Güvenlik kontrolü bekleniyor…';
 const STALE_MESSAGE = 'Bu plan artık geçerli değil, yeni plan bekleniyor.';
 const STATUS_TEXT_ID = 'plan-approve-status';
+// Saga #311: "yanlış klasör, 1000 dosya" riskine karşı — bu eşiği aşan
+// planlar tek tıkla değil, ikinci bir açık onay adımıyla onaylanabilir.
+const BULK_CONFIRM_THRESHOLD = 20;
 
 export default function PlanCard({ plan, onApprove, onChangePlan, stale = false, isGeneratingPlan = false }: Props) {
   const [hasApproved, setHasApproved] = useState(false);
+  const [isConfirmingBulk, setIsConfirmingBulk] = useState(false);
   const sortedSteps = [...plan.steps]
     .map((step, index) => ({ step, index }))
     .sort((a, b) => a.step.order - b.step.order || a.index - b.index);
+  const totalAffectedFileCount = plan.steps.reduce((sum, step) => sum + step.affectedFileCount, 0);
+  const isBulk = totalAffectedFileCount > BULK_CONFIRM_THRESHOLD;
 
   const isRejected = plan.securityStatus === 'rejected';
   const isApproved = plan.securityStatus === 'approved';
@@ -59,8 +65,16 @@ export default function PlanCard({ plan, onApprove, onChangePlan, stale = false,
 
   function handleApprove() {
     if (!canApprove) return;
+    if (isBulk && !isConfirmingBulk) {
+      setIsConfirmingBulk(true);
+      return;
+    }
     setHasApproved(true);
     onApprove?.();
+  }
+
+  function handleCancelBulkConfirm() {
+    setIsConfirmingBulk(false);
   }
 
   return (
@@ -142,25 +156,55 @@ export default function PlanCard({ plan, onApprove, onChangePlan, stale = false,
           </li>
         ))}
       </ol>
-      <button
-        type="button"
-        className="plan-card-approve-btn"
-        data-testid="plan-approve-button"
-        disabled={!canApprove}
-        aria-describedby={statusText ? STATUS_TEXT_ID : undefined}
-        onClick={handleApprove}
-      >
-        Planı onayla
-      </button>
-      <button
-        type="button"
-        className="plan-card-change-btn"
-        data-testid="plan-change-button"
-        disabled={isGeneratingPlan}
-        onClick={() => onChangePlan?.()}
-      >
-        Planı değiştir
-      </button>
+      {isConfirmingBulk ? (
+        <>
+          <button
+            type="button"
+            className="plan-card-approve-btn"
+            data-testid="plan-bulk-confirm-button"
+            onClick={handleApprove}
+          >
+            Evet, onayla ({totalAffectedFileCount} dosya)
+          </button>
+          <button
+            type="button"
+            className="plan-card-change-btn"
+            data-testid="plan-bulk-confirm-cancel-button"
+            onClick={handleCancelBulkConfirm}
+          >
+            Vazgeç
+          </button>
+        </>
+      ) : (
+        <>
+          <button
+            type="button"
+            className="plan-card-approve-btn"
+            data-testid="plan-approve-button"
+            disabled={!canApprove}
+            aria-describedby={statusText ? STATUS_TEXT_ID : undefined}
+            onClick={handleApprove}
+          >
+            Planı onayla
+          </button>
+          <button
+            type="button"
+            className="plan-card-change-btn"
+            data-testid="plan-change-button"
+            disabled={isGeneratingPlan}
+            onClick={() => onChangePlan?.()}
+          >
+            Planı değiştir
+          </button>
+        </>
+      )}
+      {isBulk && isConfirmingBulk && (
+        <div aria-live="polite">
+          <p className="plan-card-status-text" data-testid="plan-bulk-confirm-warning">
+            Bu işlem {totalAffectedFileCount} dosyayı etkileyecek — devam etmeden önce hedef klasörleri kontrol edin.
+          </p>
+        </div>
+      )}
       {statusText && (
         <div aria-live="polite">
           <p
