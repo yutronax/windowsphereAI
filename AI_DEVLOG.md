@@ -1,5 +1,31 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## pdf-ocr-path-validation (Saga #307, epic #29)
+
+**Saga #306'nın bıraktığı gerçek bir güvenlik açığı kapatıldı:**
+`backend/pdf_ocr.py::ocr_pdf_file` hiçbir endpoint'e bağlı değildi ve
+ham bir `Path` alıyordu — MERGE/SPLIT/DELETE'in tersine `allowed_root`/
+`is_path_allowed` doğrulamasından hiç geçmiyordu. `OperationType.OCR`
+eklenip `apply_plan`'a MERGE/SPLIT ile AYNI desende (dosya sayısı tam
+1, `is_path_allowed` kontrolü ÖNCE, `ocr_pdf_file` çağrısı SONRA)
+kablolandı.
+
+**`pdf_ocr.py` bilinçli olarak DEĞİŞTİRİLMEDİ** — red-team'in Saga
+#293'teki emsale dayanan açık gerekliliği: güvenlik kontrol noktası
+`orchestrator.py`'de MERKEZİ kalmalı, `pdf_ocr.py`'de tekrarlanmamalı.
+
+**OCR, LIST gibi "inert" tasarlandı** — hiçbir `FileOperation` kaydı
+oluşturmaz, rollback listesine girmez (OCR sonucu bu task kapsamında
+hiçbir yere yazılmıyor/dönülmüyor — henüz hiçbir endpoint OCR'ı
+tetiklemiyor, bu ayrı bir gelecek task'ın kapsamı).
+
+Test+implementasyon iki ayrı genel kodlama subagent'ına red→green
+disipliniyle delegasyon edildi, ana akış sonucu bağımsız `pytest`
+çalıştırmasıyla doğruladı (196/196 yeşil). Bağımsız red-team incelemesi
+`ready_to_commit: yes` verdi, tek düşük-önem bulgu (negatif testin genel
+`Exception` yerine spesifik `PathWhitelistError` beklemesi gerektiği)
+hemen düzeltildi ve testler yeniden yeşile alındı.
+
 ## pdf-bolme-split-operasyonu (Saga #305, epic #29)
 
 **Sayfa aralığı DEĞİL, sayfa başına bölme seçildi — task'ın kendi

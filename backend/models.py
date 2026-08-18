@@ -43,6 +43,7 @@ class OperationType(str, Enum):
     # Saga #305: SPLIT MERGE'in tam tersi - 1 kaynak PDF -> N tek-sayfalik
     # cikti dosyasi.
     SPLIT = "Böl"
+    OCR = "OCR"
 
 
 class PlanStep(BaseModel):
@@ -210,6 +211,12 @@ class PlanStep(BaseModel):
         # uretecegi icin belirsizlik yaratir, bkz. ATDD S3).
         if self.operationType == OperationType.SPLIT and len(self.fileNames) != 1:
             raise ValueError("fileNames must contain exactly 1 entry when operationType is SPLIT")
+        return self
+
+    @model_validator(mode="after")
+    def file_names_length_exactly_one_for_ocr(self) -> "PlanStep":
+        if self.operationType == OperationType.OCR and len(self.fileNames) != 1:
+            raise ValueError("fileNames must contain exactly 1 entry when operationType is OCR")
         return self
 
 

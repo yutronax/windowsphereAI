@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from backend.db_models import FileOperation, Transaction
 from backend.file_operations import create_transaction, record_file_operation
 from backend.models import OperationType, PdfFileMetadata, PlanSkeleton, PlanStep
+from backend.pdf_ocr import ocr_pdf_file
 from backend.security import is_path_allowed, validate_plan_paths
 
 
@@ -48,6 +49,7 @@ _SUPPORTED_OPERATION_TYPES = {
     OperationType.LIST,
     OperationType.MERGE,
     OperationType.SPLIT,
+    OperationType.OCR,
 }
 
 # DELETE'in fiziksel yedeklerinin saklandığı, `allowed_root` altında gizli
@@ -414,6 +416,14 @@ def apply_plan(
                     operation.status = "completed"
                     session.commit()
                     applied.append(operation)
+                continue
+            if step.operationType == OperationType.OCR:
+                source_path = allowed_root / files[0].filename
+                if not is_path_allowed(source_path, allowed_root):
+                    raise PlanApplicationError(
+                        f"OCR kaynağı izin verilen kök dışında: '{source_path}'"
+                    )
+                ocr_pdf_file(source_path)
                 continue
             # Saga #289/#290: DELETE ve RENAME'in gerçek bir hedef klasörü
             # yok — targetFolder (YYYY-MM) şema gereği hâlâ zorunlu ama

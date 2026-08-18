@@ -17,6 +17,7 @@ from backend.orchestrator import (
     recover_incomplete_transactions,
     revert_transaction,
 )
+from backend.security import PathWhitelistError
 
 
 @pytest.fixture
@@ -766,6 +767,61 @@ def test_apply_plan_rolls_back_split_outputs_when_a_later_step_fails(session, tm
     assert not (tmp_path / "rapor_1.pdf").exists()
     assert not (tmp_path / "rapor_2.pdf").exists()
     assert (tmp_path / "rapor.pdf").exists()
+
+
+# OCR operasyonu (red step, Saga: apply_plan henuz OperationType.OCR'i
+# desteklemiyor, backend.orchestrator.ocr_pdf_file diye bir isim de
+# import edilmis degil). Bu testler simdilik KIRMIZI kalmali.
+
+
+def test_apply_plan_runs_ocr_on_a_pdf_inside_allowed_root_without_moving_it(session, tmp_path, monkeypatch):
+    _write_pdf(tmp_path, "a.pdf")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.OCR)])
+
+    calls: list[Path] = []
+
+    def fake_ocr_pdf_file(pdf_path: Path) -> list[str]:
+        calls.append(pdf_path)
+        return ["metin"]
+
+    monkeypatch.setattr("backend.orchestrator.ocr_pdf_file", fake_ocr_pdf_file)
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert calls == [tmp_path / "a.pdf"]
+    assert (tmp_path / "a.pdf").exists()
+    assert transaction.status == "committed"
+    assert len(transaction.operations) == 0
+
+
+def test_apply_plan_rejects_ocr_of_a_path_outside_allowed_root(session, tmp_path, monkeypatch):
+    # PdfFileMetadata.filename kendi validator'unda ayrac icermez, bu yuzden
+    # dogrudan bir path-traversal stringi ifade edilemez - ama tek segmentlik
+    # ".." (Saga #272'deki mevcut testlerin kullandigi teknikle AYNI) allowed_root
+    # disina cikar. apply_plan'in OCR adiminin da diger operationType'lar
+    # (MERGE/SPLIT/DELETE) gibi is_path_allowed/validate_plan_paths uzerinden
+    # kaynagi dogrulamasi gerektigini, mock OCR fonksiyonunun HIC
+    # cagrilmadigini dogrulayarak test ediyoruz.
+    pdf_files = [PdfFileMetadata(filename="..", createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", [".."], operation_type=OperationType.OCR)])
+
+    calls: list[Path] = []
+
+    def fake_ocr_pdf_file(pdf_path: Path) -> list[str]:
+        calls.append(pdf_path)
+        return ["metin"]
+
+    monkeypatch.setattr("backend.orchestrator.ocr_pdf_file", fake_ocr_pdf_file)
+
+    # Red-team notu (Saga #307): burada bilerek genel Exception yerine
+    # PathWhitelistError bekleniyor - guvenlik testinin, gercek path
+    # dogrulamasindan farkli bir hatayla (ör. bir yazim hatasindan gelen
+    # AttributeError/KeyError) yanlislikla "yesil" gecmesini engellemek icin.
+    with pytest.raises(PathWhitelistError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert calls == []
 
 
 def test_recover_incomplete_transactions_marks_physically_moved_files_as_completed(session, tmp_path):

@@ -215,3 +215,16 @@ def test_split_accepts_exactly_one_file_name():
     )
 
     assert step.fileNames == ["a.pdf"]
+
+
+# OCR operasyonu (red step): OperationType.OCR henuz models.py'de tanimli
+# degil, bu test o eklenene kadar KIRMIZI kalmali (OperationType.OCR erisimi
+# AttributeError firlatir, bu da testin toplanma/calisma asamasinda
+# basarisiz olmasina yol acar - beklenen red durumu).
+def test_plan_step_rejects_ocr_with_more_than_one_file_name():
+    with pytest.raises(ValidationError):
+        _step(
+            operationType=OperationType.OCR,
+            fileNames=["a.pdf", "b.pdf"],
+            affectedFileCount=2,
+        )

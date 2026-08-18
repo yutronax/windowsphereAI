@@ -1,0 +1,28 @@
+{
+  "task": "Saga #307 - PDF OCR orchestrator entegrasyonunda allowed_root/is_path_allowed path validation",
+  "reviewer": "obss-red-team subagent",
+  "ready_to_commit": true,
+  "findings": [
+    {
+      "finding": "test_apply_plan_rejects_ocr_of_a_path_outside_allowed_root asserted generic Exception instead of PathWhitelistError",
+      "severity": "low",
+      "status": "fixed",
+      "fix": "Narrowed pytest.raises(Exception) to pytest.raises(PathWhitelistError) in backend/tests/test_orchestrator.py, added backend.security.PathWhitelistError import."
+    },
+    {
+      "finding": "OCR path check in apply_plan (is_path_allowed) is redundant with validate_plan_paths already called at the top of apply_plan",
+      "severity": "low",
+      "status": "accepted_as_intentional",
+      "rationale": "Mirrors existing MERGE/DELETE/RENAME dual-check idiom already present in the same file (defense-in-depth), not a new gap. No action taken, consistent with project convention."
+    }
+  ],
+  "approved_points": [
+    "OperationType.OCR added in models.py matching SPLIT/MERGE style",
+    "PlanStep validator enforces exactly one fileNames entry for OCR",
+    "apply_plan validates is_path_allowed BEFORE calling ocr_pdf_file, raises PlanApplicationError otherwise",
+    "pdf_ocr.py untouched - zero diff lines, no duplicated validation",
+    "Negative test is a real orchestrator-level test (monkeypatches ocr_pdf_file, asserts never called), not a schema-only tautology",
+    "Full suite: 196 passed, no regressions"
+  ],
+  "follow_up_tasks_created": []
+}
