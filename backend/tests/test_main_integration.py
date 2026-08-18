@@ -440,7 +440,7 @@ def test_revert_endpoint_returns_404_for_an_unknown_transaction_id():
     db_session = _in_memory_db_session()
     app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
     try:
-        response = client.post("/api/transactions/999/revert", json={"allowedRoot": r"C:\Users\Yusuf\Documents"})
+        response = client.post("/api/transactions/999/revert", json={})
     finally:
         app.dependency_overrides.clear()
         db_session.close()
@@ -456,7 +456,7 @@ def test_revert_endpoint_returns_409_when_the_transaction_is_not_committed(tmp_p
 
     app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
     try:
-        response = client.post(f"/api/transactions/{transaction.id}/revert", json={"allowedRoot": str(tmp_path)})
+        response = client.post(f"/api/transactions/{transaction.id}/revert", json={})
     finally:
         app.dependency_overrides.clear()
         db_session.close()
@@ -473,7 +473,7 @@ def test_revert_endpoint_moves_the_file_back_and_returns_reverted_status(tmp_pat
 
     app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
     try:
-        response = client.post(f"/api/transactions/{transaction.id}/revert", json={"allowedRoot": str(tmp_path)})
+        response = client.post(f"/api/transactions/{transaction.id}/revert", json={})
     finally:
         app.dependency_overrides.clear()
         db_session.close()
@@ -483,6 +483,57 @@ def test_revert_endpoint_moves_the_file_back_and_returns_reverted_status(tmp_pat
     assert body == {"transactionId": transaction.id, "status": "reverted"}
     assert (tmp_path / "a.pdf").exists()
     assert not (tmp_path / "2026-08" / "a.pdf").exists()
+
+
+def test_revert_endpoint_ignores_a_spoofed_allowed_root_and_uses_the_transactions_own_stored_root(tmp_path):
+    # Saga #301: RevertTransactionRequest artik allowedRoot alani icermiyor.
+    # Istemci yine de eski/spoofed bir "allowedRoot" alani gonderirse (ornegin
+    # genis bir kok, "C:\\"), Pydantic'in varsayilan extra="ignore" davranisi
+    # (bu projede hicbir model extra="forbid" kullanmiyor) bu alani yok sayar
+    # ve gercek containment/revert islemi HER ZAMAN transaction'in KENDI
+    # apply_plan sirasinda kaydedilen allowed_root'unu kullanir.
+    db_session = _in_memory_db_session()
+    transaction = _apply_a_move_plan(db_session, tmp_path)
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post(
+            f"/api/transactions/{transaction.id}/revert",
+            json={"allowedRoot": "C:\\"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 200
+    assert response.json() == {"transactionId": transaction.id, "status": "reverted"}
+    assert (tmp_path / "a.pdf").exists()
+    assert not (tmp_path / "2026-08" / "a.pdf").exists()
+
+
+def test_revert_endpoint_returns_409_when_the_transactions_allowed_root_is_missing(tmp_path):
+    # Saga #301 red-team bulgusu: migration oncesi (allowed_root kolonu
+    # eklenmeden once olusturulmus) "committed" bir transaction icin
+    # allowed_root NULL olabilir. Bu, `TransactionRevertError`i genel
+    # except blogunda YUTUP durumu DEGISTIRMEDEN (hala "committed") 200
+    # donen bir onceki implementasyondan FARKLI olarak, fiziksel geri
+    # alma hic denenmeden ayri ve net bir 409 ile reddedilmeli.
+    db_session = _in_memory_db_session()
+    transaction = _apply_a_move_plan(db_session, tmp_path)
+    transaction.allowed_root = None
+    db_session.commit()
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post(f"/api/transactions/{transaction.id}/revert", json={})
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 409
+    # Reddedilince hicbir dosyaya dokunulmaz ve durum "committed" olarak kalir.
+    assert not (tmp_path / "a.pdf").exists()
+    assert (tmp_path / "2026-08" / "a.pdf").exists()
 
 
 def test_revert_endpoint_returns_200_with_revert_failed_status_when_the_physical_move_fails(tmp_path):
@@ -500,7 +551,7 @@ def test_revert_endpoint_returns_200_with_revert_failed_status_when_the_physical
 
     app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
     try:
-        response = client.post(f"/api/transactions/{transaction.id}/revert", json={"allowedRoot": str(tmp_path)})
+        response = client.post(f"/api/transactions/{transaction.id}/revert", json={})
     finally:
         app.dependency_overrides.clear()
         db_session.close()

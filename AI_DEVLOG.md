@@ -1,5 +1,38 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## transaction-allowed-root (Saga #301, epic #28)
+
+**Saga #295'in bıraktığı mimari bulgu kapatıldı:** `POST
+/api/transactions/{id}/revert` artık `allowed_root`'u istemcinin request
+body'sinden ALMIYOR. `Transaction` modeline nullable bir `allowed_root`
+kolonu eklendi, `apply_plan`/`create_transaction` sırasında server
+tarafında (gerçek çözümlenmiş kökten) dolduruluyor; `revert_transaction`
+artık `allowed_root` parametresi almıyor, kendi `transaction.allowed_root`
+alanını kullanıyor. `RevertTransactionRequest`'ten `allowedRoot` alanı
+tamamen kaldırıldı (artık boş bir Pydantic modeli) — spoofed/geniş bir
+`allowedRoot` (ör. `"C:\\"`) gönderilse bile Pydantic'in varsayılan
+`extra="ignore"` davranışıyla yok sayılıyor.
+
+**Migration yok, mevcut shim kullanıldı:** proje Alembic KULLANMIYOR —
+`backend/db.py::_add_missing_columns` (Saga #284) yeni nullable kolonu
+otomatik `ALTER TABLE ADD COLUMN` ile ekliyor, ek migration kodu
+yazılmadı.
+
+**Red-team bulgusu (aynı oturumda düzeltildi):** `allowed_root IS NULL`
+olan (migration öncesi) `committed` bir transaction için revert isteği
+ilk implementasyonda genel `except TransactionRevertError: pass` bloğuna
+düşüp durumu DEĞİŞTİRMEDEN 200 dönüyordu — ATDD'nin belgelediği net 409
+yerine belirsiz bir "hiçbir şey olmadı ama 200" yanıtı. `main.py`'ye
+`transaction.allowed_root is None` için AYRI, önceden bir 409 kontrolü
+eklendi (mevcut 404/409 precondition desenine uygun), regresyon testi
+eklendi.
+
+**Frontend:** `ResultCard.tsx`'in revert fetch'i artık boş body (`{}`)
+gönderiyor; `canShowRevert`/erken-çıkış kontrolü sadece `transactionId`'ye
+bakacak şekilde sadeleşti (`selectedFolder` artık zorunlu değil — task
+açıklamasındaki dar kapsam kararıyla `selectedFolder` prop'unun kendisi
+component'ten kaldırılmadı, sadece zorunlu-kontrolden çıkarıldı).
+
 ## pdf-ocr-path-validation (Saga #307, epic #29)
 
 **Saga #306'nın bıraktığı gerçek bir güvenlik açığı kapatıldı:**

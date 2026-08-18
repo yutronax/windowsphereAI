@@ -941,7 +941,7 @@ def test_revert_transaction_moves_a_completed_move_back_to_its_original_location
     plan = _plan([_step(0, "2026-08", ["a.pdf"])])
     transaction = apply_plan(session, plan, pdf_files, tmp_path)
 
-    reverted = revert_transaction(session, transaction, tmp_path)
+    reverted = revert_transaction(session, transaction)
 
     assert (tmp_path / "a.pdf").exists()
     assert not (tmp_path / "2026-08" / "a.pdf").exists()
@@ -955,7 +955,7 @@ def test_revert_transaction_deletes_the_copy_and_leaves_the_original_intact(sess
     plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.COPY)])
     transaction = apply_plan(session, plan, pdf_files, tmp_path)
 
-    revert_transaction(session, transaction, tmp_path)
+    revert_transaction(session, transaction)
 
     assert (tmp_path / "a.pdf").exists()
     assert not (tmp_path / "2026-08" / "a.pdf").exists()
@@ -968,7 +968,7 @@ def test_revert_transaction_restores_a_deleted_file_from_its_backup(session, tmp
     transaction = apply_plan(session, plan, pdf_files, tmp_path)
     assert not (tmp_path / "a.pdf").exists()
 
-    revert_transaction(session, transaction, tmp_path)
+    revert_transaction(session, transaction)
 
     assert (tmp_path / "a.pdf").exists()
 
@@ -979,7 +979,7 @@ def test_revert_transaction_restores_the_old_name_of_a_renamed_file(session, tmp
     plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.RENAME, new_file_names=["b.pdf"])])
     transaction = apply_plan(session, plan, pdf_files, tmp_path)
 
-    revert_transaction(session, transaction, tmp_path)
+    revert_transaction(session, transaction)
 
     assert (tmp_path / "a.pdf").exists()
     assert not (tmp_path / "b.pdf").exists()
@@ -1007,7 +1007,7 @@ def test_revert_transaction_reverts_multiple_operations_in_reverse_order(session
     monkeypatch.setattr(orchestrator_module, "_rollback_move", _tracking_rollback_move)
     monkeypatch.setitem(orchestrator_module._ROLLBACK_OPERATIONS, OperationType.MOVE, _tracking_rollback_move)
 
-    revert_transaction(session, transaction, tmp_path)
+    revert_transaction(session, transaction)
 
     assert revert_order == ["b.pdf", "a.pdf"]
 
@@ -1021,7 +1021,7 @@ def test_revert_transaction_rejects_a_transaction_that_is_not_committed(session,
     session.commit()
 
     with pytest.raises(TransactionRevertError):
-        revert_transaction(session, transaction, tmp_path)
+        revert_transaction(session, transaction)
 
     # Reddedilince hiçbir dosyaya dokunulmaz — dosya hâlâ apply_plan'ın
     # bıraktığı hedef klasörde, kök klasöre GERİ TAŞINMAMIŞ olmalı.
@@ -1050,7 +1050,7 @@ def test_revert_transaction_marks_revert_failed_and_raises_when_a_step_cannot_be
     _write_pdf(tmp_path, "b.pdf")
 
     with pytest.raises(TransactionRevertError):
-        revert_transaction(session, transaction, tmp_path)
+        revert_transaction(session, transaction)
 
     assert transaction.status == "revert_failed"
     # a.pdf başarıyla geri alındı (b.pdf'ten SONRA işlendiği için ters
@@ -1070,7 +1070,7 @@ def test_revert_transaction_ignores_operations_outside_the_allowed_root(session,
     session.commit()
 
     with pytest.raises(TransactionRevertError):
-        revert_transaction(session, transaction, tmp_path)
+        revert_transaction(session, transaction)
 
     assert transaction.status == "revert_failed"
     assert not outside_root.exists()
@@ -1173,8 +1173,53 @@ def test_purge_expired_delete_backups_result_is_rejected_by_revert_transaction_w
     purge_expired_delete_backups(session, tmp_path, older_than_days=30)
 
     with pytest.raises(TransactionRevertError):
-        revert_transaction(session, transaction, tmp_path)
+        revert_transaction(session, transaction)
 
     # Reddedilince hiçbir "başarılı geri alma" görünümü yok, dosya
     # gerçekten kaybolmuş durumda kalıyor (bu testin amacı budur).
     assert not (tmp_path / "a.pdf").exists()
+
+
+# Saga #301 (RED step): Transaction.allowed_root kolonu + revert_transaction'ın
+# istemciden allowed_root almayıp kendi kayıtlı değerini kullanması.
+
+
+def test_apply_plan_records_the_real_allowed_root_on_the_transaction(session, tmp_path):
+    _write_pdf(tmp_path, "a.pdf")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", ["a.pdf"])])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert transaction.allowed_root == str(tmp_path)
+
+
+def test_revert_transaction_raises_when_allowed_root_is_none(session, tmp_path):
+    from backend.file_operations import create_transaction
+
+    transaction = create_transaction(session, allowed_root=None)
+    transaction.status = "committed"
+    session.commit()
+
+    with pytest.raises(TransactionRevertError):
+        revert_transaction(session, transaction)
+
+
+def test_revert_transaction_signature_no_longer_accepts_a_client_supplied_allowed_root(session, tmp_path):
+    # Guvenlik regresyon testi (Saga #301): revert_transaction artik SADECE
+    # (session, transaction) aliyor - istemcinin spoof edebilecegi ayri bir
+    # allowed_root parametresi YOK. Gercek kok, transaction'in KENDI
+    # apply_plan sirasinda kaydedilen degeridir, cagiran tarafindan
+    # degistirilemez.
+    real_root = tmp_path
+    _write_pdf(real_root, "a.pdf")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", ["a.pdf"])])
+    transaction = apply_plan(session, plan, pdf_files, real_root)
+
+    assert transaction.allowed_root == str(real_root)
+
+    reverted = revert_transaction(session, transaction)
+
+    assert reverted.status == "reverted"
+    assert (real_root / "a.pdf").exists()

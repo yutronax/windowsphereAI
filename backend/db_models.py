@@ -20,6 +20,10 @@ class Transaction(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
     status: Mapped[str] = mapped_column(String, default="pending")
+    # Saga #301: bu transaction'ın uygulandığı allowed_root — server tarafında
+    # kaydedilir (istemciden asla alınmaz), revert_transaction bunu kullanır.
+    # Nullable: migration öncesi eski kayıtlarda yok.
+    allowed_root: Mapped[str | None] = mapped_column(String, nullable=True)
 
     operations: Mapped[list["FileOperation"]] = relationship(
         back_populates="transaction", cascade="all, delete-orphan"

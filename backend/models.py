@@ -289,18 +289,15 @@ class TransactionSummary(BaseModel):
 
 
 class RevertTransactionRequest(BaseModel):
-    """Saga #295: `revert_transaction`'ın `allowed_root` parametresi
-    ZORUNLU (Saga #293 red-team kararı) ama `Transaction` tablosunda bir
-    `allowed_root`/`session_id` kolonu YOK (Saga #294'te aynı gerekçeyle
-    şema değişikliği reddedildi) — bu yüzden istemci DOĞRUDAN gönderir
-    (zaten session'ın `selectedFolder`'ını biliyor)."""
+    """Saga #301: `revert_transaction`'ın kullandığı `allowed_root` artık
+    `Transaction` tablosunda server tarafında kaydedilir (bkz.
+    `db_models.Transaction.allowed_root`) — Saga #294/#295'teki "kolon YOK,
+    istemciden gönderilir" kararı bir güvenlik açığıydı (istemci spoofed bir
+    `allowedRoot` ile başka bir köke ait dosyaları geri alma mantığına
+    sokabilirdi). Bu yüzden istemciden hiçbir alan alınmaz; şu an boş, ama
+    gelecekte genişleyebilir."""
 
-    allowedRoot: str
-
-    @field_validator("allowedRoot")
-    @classmethod
-    def normalize_allowed_root(cls, value: str) -> str:
-        return normalize_selected_folder(value)
+    pass
 
 
 class RevertTransactionResponse(BaseModel):

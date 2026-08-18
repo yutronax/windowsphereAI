@@ -1,0 +1,24 @@
+{
+  "task": "Saga #301 — Transaction'a allowed_root kolonu ekle",
+  "reviewer": "obss-red-team subagent (bağımsız, gerçek git diff üzerinden)",
+  "findings": [
+    {
+      "id": 1,
+      "severity": "medium",
+      "in_scope": true,
+      "description": "allowed_root IS NULL olan (migration öncesi) committed transaction'lar için revert endpoint'i ATDD'de belgelenen 409 yerine 200 + değişmemiş 'committed' durumu döndürüyordu (TransactionRevertError genel except bloğunda sessizce yutuluyordu).",
+      "resolution": "backend/main.py::revert_transaction_endpoint'e ayrı, önceden bir `transaction.allowed_root is None` -> 409 kontrolü eklendi. Regresyon testi eklendi: test_revert_endpoint_returns_409_when_the_transactions_allowed_root_is_missing.",
+      "status": "fixed"
+    },
+    {
+      "id": 2,
+      "severity": "low",
+      "in_scope": false,
+      "description": "ResultCard.tsx'in canShowRevert artık sadece transactionId'ye bakıyor; gelecekte selectedFolder'ın varlığını varsayan bir UI eklenirse (ör. 'X klasöründe geri alınıyor' metni) undefined ile karşılaşabilir.",
+      "resolution": "Şu an component'te böyle bir kullanım yok, spekülatif/gelecekteki bir değişiklik riski. Takip task açılmadı (gerçek bir kod yok, sadece bir gelecek-değişiklik uyarısı).",
+      "status": "acknowledged_no_action"
+    }
+  ],
+  "ready_to_commit": true,
+  "notes": "İlk inceleme 'Ready To Commit: NO' dedi (finding #1 nedeniyle). Finding #1 aynı oturumda düzeltildi, testler yeniden çalıştırıldı (201 passed), artık commit'e hazır."
+}

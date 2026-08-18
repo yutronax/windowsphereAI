@@ -231,7 +231,7 @@ def _rollback_completed_operations(operations: list[FileOperation], allowed_root
     return all_succeeded
 
 
-def revert_transaction(session: Session, transaction: Transaction, allowed_root: Path) -> Transaction:
+def revert_transaction(session: Session, transaction: Transaction) -> Transaction:
     """Saga #293: ZATEN `"committed"` durumundaki bir transaction'ı
     SONRADAN (kullanıcının manuel "geri al" isteğiyle, `apply_plan`'ın
     kendi çağrısı sırasındaki hata rollback'inden BAĞIMSIZ) geri alır.
@@ -240,6 +240,13 @@ def revert_transaction(session: Session, transaction: Transaction, allowed_root:
     anlamsız veya tehlikelidir (ör. zaten `rolled_back` bir transaction'ı
     tekrar geri almak dosyaları YANLIŞ yöne taşırdı), bu yüzden reddedilir
     ve hiçbir dosyaya dokunulmaz.
+
+    Saga #301: `allowed_root` artık parametre olarak alınmaz — Saga #294/
+    #295'teki "Transaction tablosunda allowed_root kolonu YOK, istemciden
+    gelir" kararı YANLIŞTI (client-supplied bir güvenlik sınırı spoofable'dı).
+    Şimdi `transaction.allowed_root` (apply_plan sırasında server tarafında
+    kaydedilen) kullanılır — `None` ise (migration öncesi eski kayıt)
+    hiçbir dosyaya dokunulmadan `TransactionRevertError` fırlatılır.
 
     Sadece `status == "completed"` operasyonlar (LIST hiç kayıt
     oluşturmadığı için zaten hiç görünmez, Saga #291) TERS SIRAYLA
@@ -255,6 +262,12 @@ def revert_transaction(session: Session, transaction: Transaction, allowed_root:
         raise TransactionRevertError(
             f"Sadece 'committed' durumundaki bir transaction geri alınabilir, mevcut durum: '{transaction.status}'"
         )
+
+    if transaction.allowed_root is None:
+        raise TransactionRevertError(
+            f"Transaction {transaction.id} için allowed_root kaydı yok, geri alınamıyor."
+        )
+    allowed_root = Path(transaction.allowed_root)
 
     completed_operations = [op for op in transaction.operations if op.status == "completed"]
     all_reverted = _rollback_completed_operations(
@@ -343,7 +356,7 @@ def apply_plan(
 
     step_files = _distribute_files_to_steps(pdf_files, plan.steps)
 
-    transaction = create_transaction(session)
+    transaction = create_transaction(session, allowed_root=str(allowed_root))
     session.commit()  # Transaction kaydı, sonuç ne olursa olsun kalıcı olsun.
 
     applied: list[FileOperation] = []

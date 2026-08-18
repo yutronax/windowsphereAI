@@ -18,8 +18,8 @@ from backend.db_models import FileOperation, Transaction
 # olursa transaction'ın tamamı rollback edilebilsin diye).
 
 
-def create_transaction(session: Session) -> Transaction:
-    transaction = Transaction()
+def create_transaction(session: Session, *, allowed_root: str | None = None) -> Transaction:
+    transaction = Transaction(allowed_root=allowed_root)
     session.add(transaction)
     session.flush()
     return transaction

@@ -6,8 +6,9 @@ export type TransactionResult = {
   fileCount: number;
   destinationFolders: string[];
   status: 'completed' | 'partial' | 'failed';
-  // Saga #295: ikisi de verilmezse "Geri al" butonu HİÇ gösterilmez
-  // (fail-closed — güvenli bir istek oluşturamıyorsak buton yok).
+  // Saga #301: sadece transactionId gerekli — allowedRoot artık backend'de
+  // Transaction'a kaydedilir, istemciden gönderilmez. selectedFolder alanı
+  // tip uyumluluğu için kalır ama revert akışında artık KULLANILMAZ.
   transactionId?: number;
   selectedFolder?: string;
 };
@@ -27,14 +28,14 @@ type RevertState = 'idle' | 'confirming' | 'reverting' | 'reverted' | 'revert_fa
 export default function ResultCard({ result }: Props) {
   const [revertState, setRevertState] = useState<RevertState>('idle');
   const hasFolders = result.destinationFolders.length > 0;
-  // Saga #295 ATDD S4: `transactionId`/`selectedFolder` eksikse istemci
-  // güvenli bir geri alma isteği OLUŞTURAMAZ — buton hiç gösterilmez. Asıl
-  // güvenlik sınırı backend'in kendisinde (whitelist + committed-only
+  // Saga #301: `transactionId` eksikse istemci geri alma isteği
+  // OLUŞTURAMAZ — buton hiç gösterilmez. Asıl güvenlik sınırı backend'in
+  // kendisinde (server tarafında kaydedilen allowed_root + committed-only
   // kontrolü), bu sadece bir istemci tarafı UX kolaylığı.
-  const canShowRevert = result.transactionId !== undefined && result.selectedFolder !== undefined;
+  const canShowRevert = result.transactionId !== undefined;
 
   async function handleConfirmRevert() {
-    if (result.transactionId === undefined || result.selectedFolder === undefined) return;
+    if (result.transactionId === undefined) return;
     // Red-team bulgusu (Saga #295): butonun `disabled` olması normalde
     // ikinci bir tıklamayı engeller, ama bu SADECE React'in re-render'ı
     // yeterince hızlı gerçekleştiğinde işe yarar — programatik çift
@@ -47,7 +48,7 @@ export default function ResultCard({ result }: Props) {
       const response = await fetch(`${BACKEND_ORIGIN}/api/transactions/${result.transactionId}/revert`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ allowedRoot: result.selectedFolder }),
+        body: JSON.stringify({}),
       });
       if (!response.ok) {
         setRevertState('error');

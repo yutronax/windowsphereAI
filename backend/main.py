@@ -145,9 +145,9 @@ def revert_transaction_endpoint(
     db: DbSession = Depends(get_db_session),
 ) -> RevertTransactionResponse:
     """Saga #295: `revert_transaction`i (Saga #293) gerçek bir HTTP
-    endpoint'ine bağlar. `allowed_root`, `Transaction`in kendisinde
-    saklanmadığı için (Saga #294 ile aynı dar-kapsam kararı) İSTEMCİDEN
-    gelir — istemci zaten kendi session'ının `selectedFolder`'ını bilir.
+    endpoint'ine bağlar. Saga #301: `allowed_root` artık `Transaction`in
+    kendisinde server tarafında saklanır (apply_plan sırasında kaydedilir)
+    — İSTEMCİDEN GELMEZ (eski Saga #294/#295 kararı bir spoofing açığıydı).
 
     Durum önce (ÖNCEDEN, `revert_transaction`i hiç çağırmadan) kontrol
     edilir — bu, "geçersiz istek" (404/409) ile "geçerli istek ama
@@ -161,10 +161,22 @@ def revert_transaction_endpoint(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Sadece 'committed' durumundaki bir transaction geri alınabilir, mevcut durum: '{transaction.status}'",
         )
+    if transaction.allowed_root is None:
+        # Saga #301 red-team bulgusu: bu, Saga #301 öncesi (migration
+        # shim'inin NULL bıraktığı eski) bir transaction'dır — fiziksel
+        # geri alma denemeden ÖNCE ayrı bir 409 ile reddedilir, aksi
+        # halde `revert_transaction`in fırlattığı `TransactionRevertError`
+        # aşağıdaki genel except bloğuna düşüp durumu HİÇ DEĞİŞTİRMEDEN
+        # (hâlâ "committed") 200 dönerdi — bu, gerçek bir fiziksel geri
+        # alma başarısızlığıyla (200 + "revert_failed") KARIŞTIRILAMAZ bir
+        # veri-bütünlüğü hatasıdır, ayrı ve net bir sinyal gerektirir.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Bu transaction için allowed_root kaydı eksik, geri alınamıyor.",
+        )
 
-    allowed_root = Path(payload.allowedRoot)
     try:
-        revert_transaction(db, transaction, allowed_root)
+        revert_transaction(db, transaction)
     except TransactionRevertError:
         # Precondition ÖNCEDEN doğrulandığı için buraya düşen TEK olası
         # sebep fiziksel geri almanın kendisinin (kısmen) başarısız

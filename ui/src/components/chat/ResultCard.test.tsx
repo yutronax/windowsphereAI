@@ -62,10 +62,10 @@ describe('ResultCard "Geri al" (Saga #295)', () => {
     expect(screen.queryByTestId('result-revert-button')).not.toBeInTheDocument();
   });
 
-  it('does not show the revert button when selectedFolder is missing (AC-2)', () => {
+  it('shows the revert button even when selectedFolder is missing, since only transactionId gates it now (Saga #301)', () => {
     render(<ResultCard result={{ ...baseResult, transactionId: 1 }} />);
 
-    expect(screen.queryByTestId('result-revert-button')).not.toBeInTheDocument();
+    expect(screen.getByTestId('result-revert-button')).toBeInTheDocument();
   });
 
   it('shows the revert button when both transactionId and selectedFolder are given (AC-2)', () => {
@@ -105,7 +105,7 @@ describe('ResultCard "Geri al" (Saga #295)', () => {
     expect(screen.queryByTestId('result-revert-confirm-button')).not.toBeInTheDocument();
   });
 
-  it('sends the revert request with the transactionId and allowedRoot only after the second click (AC-3)', async () => {
+  it('sends the revert request with an empty body (no allowedRoot) only after the second click (Saga #301)', async () => {
     const fetchSpy = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ transactionId: 42, status: 'reverted' }),
@@ -122,7 +122,26 @@ describe('ResultCard "Geri al" (Saga #295)', () => {
     const [url, options] = fetchSpy.mock.calls[0];
     expect(url).toContain('/api/transactions/42/revert');
     expect(options.method).toBe('POST');
-    expect(JSON.parse(options.body)).toEqual({ allowedRoot: 'C:\\Users\\Yusuf\\Documents' });
+    expect(JSON.parse(options.body)).toEqual({});
+  });
+
+  it('shows the revert button and sends an empty body even when selectedFolder is undefined (Saga #301)', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ transactionId: 42, status: 'reverted' }),
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    render(<ResultCard result={{ ...baseResult, transactionId: 42 }} />);
+
+    expect(screen.getByTestId('result-revert-button')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('result-revert-button'));
+    fireEvent.click(screen.getByTestId('result-revert-confirm-button'));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    const [url, options] = fetchSpy.mock.calls[0];
+    expect(url).toContain('/api/transactions/42/revert');
+    expect(JSON.parse(options.body)).toEqual({});
   });
 
   it('shows a success message inside aria-live after a successful revert (AC-4)', async () => {
