@@ -183,3 +183,35 @@ def test_merged_file_name_rejects_case_variant_overlap_with_source_file_names():
             affectedFileCount=2,
             mergedFileName="A.PDF",
         )
+
+
+# Saga #305: SPLIT operasyonu - fileNames uzunlugu TAM OLARAK 1 olmali
+# (MERGE'in "en az 2" kisitinin simetrigi, dar kapsam).
+
+
+def test_split_rejects_more_than_one_file_name():
+    with pytest.raises(ValidationError):
+        _step(
+            operationType=OperationType.SPLIT,
+            fileNames=["a.pdf", "b.pdf"],
+            affectedFileCount=2,
+        )
+
+
+def test_split_rejects_empty_file_names():
+    with pytest.raises(ValidationError):
+        _step(
+            operationType=OperationType.SPLIT,
+            fileNames=[],
+            affectedFileCount=0,
+        )
+
+
+def test_split_accepts_exactly_one_file_name():
+    step = _step(
+        operationType=OperationType.SPLIT,
+        fileNames=["a.pdf"],
+        affectedFileCount=1,
+    )
+
+    assert step.fileNames == ["a.pdf"]

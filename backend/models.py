@@ -40,6 +40,9 @@ class OperationType(str, Enum):
     RENAME = "Yeniden Adlandır"
     LIST = "Listele"
     MERGE = "Birleştir"
+    # Saga #305: SPLIT MERGE'in tam tersi - 1 kaynak PDF -> N tek-sayfalik
+    # cikti dosyasi.
+    SPLIT = "Böl"
 
 
 class PlanStep(BaseModel):
@@ -197,6 +200,16 @@ class PlanStep(BaseModel):
                 )
         elif self.mergedFileName is not None:
             raise ValueError("mergedFileName must be omitted unless operationType is MERGE")
+        return self
+
+    @model_validator(mode="after")
+    def file_names_length_exactly_one_for_split(self) -> "PlanStep":
+        # Saga #305: SPLIT MERGE'in tam tersi - MERGE "en az 2 kaynak"
+        # gerektirirken, SPLIT TAM OLARAK 1 kaynak gerektirir (birden fazla
+        # dosyayi AYNI step'te bolmek, her biri farklı sayida cikti
+        # uretecegi icin belirsizlik yaratir, bkz. ATDD S3).
+        if self.operationType == OperationType.SPLIT and len(self.fileNames) != 1:
+            raise ValueError("fileNames must contain exactly 1 entry when operationType is SPLIT")
         return self
 
 

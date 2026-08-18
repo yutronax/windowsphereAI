@@ -47,6 +47,7 @@ _SUPPORTED_OPERATION_TYPES = {
     OperationType.RENAME,
     OperationType.LIST,
     OperationType.MERGE,
+    OperationType.SPLIT,
 }
 
 # DELETE'in fiziksel yedeklerinin saklandığı, `allowed_root` altında gizli
@@ -112,6 +113,29 @@ def _forward_merge(source_paths: list[Path], destination_path: Path) -> None:
         raise
 
 
+def _forward_split_page(reader_page, destination_path: Path) -> None:
+    # Saga #305: MERGE'in duzeltilmis _forward_merge'iyle AYNI gecici-dosya-
+    # yaz + atomik-tasi deseni (bkz. o fonksiyonun docstring'i, Saga #304
+    # red-team dersi) - HER cikti sayfasi icin ayri ayri uygulanir, yarida
+    # kesilen bir yazma destination_path'te YARIM/BOZUK bir dosya BIRAKMAZ.
+    from pypdf import PdfWriter
+
+    fd, temp_path_str = tempfile.mkstemp(
+        suffix=".tmp", prefix=destination_path.name + ".", dir=str(destination_path.parent)
+    )
+    temp_path = Path(temp_path_str)
+    os.close(fd)
+    try:
+        writer = PdfWriter()
+        writer.add_page(reader_page)
+        writer.write(str(temp_path))
+        writer.close()
+        temp_path.replace(destination_path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
 _FORWARD_OPERATIONS = {
     OperationType.MOVE: _forward_move,
     OperationType.COPY: _forward_copy,
@@ -147,6 +171,10 @@ _ROLLBACK_OPERATIONS = {
     # Saga #304: MERGE rollback'i COPY ile AYNI — kaynaklar hiç değişmedi,
     # rollback SADECE hedefteki yeni birleşik dosyayı siler (ATDD S2).
     OperationType.MERGE: _rollback_copy,
+    # Saga #305: SPLIT rollback'i de COPY ile AYNI - kaynak hic degismedi,
+    # her cikti dosyasi icin bagimsiz olarak sadece hedefi siler (ATDD S2,
+    # SPLIT'e ozel yeni bir rollback fonksiyonu GEREKMIYOR).
+    OperationType.SPLIT: _rollback_copy,
 }
 
 
@@ -349,13 +377,56 @@ def apply_plan(
                 session.commit()
                 applied.append(operation)
                 continue
+            # Saga #305: SPLIT MERGE'in tam simetrik tersi - TEK kaynak PDF'i
+            # acar, HER sayfa icin AYRI bir cikti dosyasi + AYRI bir
+            # FileOperation kaydi olusturur (N kayit toplam, MERGE'in "1
+            # kayit" desenin tersine). Cikti adi cakismasi SADECE calisma
+            # zamaninda (gercek sayfa sayisi bilindiginde) tespit edilebilir
+            # (ATDD S4) - her sayfa YAZILMADAN HEMEN ONCE output_path.exists()
+            # kontrol edilir; VARSA PlanApplicationError firlatilir, disaridaki
+            # genel except-blogu bu ana kadar YAZILMIS tum sayfalari (applied
+            # listesi uzerinden) TERS SIRAYLA geri alir.
+            if step.operationType == OperationType.SPLIT:
+                from pypdf import PdfReader
+
+                source_path = allowed_root / files[0].filename
+                reader = PdfReader(str(source_path))
+                if len(reader.pages) == 0:
+                    raise PlanApplicationError(
+                        f"Bölünecek PDF boş (0 sayfa): '{source_path.name}'"
+                    )
+                for page_index, page in enumerate(reader.pages):
+                    page_number = page_index + 1
+                    output_path = allowed_root / f"{source_path.stem}_{page_number}.pdf"
+                    if output_path.exists():
+                        raise PlanApplicationError(
+                            f"SPLIT çıktı dosyası zaten var, işlem reddedildi: '{output_path.name}'"
+                        )
+                    operation = record_file_operation(
+                        session,
+                        transaction,
+                        operation_type=step.operationType.value,
+                        source_path=str(source_path),
+                        destination_path=str(output_path),
+                        backup_path=str(output_path),
+                    )
+                    _forward_split_page(page, output_path)
+                    operation.status = "completed"
+                    session.commit()
+                    applied.append(operation)
+                continue
             # Saga #289/#290: DELETE ve RENAME'in gerçek bir hedef klasörü
             # yok — targetFolder (YYYY-MM) şema gereği hâlâ zorunlu ama
             # ikisinde de kullanılmıyor (bkz. ATDD "bilinen sınırlama").
             # Saga #304: MERGE de aynı şekilde — allowed_root'un KÖK
             # seviyesine yazar, dated bir alt klasör kavramı yok.
             # Sadece MOVE/COPY için gerçek hedef klasör oluşturulur.
-            if step.operationType not in (OperationType.DELETE, OperationType.RENAME, OperationType.MERGE):
+            if step.operationType not in (
+                OperationType.DELETE,
+                OperationType.RENAME,
+                OperationType.MERGE,
+                OperationType.SPLIT,
+            ):
                 target_dir = allowed_root / step.targetFolder
                 target_dir.mkdir(parents=True, exist_ok=True)
             # RENAME: fileNames[i] -> newFileNames[i] eşleşmesi (Saga #290).

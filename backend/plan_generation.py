@@ -19,11 +19,14 @@ PLAN_SYSTEM_PROMPT = (
     '- "sil", "temizle", "kaldır" → "Sil"\n'
     '- "yeniden adlandır", "ismini değiştir" → "Yeniden Adlandır"\n'
     '- "listele", "göster", "say" → "Listele"\n'
-    '- "birleştir", "tek dosya yap" → "Birleştir"\n\n'
+    '- "birleştir", "tek dosya yap" → "Birleştir"\n'
+    '- "böl", "sayfalara ayır" → "Böl" (fileNames bu step için TAM OLARAK '
+    "1 dosya içermeli — Böl tek bir kaynağı böler, birden fazla dosyayı "
+    "aynı step'te bölmek desteklenmez)\n\n"
     "Sadece şu JSON şemasında yanıt ver: "
     '{"dateSource": "created_at", "sortOrder": "ascending"|"descending", '
     '"steps": [{"order": <negatif olmayan tamsayı>, "operationType": '
-    '"Taşı"|"Kopyala"|"Sil"|"Yeniden Adlandır"|"Listele"|"Birleştir", "targetFolder": '
+    '"Taşı"|"Kopyala"|"Sil"|"Yeniden Adlandır"|"Listele"|"Birleştir"|"Böl", "targetFolder": '
     '<"YYYY-MM" formatında string>, "affectedFileCount": <negatif olmayan '
     'tamsayı>, "fileNames": [<bu step\'e ait TAM dosya adlarının listesi>], '
     '"newFileNames": [<SADECE operationType "Yeniden Adlandır" ise, '

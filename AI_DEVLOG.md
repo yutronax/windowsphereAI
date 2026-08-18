@@ -1,5 +1,45 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## pdf-bolme-split-operasyonu (Saga #305, epic #29)
+
+**Sayfa aralığı DEĞİL, sayfa başına bölme seçildi — task'ın kendi
+sunduğu iki seçenekten en dar kapsamlısı.** Sayfa aralığı, LLM'in plan
+üretim ANINDA (henüz gerçek sayfa sayısını bilmediği bir aşamada,
+Saga #292'nin çözdüğü AYNI kısıt) geçerli/çakışmasız aralıklar
+üretmesini gerektirirdi. Sayfa-başına bölme bu sorunu TAMAMEN ORTADAN
+KALDIRIYOR: hiçbir yeni şema alanı gerekmiyor, çıktı adları kaynak
+dosya adından TÜRETİLİYOR (`kaynak.pdf` → `kaynak_1.pdf`, ...).
+
+**MERGE'in (Saga #304) TAM SİMETRİK TERSİ olarak inşa edildi** — MERGE
+"N kaynak → 1 hedef" idi, SPLIT "1 kaynak → N hedef". Rollback için
+SPLIT'e ÖZEL yeni bir fonksiyon GEREKMEDİ — her sayfa BAĞIMSIZ bir
+`FileOperation` kaydı olduğu için COPY'nin `_rollback_copy`si (sadece
+hedefi sil, kaynağa dokunma) HER kayıt için ayrı ayrı çalışıyor.
+
+**Çıktı adı çakışması ÖNCEDEN değil, ÇALIŞMA ZAMANINDA tespit
+ediliyor** — gerçek sayfa sayısı sadece dosya AÇILDIĞINDA bilindiği
+için `validate_plan_paths` (plan onaylanmadan ÖNCE çalışır) bunu
+öngöremez. Bilinçli bir sapma: RENAME/MERGE'in ön-doğrulama desenine
+karşı, her sayfa yazılmadan HEMEN ÖNCE `output_path.exists()` kontrolü
++ varsa tüm transaction'ı reddetme.
+
+**Saga #304'ün red-team dersi doğrudan uygulandı:** her çıktı sayfası
+MERGE'in düzeltilmiş `_forward_merge`iyle AYNI geçici-dosya-yaz +
+atomik-taşı desenini kullanıyor — yarıda kesilen bir yazma hiçbir
+zaman gerçek hedefte yarım dosya bırakmıyor.
+
+Codex/Copilot kotası dolu olduğu için test+implementasyon yine genel
+bir kodlama subagent'ına delegasyon disipliniyle yazdırıldı (red→green
+sırası gözlemlendi: 9 test önce kırmızı, sonra yeşil), ana akış
+sonucu bağımsız olarak kendi `pytest` çalıştırmasıyla ayrıca doğruladı.
+
+**Red-team, 0 sayfalı bir kaynak PDF'in SESSİZCE hiçbir şey yapmadan
+"committed" dönmesini buldu** (sıfır çıktı, sıfır kayıt, kullanıcıya
+hiçbir gösterge yok) — HEMEN düzeltildi: `PdfReader`in sayfa sayısı 0
+ise `PlanApplicationError` fırlatılıyor, sessiz no-op yerine temiz bir
+hata. İki riskli kategori (self-overlap, Windows dosya kilidi) AÇIKÇA
+izlendi ve bug OLMADIĞI doğrulandı. Toplam 10 yeni test, 187/187 yeşil.
+
 ## pdf-birlestirme-merge-operasyonu (Saga #304, epic #29)
 
 **Yeni bir "format agent" katmanı İCAT EDİLMEDİ — MERGE mevcut

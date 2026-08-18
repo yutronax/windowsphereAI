@@ -250,3 +250,21 @@ def test_system_prompt_documents_merged_file_name_schema():
     from backend.plan_generation import PLAN_SYSTEM_PROMPT
 
     assert "mergedFileName" in PLAN_SYSTEM_PROMPT
+
+
+# Saga #305: PLAN_SYSTEM_PROMPT'a SPLIT eslemesi + fileNames'in SPLIT icin
+# tam 1 dosya icermesi gerektigi notu eklendigini dogrular.
+
+
+def test_system_prompt_maps_bol_request_to_split_operation_type():
+    from backend.plan_generation import PLAN_SYSTEM_PROMPT
+
+    assert "böl" in PLAN_SYSTEM_PROMPT
+    assert "Böl" in PLAN_SYSTEM_PROMPT
+
+
+def test_system_prompt_documents_split_requires_exactly_one_file_name():
+    from backend.plan_generation import PLAN_SYSTEM_PROMPT
+
+    assert "Böl" in PLAN_SYSTEM_PROMPT
+    assert "tam olarak 1" in PLAN_SYSTEM_PROMPT or "TAM OLARAK 1" in PLAN_SYSTEM_PROMPT

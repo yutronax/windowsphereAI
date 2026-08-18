@@ -674,6 +674,100 @@ def test_forward_merge_leaves_no_partial_file_at_destination_when_write_fails(tm
     assert leftovers == []
 
 
+# Saga #305: SPLIT operasyonu - 1 kaynak PDF -> N yeni tek-sayfalik PDF,
+# kaynaga dokunulmaz, rollback COPY semantigiyle (her cikti icin sadece
+# hedefi sil).
+
+
+def _split_step(order: int, file_name: str) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.SPLIT,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=[file_name],
+    )
+
+
+def test_apply_plan_splits_a_real_pdf_into_one_file_per_page(session, tmp_path):
+    from pypdf import PdfReader
+
+    _write_real_pdf(tmp_path, "rapor.pdf", 3)
+    pdf_files = [PdfFileMetadata(filename="rapor.pdf", createdAt="2026-08-01")]
+    plan = _plan([_split_step(0, "rapor.pdf")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    for page_number in (1, 2, 3):
+        output_path = tmp_path / f"rapor_{page_number}.pdf"
+        assert output_path.exists()
+        reader = PdfReader(str(output_path))
+        assert len(reader.pages) == 1
+    assert transaction.status == "committed"
+    assert len(transaction.operations) == 3
+    assert all(op.status == "completed" for op in transaction.operations)
+
+
+def test_apply_plan_leaves_split_source_untouched(session, tmp_path):
+    _write_real_pdf(tmp_path, "rapor.pdf", 2)
+    pdf_files = [PdfFileMetadata(filename="rapor.pdf", createdAt="2026-08-01")]
+    plan = _plan([_split_step(0, "rapor.pdf")])
+
+    apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert (tmp_path / "rapor.pdf").exists()
+
+
+def test_apply_plan_rejects_split_when_output_file_name_already_exists(session, tmp_path):
+    _write_real_pdf(tmp_path, "rapor.pdf", 3)
+    # rapor_2.pdf plan'in BILMEDIGI, onceden var olan ilgisiz bir dosya -
+    # cikti adiyla CAKISIYOR.
+    (tmp_path / "rapor_2.pdf").write_bytes(b"%PDF-1.4 onceden-var")
+    pdf_files = [PdfFileMetadata(filename="rapor.pdf", createdAt="2026-08-01")]
+    plan = _plan([_split_step(0, "rapor.pdf")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    # rapor_1.pdf (cakismadan ONCE yazilmis olabilecek) rollback ile
+    # silinmis olmali - hicbir SPLIT ciktisi geride kalmamali.
+    assert not (tmp_path / "rapor_1.pdf").exists()
+    # Cakisan onceden-var-olan dosya DOKUNULMADAN kalmali (uzerine yazilmadi).
+    assert (tmp_path / "rapor_2.pdf").read_bytes() == b"%PDF-1.4 onceden-var"
+    assert not (tmp_path / "rapor_3.pdf").exists()
+    assert (tmp_path / "rapor.pdf").exists()
+
+
+def test_apply_plan_rejects_split_of_a_zero_page_pdf(session, tmp_path):
+    _write_real_pdf(tmp_path, "bos.pdf", 0)
+    pdf_files = [PdfFileMetadata(filename="bos.pdf", createdAt="2026-08-01")]
+    plan = _plan([_split_step(0, "bos.pdf")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+
+def test_apply_plan_rolls_back_split_outputs_when_a_later_step_fails(session, tmp_path):
+    _write_real_pdf(tmp_path, "rapor.pdf", 2)
+    pdf_files = [
+        PdfFileMetadata(filename="rapor.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="c.pdf", createdAt="2026-08-03"),
+    ]
+    plan = _plan(
+        [
+            _split_step(0, "rapor.pdf"),
+            _step(1, "2026-08", ["c.pdf"]),  # c.pdf pdf_files'ta ama diskte yok - basarisiz olur
+        ]
+    )
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "rapor_1.pdf").exists()
+    assert not (tmp_path / "rapor_2.pdf").exists()
+    assert (tmp_path / "rapor.pdf").exists()
+
+
 def test_recover_incomplete_transactions_marks_physically_moved_files_as_completed(session, tmp_path):
     # Saga #286: shutil.move basarili oldu ama surec operation.status =
     # "completed" + commit'ten ONCE coktu senaryosunu simule eder - kayit
