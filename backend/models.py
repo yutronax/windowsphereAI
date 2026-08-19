@@ -52,6 +52,10 @@ class OperationType(str, Enum):
     # kaynak asla degismez" deseni, ama Excel (.xlsx) sayfasi uzerinde
     # satir sirasi degistirir (formul-guvenlik-agi ile korunur).
     EXCEL_SORT = "Excel Sırala"
+    # Saga #323: APPEND - 1 kaynak PDF'in SONUNA appendText'ten render
+    # edilmis yeni bir sayfa eklenir, kaynak dosya YERINDE guncellenir
+    # (gecici-dosya+atomik-replace deseniyle, bkz. orchestrator._forward_append).
+    APPEND = "Ekle"
 
 
 class RedactionRegion(BaseModel):
@@ -127,6 +131,11 @@ class PlanStep(BaseModel):
     sortColumn: str | None = None
     sortAscending: bool | None = None
     sortedFileName: str | None = None
+    # Saga #323: APPEND icin - kaynagin sonuna eklenecek metin, mergedFileName
+    # ile AYNI desende (SADECE operationType==APPEND olduğunda dolu olmalı,
+    # diğer operationType'larda None kalmalı). max_length=5000 (Threat-Model
+    # Notu, atdd.md: DoS mitigasyonu).
+    appendText: str | None = Field(default=None, max_length=5000)
 
     @field_validator("mergedFileName")
     @classmethod
@@ -147,6 +156,16 @@ class PlanStep(BaseModel):
     def sorted_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
         if value is not None and ("/" in value or "\\" in value):
             raise ValueError("sortedFileName must not contain path separators")
+        return value
+
+    @field_validator("appendText")
+    @classmethod
+    def append_text_not_blank_if_given(cls, value: str | None) -> str | None:
+        # AC-5: None kabul edilir (APPEND dışı operationType'larda hiç
+        # geçirilmez) ama verilmişse boş/whitespace-only reddedilir —
+        # SearchRequest.contentContains ile AYNI desen.
+        if value is not None and value.strip() == "":
+            raise ValueError("appendText must not be empty or whitespace-only")
         return value
 
     @field_validator("order", "affectedFileCount")
@@ -349,6 +368,20 @@ class PlanStep(BaseModel):
     def file_names_length_exactly_one_for_ocr(self) -> "PlanStep":
         if self.operationType == OperationType.OCR and len(self.fileNames) != 1:
             raise ValueError("fileNames must contain exactly 1 entry when operationType is OCR")
+        return self
+
+    @model_validator(mode="after")
+    def append_text_only_for_append(self) -> "PlanStep":
+        # Saga #323: mergedFileName/redactedFileName ile AYNI desen -
+        # appendText SADECE APPEND için zorunlu, diğer operationType'larda
+        # tamamen yasak.
+        if self.operationType == OperationType.APPEND:
+            if self.appendText is None:
+                raise ValueError("appendText is required when operationType is APPEND")
+            if len(self.fileNames) != 1:
+                raise ValueError("fileNames must contain exactly 1 entry when operationType is APPEND")
+        elif self.appendText is not None:
+            raise ValueError("appendText must be omitted unless operationType is APPEND")
         return self
 
 

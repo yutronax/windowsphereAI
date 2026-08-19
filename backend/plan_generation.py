@@ -22,11 +22,14 @@ PLAN_SYSTEM_PROMPT = (
     '- "birleştir", "tek dosya yap" → "Birleştir"\n'
     '- "böl", "sayfalara ayır" → "Böl" (fileNames bu step için TAM OLARAK '
     "1 dosya içermeli — Böl tek bir kaynağı böler, birden fazla dosyayı "
-    "aynı step'te bölmek desteklenmez)\n\n"
+    "aynı step'te bölmek desteklenmez)\n"
+    '- "ekle", "not ekle", "sayfa ekle", "sonuna ekle" → "Ekle" (fileNames '
+    "bu step için TAM OLARAK 1 dosya içermeli — Ekle tek bir kaynağın "
+    "SONUNA yeni bir metin sayfası ekler)\n\n"
     "Sadece şu JSON şemasında yanıt ver: "
     '{"dateSource": "created_at", "sortOrder": "ascending"|"descending", '
     '"steps": [{"order": <negatif olmayan tamsayı>, "operationType": '
-    '"Taşı"|"Kopyala"|"Sil"|"Yeniden Adlandır"|"Listele"|"Birleştir"|"Böl", "targetFolder": '
+    '"Taşı"|"Kopyala"|"Sil"|"Yeniden Adlandır"|"Listele"|"Birleştir"|"Böl"|"Ekle", "targetFolder": '
     '<"YYYY-MM" formatında string>, "affectedFileCount": <negatif olmayan '
     'tamsayı>, "fileNames": [<bu step\'e ait TAM dosya adlarının listesi>], '
     '"newFileNames": [<SADECE operationType "Yeniden Adlandır" ise, '
@@ -36,7 +39,11 @@ PLAN_SYSTEM_PROMPT = (
     "bu step'teki fileNames'in birleştirileceği TEK yeni dosya adı (path "
     "ayracı OLMAYAN bir bare dosya adı, ör. \"birlesik.pdf\"); başka "
     "HERHANGİ bir operationType'ta bu alanı TAMAMEN ATLA, JSON'a hiç "
-    'koyma>}]}. dateSource ve sortOrder alanları AÇIKÇA belirtilmeli, '
+    'koyma>], "appendText": <SADECE operationType "Ekle" ise, bu step\'teki '
+    "tek kaynağın sonuna eklenecek KISA metin (birkaç cümle/paragraf, en "
+    "fazla 5000 karakter, boş/whitespace-only OLAMAZ); başka HERHANGİ bir "
+    "operationType'ta bu alanı TAMAMEN ATLA, JSON'a hiç koyma>}]}. "
+    "dateSource ve sortOrder alanları AÇIKÇA belirtilmeli, "
     "her targetFolder kesinlikle YYYY-MM formatında olmalı — 'Sil'/'Yeniden "
     "Adlandır'/'Listele' için targetFolder GERÇEKTEN KULLANILMAZ ama şema "
     "gereği yine de geçerli bir YYYY-MM string'i olmalı (ör. o step'teki "

@@ -1,9 +1,11 @@
+import os
 import shutil
 import time
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from backend.db import create_db_engine, create_session_factory
@@ -2158,4 +2160,128 @@ def test_purge_oversized_delete_backups_returns_list_of_purged_transaction_ids(s
     # Now call with lower threshold
     purged_ids = purge_oversized_delete_backups(session, tmp_path, max_total_mb=800.0)
     assert t1.id in purged_ids
-    assert len(purged_ids) == 1
+
+
+# Saga #323: APPEND operasyonu (pdf-append-safe, red step) -
+# `OperationType.APPEND`, `PlanStep.appendText` ve orchestrator'daki APPEND
+# dali henuz YOK. Bu testler simdilik KIRMIZI kalmali (AttributeError /
+# ValidationError / ModuleNotFoundError - hepsi beklenen red durumu).
+# Referans: artifacts/pdf-append-safe/atdd.md (AC-1..6), plan.md
+# (gecici-dosya+atomik-replace deseni, kaynak-yok vs kaynak-bozuk AYRI hata
+# mesajlari).
+
+
+def _append_step(order: int, file_name: str, append_text: str) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.APPEND,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=[file_name],
+        appendText=append_text,
+    )
+
+
+def test_apply_plan_appends_a_new_page_with_the_given_text_and_commits(session, tmp_path):
+    # AC-1: gecerli/okunabilir bir kaynak PDF + appendText verildiginde,
+    # sonuc dosyasinda ORIJINAL sayfa sayisi + 1 sayfa olmali.
+    from pypdf import PdfReader
+
+    original_page_count = 2
+    _write_real_pdf(tmp_path, "rapor.pdf", original_page_count)
+    pdf_files = [PdfFileMetadata(filename="rapor.pdf", createdAt="2026-08-01")]
+    plan = _plan([_append_step(0, "rapor.pdf", "incelendi ve onaylandı")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    reader = PdfReader(str(tmp_path / "rapor.pdf"))
+    assert len(reader.pages) == original_page_count + 1
+    assert transaction.status == "committed"
+
+
+def test_apply_plan_rejects_append_to_a_corrupt_source_and_leaves_it_untouched(session, tmp_path):
+    # AC-2: bozuk bir "PDF" ile APPEND denendiginde PlanApplicationError
+    # firlatilmali, mesaj "bozuk"/"okunamiyor" gibi bir ipucu icermeli, VE
+    # kaynak dosyanin byte icerigi islem oncesi/sonrasi AYNI kalmali (en
+    # kritik assertion - eski projenin kusuru tam olarak bunun kaybolmasiydi).
+    corrupt_bytes = b"not a real pdf"
+    (tmp_path / "bozuk.pdf").write_bytes(corrupt_bytes)
+    pdf_files = [PdfFileMetadata(filename="bozuk.pdf", createdAt="2026-08-01")]
+    plan = _plan([_append_step(0, "bozuk.pdf", "incelendi ve onaylandı")])
+
+    with pytest.raises(PlanApplicationError) as excinfo:
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    corrupt_message = str(excinfo.value)
+    assert "bozuk" in corrupt_message or "okunamıyor" in corrupt_message or "okunamiyor" in corrupt_message
+    assert (tmp_path / "bozuk.pdf").read_bytes() == corrupt_bytes
+
+
+def test_apply_plan_rejects_append_to_a_missing_source_with_a_distinct_message(session, tmp_path):
+    # AC-3: kaynak dosya HIC YOK -> AC-2'nin ("kaynak bozuk") mesajindan
+    # AYRI bir "bulunamadi" hatasi donmeli - eski projede bu ikisi AYNI koda
+    # dusuyordu, bu task'in cozdugu asil kusur bu.
+    corrupt_bytes = b"not a real pdf"
+    (tmp_path / "bozuk.pdf").write_bytes(corrupt_bytes)
+    pdf_files_corrupt = [PdfFileMetadata(filename="bozuk.pdf", createdAt="2026-08-01")]
+    plan_corrupt = _plan([_append_step(0, "bozuk.pdf", "incelendi ve onaylandı")])
+    with pytest.raises(PlanApplicationError) as corrupt_excinfo:
+        apply_plan(session, plan_corrupt, pdf_files_corrupt, tmp_path)
+    corrupt_message = str(corrupt_excinfo.value)
+
+    pdf_files_missing = [PdfFileMetadata(filename="yok.pdf", createdAt="2026-08-01")]
+    plan_missing = _plan([_append_step(0, "yok.pdf", "incelendi ve onaylandı")])
+    with pytest.raises(PlanApplicationError) as missing_excinfo:
+        apply_plan(session, plan_missing, pdf_files_missing, tmp_path)
+    missing_message = str(missing_excinfo.value)
+
+    assert "bulunamadı" in missing_message or "bulunamadi" in missing_message
+    assert missing_message != corrupt_message
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason=(
+        "Windows NTFS'te os.chmod(path, 0o000)/read-only bayragi dosya "
+        "sahibinin okuma/yazmasini AYNI sekilde engellemiyor (bkz. "
+        "test_file_search.py'deki ayni desen) - bu test Unix-only."
+    ),
+)
+def test_apply_plan_rejects_append_to_a_permission_denied_source(session, tmp_path):
+    # AC-4: salt-okunur/izin hatasi olan bir kaynakla APPEND denemesi hata
+    # dondurmeli, dosyaya dokunulmamali.
+    _write_real_pdf(tmp_path, "kilitli.pdf", 1)
+    target = tmp_path / "kilitli.pdf"
+    original_bytes = target.read_bytes()
+    os.chmod(target, 0o000)
+    try:
+        pdf_files = [PdfFileMetadata(filename="kilitli.pdf", createdAt="2026-08-01")]
+        plan = _plan([_append_step(0, "kilitli.pdf", "incelendi ve onaylandı")])
+
+        with pytest.raises(PlanApplicationError):
+            apply_plan(session, plan, pdf_files, tmp_path)
+    finally:
+        os.chmod(target, 0o644)
+
+    assert target.read_bytes() == original_bytes
+
+
+def test_append_text_empty_or_whitespace_only_is_rejected_by_pydantic():
+    # AC-5: appendText bos/whitespace-only ise Pydantic ValidationError
+    # firlatmali - model seviyesinde, apply_plan'a hic ulasmadan.
+    with pytest.raises(ValidationError):
+        _append_step(0, "rapor.pdf", "")
+
+    with pytest.raises(ValidationError):
+        _append_step(0, "rapor.pdf", "   ")
+
+
+def test_apply_plan_rejects_append_of_a_path_outside_allowed_root(session, tmp_path):
+    # AC-6: whitelist disi bir hedef ile APPEND plani - mevcut MERGE/REDACT
+    # testlerindeki whitelist-ihlali testinin AYNISI (bkz.
+    # test_apply_plan_rejects_redact_of_a_path_outside_allowed_root).
+    pdf_files = [PdfFileMetadata(filename="..", createdAt="2026-08-01")]
+    plan = _plan([_append_step(0, "..", "incelendi ve onaylandı")])
+
+    with pytest.raises(PathWhitelistError):
+        apply_plan(session, plan, pdf_files, tmp_path)

@@ -1,5 +1,37 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## PDF'e metin sayfası ekleme — veri kaybı güvenli tasarım (Saga #323, epic #29)
+
+**Bug-fix değil, sıfırdan özellik.** Eski projede (`core/agents/pdf_agent.py`)
+bu özellik vardı ama kritik bir kusur taşıyordu: kaynak PDF bozuksa "dosya
+yok" ile AYNI kod yoluna düşüp bozuk-ama-var-olan dosyanın TÜM önceki
+içeriğini sessizce silip üzerine yeni bir PDF yazabiliyordu. Yeni kod
+tabanında bu özellik hiç yoktu — sıfırdan, bu güvenlik garantisini baştan
+tasarımına gömerek eklendi: kaynak-yok ve kaynak-bozuk durumları AYRI kod
+yollarında, AYRI mesajlarla ele alınıyor; hiçbir yazma, kaynak BAŞARIYLA
+okunup yeni sayfa render edilmeden önce başlamıyor (MERGE/REDACT'ın
+geçici-dosya+atomik-replace deseni tekrar kullanıldı).
+
+**Yeni bir rollback varyantı gerekti.** APPEND, MOVE/COPY/MERGE/REDACT'ın
+aksine kaynağı YERİNDE günceller (hedef = kaynak) — bu yüzden rollback
+"hedefi silmek" değil, atomik değiştirmeden hemen önce alınan gizli bir
+yedeği geri kopyalamak şeklinde tasarlandı (`_rollback_append`,
+`_append_backup_path`). Bağımsız red-team bunu satır satır izleyip
+tutarsız ara durum riskinin olmadığını doğruladı.
+
+**Test-copilot turunda kalıntı bir satır bulundu.** `test_orchestrator.py`'ye
+eklenen bir testin sonuna ilgisiz bir başka testten (`purge_oversized_delete_backups`)
+kopyalanmış bir `assert` satırı kalmıştı (`NameError`) — implementasyon değil
+test dosyası hatası olduğu teyit edilip düzeltildi.
+
+**Red-team'in bulduğu ama bloklamayan bir bulgu:** APPEND'in yeni gizli
+yedek klasörü (`.windows-ai-files-append-backup`) DELETE'in kendi
+yedeklerinden farklı olarak hiç temizlenmiyor — disk şişmesi riski, ayrı
+bir takip görevi (task_d8391ecb) olarak flag'lendi.
+
+Yeni bağımlılık: `reportlab==5.0.0` (metin→PDF sayfa render için).
+376/376 backend test yeşil (5 skip, Windows-only).
+
 ## Scan endpoint'ine fuzzyName/namePattern forward (epic #27 red-team takibi)
 
 Saga #316'nın red-team incelemesinde bulunan kapsam boşluğu (task_c5e4c577)

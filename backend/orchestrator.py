@@ -55,6 +55,7 @@ _SUPPORTED_OPERATION_TYPES = {
     OperationType.OCR,
     OperationType.REDACT,
     OperationType.EXCEL_SORT,
+    OperationType.APPEND,
 }
 
 # DELETE'in fiziksel yedeklerinin saklandığı, `allowed_root` altında gizli
@@ -198,6 +199,92 @@ def _forward_redact(source_path: Path, page_number: int, regions: list, destinat
         raise
 
 
+def _render_text_page_bytes(text: str) -> bytes:
+    """Saga #323: `text`i A4 sayfaya duz metin olarak ceviren tek-sayfalik
+    bir PDF'in bytes'ini uretir (ReportLab). Uzun metinler `textwrap.wrap`
+    ile satirlara bolunur (plan.md: word-wrap gerekli)."""
+    import io
+    import textwrap
+
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buffer = io.BytesIO()
+    pdf_canvas = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+
+    left_margin = 50
+    top_margin = height - 50
+    line_height = 14
+
+    y = top_margin
+    for line in textwrap.wrap(text, width=90) or [""]:
+        pdf_canvas.drawString(left_margin, y, line)
+        y -= line_height
+
+    pdf_canvas.showPage()
+    pdf_canvas.save()
+    return buffer.getvalue()
+
+
+def _forward_append(source_path: Path, append_text: str, backup_path: Path | None = None) -> None:
+    """Saga #323: `source_path`in SONUNA `append_text`ten render edilmis
+    yeni bir sayfa ekler, kaynagi YERINDE gunceller (destination ==
+    source_path). Kaynak-yok (AC-3) ile kaynak-bozuk (AC-2) AYRI mesajlarla
+    ayirt edilir — eski projenin ikisini AYNI kod yoluna dusurup bozuk
+    kaynagin icerigini sessizce silen kusuru burada BILINCLI olarak
+    imkansiz kilinir: hicbir yazma islemi, kaynak BASARIYLA okunup yeni
+    sayfa render edilmeden ONCE baslamiyor (gecici-dosya+atomik-replace,
+    MERGE/REDACT ile AYNI desen).
+
+    `backup_path` verilirse (apply_plan'in rollback/revert desteği icin),
+    kaynak BASARIYLA okunup yeni sayfa render edildikten SONRA ama atomik
+    degistirmeden HEMEN ONCE (yani kaynagin son GECERLI hali biliniyorken)
+    kaynagin bir kopyasi oraya alinir - APPEND fiziksel olarak YERINDE
+    guncelleme yaptigi icin (COPY/MERGE/REDACT'in aksine), rollback icin
+    orijinal icerigin ayri bir yedegi gerekir."""
+    import io
+
+    from pypdf import PdfReader, PdfWriter
+
+    if not source_path.exists():
+        raise PlanApplicationError(
+            f"Kaynak dosya bulunamadı: '{source_path.name}'"
+        )
+
+    try:
+        source_reader = PdfReader(str(source_path))
+        source_pages = list(source_reader.pages)
+    except Exception as exc:
+        raise PlanApplicationError(
+            f"Kaynak PDF okunamıyor, bozuk olabilir: '{source_path.name}' ({exc})"
+        ) from exc
+
+    new_page_bytes = _render_text_page_bytes(append_text)
+    new_page_reader = PdfReader(io.BytesIO(new_page_bytes))
+
+    destination_path = source_path
+    fd, temp_path_str = tempfile.mkstemp(
+        suffix=".tmp", prefix=destination_path.name + ".", dir=str(destination_path.parent)
+    )
+    temp_path = Path(temp_path_str)
+    os.close(fd)
+    try:
+        writer = PdfWriter()
+        for page in source_pages:
+            writer.add_page(page)
+        writer.add_page(new_page_reader.pages[0])
+        writer.write(str(temp_path))
+        writer.close()
+        if backup_path is not None:
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(source_path), str(backup_path))
+        temp_path.replace(destination_path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
 _FORWARD_OPERATIONS = {
     OperationType.MOVE: _forward_move,
     OperationType.COPY: _forward_copy,
@@ -218,6 +305,15 @@ def _rollback_copy(destination_path: Path, backup_path: Path) -> None:
     # COPY'de kaynak hiç değişmedi — rollback SADECE hedefteki kopyayı siler,
     # backup_path'e (=kaynak) hiç dokunmaz.
     destination_path.unlink()
+
+
+def _rollback_append(destination_path: Path, backup_path: Path) -> None:
+    # Saga #323: APPEND, MOVE/COPY'nin aksine kaynağı YERİNDE günceller
+    # (destination_path == orijinal kaynak konumu) — bu yüzden rollback
+    # hedefi "silmek" değil, `_forward_append`in atomik değiştirmeden hemen
+    # önce aldığı gizli yedeği (backup_path) geri KOPYALAYARAK dosyayı
+    # eklenmiş sayfa öncesi haline döndürmektir.
+    shutil.copy2(str(backup_path), str(destination_path))
 
 
 _ROLLBACK_OPERATIONS = {
@@ -243,7 +339,20 @@ _ROLLBACK_OPERATIONS = {
     # Saga #324: EXCEL_SORT rollback'i de COPY ile AYNI - kaynak hic
     # degismedi, rollback SADECE hedefteki siralanmis dosyayi siler.
     OperationType.EXCEL_SORT: _rollback_copy,
+    # Saga #323: APPEND rollback'i - bkz. `_rollback_append` docstring'i.
+    OperationType.APPEND: _rollback_append,
 }
+
+
+# Saga #323: APPEND'in gizli yedeklerinin saklandığı, DELETE'in
+# `_DELETE_BACKUP_DIRNAME`'iyle AYNI desende ama AYRI bir klasör
+# (in-place güncellemenin yedeği DELETE'in "silinmiş dosya" yedeğiyle
+# karışmasın diye).
+_APPEND_BACKUP_DIRNAME = ".windows-ai-files-append-backup"
+
+
+def _append_backup_path(allowed_root: Path, transaction_id: int, filename: str) -> Path:
+    return allowed_root / _APPEND_BACKUP_DIRNAME / str(transaction_id) / filename
 
 
 def _rollback_completed_operations(operations: list[FileOperation], allowed_root: Path) -> bool:
@@ -592,6 +701,29 @@ def apply_plan(
                     raise PlanApplicationError(
                         f"Excel sıralama sütunu çözümlenemedi: '{source_path.name}' ({exc})"
                     ) from exc
+                operation.status = "completed"
+                session.commit()
+                applied.append(operation)
+                continue
+            if step.operationType == OperationType.APPEND:
+                # Saga #323: APPEND YERINDE gunceller - destination_path ==
+                # source_path (MERGE/REDACT/EXCEL_SORT'un aksine, kaynak
+                # gercekten degisir). Rollback icin ayrı bir backup_path
+                # (gizli klasor) kullanilir; bu, `record_file_operation`in
+                # backup_path alanina yazilir - `_rollback_append` bunu
+                # okuyup dosyayi eklenmis sayfa oncesi haline dondurur.
+                source_path = allowed_root / files[0].filename
+                destination_path = source_path
+                backup_path = _append_backup_path(allowed_root, transaction.id, files[0].filename)
+                operation = record_file_operation(
+                    session,
+                    transaction,
+                    operation_type=step.operationType.value,
+                    source_path=str(source_path),
+                    destination_path=str(destination_path),
+                    backup_path=str(backup_path),
+                )
+                _forward_append(source_path, step.appendText, backup_path=backup_path)
                 operation.status = "completed"
                 session.commit()
                 applied.append(operation)
