@@ -1,0 +1,53 @@
+{
+  "task": "dosya-arama-recursive (Saga #336)",
+  "reviewer": "independent red-team subagent",
+  "review_round": 2,
+  "security_findings": [
+    {
+      "finding": "RESOLVED (was medium in round 1): _iter_files_recursive() now accepts a timed_out list mutable signal, records start_time once at entry, and checks elapsed time against the 10s timeout at the top of every _walk() call (file_search.py lines 55-64), once per directory visited, BEFORE folder.iterdir() runs, not just inside the content-read loop. When the budget is exceeded it sets timed_out[0]=True and returns without recursing further, so partially-discovered files up to that point are still yielded. search_files() creates discovery_timed_out=[False], passes it into _iter_files_recursive, and seeds partial = discovery_timed_out[0] (file_search.py lines 198-199, 249) BEFORE the content_contains loop even starts, so a metadata-only search (no content_contains) on a huge or slow tree now correctly surfaces partial=True instead of hanging silently forever. The content-search loop can still only turn partial True, never back to False, preserving OR-semantics across both timeout sources. This closes the exact gap identified in round 1.",
+      "severity": "informational",
+      "scenario": "Verified with the new TestSearchFilesDiscoveryTimeoutWithoutContentContains test: monkeypatches time.monotonic to jump 11s ahead after the first call, calls search_files with name_contains set to file and return_partial=True, with NO content_contains argument, and asserts partial is True. This is precisely the previously-unprotected code path."
+    },
+    {
+      "finding": "Cycle protection is a single flat visited-set for the whole walk, not ancestor-path-only, unchanged from round 1, out of scope for this round since it was low severity and not the blocking finding.",
+      "severity": "low",
+      "scenario": "Same as round 1: a legitimate diamond-shaped reachability has its second occurrence silently skipped with no partial or error indication. Not re-verified in depth this round; carried forward as a known, accepted, non-blocking observation."
+    }
+  ],
+  "fix_verification": {
+    "verdict": "confirmed fixed",
+    "code_trace": "file_search.py line 27 _iter_files_recursive with timed_out signal; line 55 start_time captured once; lines 58-64 _walk() checks timed_out short-circuit AND elapsed time at the START of every directory visit before iterdir, setting timed_out[0]=True and returning early on breach; lines 71-103 the per-entry loop also re-checks timed_out before recursing into each child dir; search_files() line 198 creates discovery_timed_out=[False], line 199 passes it through, line 249 partial = discovery_timed_out[0] happens unconditionally, independent of whether content_contains was supplied.",
+    "test_trace": "backend/tests/test_file_search.py line 1026 TestSearchFilesDiscoveryTimeoutWithoutContentContains builds a 3-level by 10-files tree, monkeypatches time.monotonic to real-time on the first call then plus 11 seconds on every subsequent call, calls search_files with content_contains deliberately omitted, asserts partial is True and result is a list. This genuinely isolates the previously-unguarded pure-discovery path.",
+    "full_suite_run": "python -m pytest backend/tests/ -v executed directly by this reviewer: 350 passed, 4 skipped, 0 failed, 26.18 seconds. The 4 skips are the pre-existing Windows symlink-permission skips, unrelated to this fix and consistent with round 1."
+  },
+  "loop_protection_trace": {
+    "verdict": "correct for the documented AC-3 scenario (unchanged from round 1, not re-reviewed in depth this round)"
+  },
+  "behavior_contract_coverage_delta": [
+    {
+      "row": "6 Timeout -> partial:true",
+      "code_match": true,
+      "note": "Now fully covered for both code paths: content_contains timeout (pre-existing test) and discovery-only timeout (new test this round)."
+    },
+    {
+      "row": "7 Partial success -> partial:true with results so far",
+      "code_match": true,
+      "note": "Same resolution as row 6, discovery timeout still yields files discovered up to the cutoff point."
+    }
+  ],
+  "alternative_approach": {
+    "recommended_direction": "No architectural change recommended this round; the fix directly implements the exact direction proposed in round 1: push the same 10s deadline check into _iter_files_recursive itself, checked once per directory visited.",
+    "files_that_should_change": [],
+    "rationale": "The round-1 proposal has been implemented as specified; no further direction change is warranted for this specific finding. The remaining low-severity cycle-protection observation could be revisited in a future round if diamond-shaped symlink topologies become a real user scenario, but is not urgent enough to block this task."
+  },
+  "approved_points": [
+    "Discovery-phase timeout check happens before folder.iterdir() runs for each directory, not after enumerating entries, so a single pathologically large directory is still bounded by the per-directory check timing.",
+    "The mutable list-based timed_out signal correctly propagates across recursive _walk() generator calls without needing nonlocal or global state, and is checked both at function entry and mid-loop, so timeout detection latency is at most one directory-entries-iteration.",
+    "partial=True is OR-combined across discovery-timeout and content-timeout sources, preserving the existing content-timeout semantics while adding the new discovery-timeout source cleanly.",
+    "New test isolates the exact previously-unprotected scenario rather than just re-testing the already-covered content_contains timeout path.",
+    "Full test suite run independently by this reviewer confirms 350 passed, 4 skipped, 0 failed, no regressions introduced by the fix."
+  ],
+  "overall_assessment": "The round-1 medium-severity finding (unbounded pure-discovery walk when content_contains is omitted) is CONFIRMED FIXED. _iter_files_recursive() now takes a 10s time budget checked once per directory visited, signals timeout back to search_files() via a mutable timed_out list, and search_files() seeds partial=True from this signal unconditionally. A new, correctly-isolated test locks in this behavior without content_contains present. Full backend test suite re-run by this reviewer independently: 350 passed, 4 skipped, 0 failed. The remaining round-1 low-severity finding (flat cycle-protection visited-set) was not re-reviewed in depth this round and remains an accepted, non-blocking observation.",
+  "verdict": "approved",
+  "ready_to_commit": true
+}

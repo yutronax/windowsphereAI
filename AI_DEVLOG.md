@@ -1,5 +1,36 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Dosya aramayı recursive'e çevirme (Saga #336, epic #27)
+
+**Kapsam çelişkisinden doğan bölünme.** Saga #315 ("büyük klasör taramalarında
+ilerleme göstergesi") kendi açıklamasında "recursive taramalarda" diyordu, ama
+Saga #313/#314'teki arama BİLİNÇLİ olarak non-recursive'ti. Kullanıcıyla
+netleştirilip #315, #336 (recursive tarama) ve #337 (ilerleme göstergesi,
+#336'ya bağımlı) olarak ikiye bölündü.
+
+**ATDD sorusunda kendi hatam: yanlış derinlik sabiti.** Kullanıcıya derinlik
+sınırını sorarken "security.py'deki MAX_PATH_DEPTH ile aynı (5)" dedim — gerçek
+değer 3'tü. Plan aşamasında koda bakılırken fark edildi, atdd.md/plan.md'deki
+TÜM referanslar (5→3, "6. seviye"→"4. seviye") düzeltildi. Ders: emsal bir
+sabite atıfta bulunurken kodu OKUMADAN sayı vermemeli.
+
+**Test fixture'ında ikinci bir hata (bu kez subagent'ta), plan aşamasında
+öngörülmüştü.** AC-4 testi (`content_contains` recursive çalışıyor mu) fixture'ı
+`2024/Q1/Ocak/fatura.txt` (derinlik 4) kullanmıştı — bu AC-2'nin kendi sınırıyla
+(derinlik 3) matematiksel olarak çelişiyordu: aynı dosya hem "bulunmalı" hem
+"hariç tutulmalı" olamaz. İmplementasyon doğruydu (derinlik 4'ü doğru hariç
+tutuyordu), fixture derinliği `2024/Ocak/fatura.txt`e (derinlik 3) küçültülerek
+düzeltildi.
+
+**Döngü koruması iki katmanlı test edildi.** plan.md'nin önerisiyle, gerçek
+symlink gerektirmeyen bir birim test (ziyaret-edilen-path setinin çekirdek
+mantığını izole doğrulayan) + gerçek döngüsel symlink testi (Windows'ta skip)
+birlikte yazıldı — böylece AC-3'ün (sonsuz döngü koruması, en kritik AC)
+çekirdek mantığı Windows'ta da gerçekten doğrulanmış oldu, sadece "gerçek
+symlink" entegrasyonu platform sınırlaması nedeniyle atlandı.
+
+120/120 backend test yeşil (4 skip, Windows-only).
+
 ## Dosya Arama frontend UI (Saga #334, epic #27)
 
 **Bağımsız red-team turu gerçek bir sözleşme boşluğu buldu.** İlk implementasyon

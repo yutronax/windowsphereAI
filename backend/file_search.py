@@ -17,6 +17,95 @@ _MAX_CONTENT_SEARCH_BYTES = 10 * 1024 * 1024
 # AC-2: global tarama timeout'u.
 _CONTENT_SEARCH_TIMEOUT_SECONDS = 10.0
 
+# Saga #336 (dosya-arama-recursive) AC-2: allowed_root altinda izin verilen
+# azami alt klasor derinligi. DEGER `security.py::MAX_PATH_DEPTH` (=3) ile
+# AYNI ama BAGIMSIZ bir sabittir (plan.md karari: security.py'ye dokunulmuyor,
+# iki sabit gelecekte birbirinden sapabilir - bilincli trade-off).
+_MAX_RECURSIVE_DEPTH = 3
+
+
+def _iter_files_recursive(root: Path, timed_out: list[bool] | None = None):
+    """`root` altini derinlik `_MAX_RECURSIVE_DEPTH`'e kadar recursive
+    gezer, gorunur (gizli olmayan) dosyalari verir (yield).
+
+    - Gizli (nokta ile baslayan) klasorlerin ALTINA hic inilmez (AC-7).
+    - Gizli dosyalar atlanir (mevcut kural).
+    - Ziyaret edilen klasorlerin resolved path'leri bir sette tutulur;
+      dongusel bir yapiya (gercek symlink olsun ya da olmasin) tekrar
+      girilirse o klasor atlanir (AC-3, plan.md notu).
+    - `allowed_root` = `root`, derinlik sayimi `root`'un DOGRUDAN alti
+      derinlik 1 sayilir (atdd.md Assumptions).
+
+    Red-team follow-up (Saga #336, medium): gezinmenin KENDISI de
+    `_CONTENT_SEARCH_TIMEOUT_SECONDS` ile sinirlidir - `content_contains`
+    verilmese bile buyuk/yavas bir dizin agacinda gezinme asilip kalmasin
+    diye her dizin ziyaretinden once gecen sure kontrol edilir. Timeout
+    asilirsa o ana kadar kesfedilen dosyalarla gezinme durur; `timed_out`
+    (caginan tarafindan verilen mutable liste) True olarak isaretlenir ki
+    `search_files()` bunu `partial` bayragina yansitabilsin.
+    """
+    visited: set[Path] = set()
+
+    try:
+        root_resolved = root.resolve()
+    except OSError:
+        return
+    visited.add(root_resolved)
+
+    start_time = time.monotonic()
+
+    def _walk(folder: Path, depth: int):
+        if timed_out is not None and timed_out[0]:
+            return
+
+        if time.monotonic() - start_time > _CONTENT_SEARCH_TIMEOUT_SECONDS:
+            if timed_out is not None:
+                timed_out[0] = True
+            return
+
+        try:
+            entries = list(folder.iterdir())
+        except (PermissionError, OSError):
+            return
+
+        for entry in entries:
+            if timed_out is not None and timed_out[0]:
+                return
+
+            if entry.name.startswith("."):
+                # AC-7: gizli dosya/klasor - atla, altina hic inme.
+                continue
+
+            if entry.is_dir():
+                if depth >= _MAX_RECURSIVE_DEPTH:
+                    # AC-2: derinlik siniri asildi, bu alt klasore inme.
+                    continue
+
+                # AC-6: allowed_root disina isaret eden symlink klasorler de
+                # dislanir (mevcut _is_symlink_escaping_root kurali her
+                # seviyede uygulanmaya devam eder).
+                if _is_symlink_escaping_root(entry, root):
+                    continue
+
+                try:
+                    entry_resolved = entry.resolve()
+                except OSError:
+                    continue
+
+                if entry_resolved in visited:
+                    # AC-3: dongu tespiti - tekrar ziyaret edilen klasoru
+                    # atla, sonsuz donguye girme.
+                    continue
+                visited.add(entry_resolved)
+
+                yield from _walk(entry, depth + 1)
+                if timed_out is not None and timed_out[0]:
+                    return
+            elif entry.is_file():
+                yield entry
+
+    yield from _walk(root, 1)
+
 
 def _is_symlink_escaping_root(entry: Path, allowed_root: Path) -> bool:
     """AC-8: `entry` bir symlink ise ve hedefi `allowed_root.resolve()`
@@ -68,10 +157,10 @@ def search_files(
     content_contains: str | None = None,
     return_partial: bool = False,
 ) -> list[SearchResultItem] | tuple[list[SearchResultItem], bool]:
-    """`folder`ın DOĞRUDAN altındaki (alt klasörler dahil edilmez) dosyaları
-    filtreler. `discover_pdf_files` ile aynı stil: gizli (nokta ile başlayan)
-    dosyalar HER ZAMAN atlanır, non-recursive, non-existent klasör boş liste
-    döner.
+    """`folder` altını recursive olarak (derinlik sınırlı `_MAX_RECURSIVE_DEPTH`,
+    döngü korumalı) tarar ve dosyaları filtreler. Gizli (nokta ile başlayan)
+    dosya/klasörler HER ZAMAN atlanır (klasörlerin altına hiç inilmez),
+    non-existent klasör boş liste döner.
 
     Filtreler AND mantığıyla birleşir:
     - `name_contains`: filename içinde case-insensitive düz substring match
@@ -86,9 +175,13 @@ def search_files(
     latin-1 fallback zinciriyle okunur, case-insensitive substring aranir.
     Binary/10MB+/okunamayan/allowed_root disina isaret eden symlink
     dosyalar sessizce atlanir. Tum tarama 10sn'yi asarsa o ana kadarki
-    sonuclarla durur. `return_partial=True` verilirse `(sonuclar, partial)`
-    tuple'i doner, aksi halde sadece sonuc listesi doner (geriye donuk
-    uyumluluk)."""
+    sonuclarla durur. Dizin gezinmesinin (discovery, `content_contains`
+    verilmese bile) KENDISI de 10sn'yi asarsa ayni sekilde o ana kadar
+    kesfedilen dosyalarla durur (red-team follow-up, Saga #336 medium
+    bulgusu). `return_partial=True` verilirse `(sonuclar, partial)`
+    tuple'i doner (discovery-timeout VEYA content-timeout, ikisinden biri
+    olursa partial=True), aksi halde sadece sonuc listesi doner (geriye
+    donuk uyumluluk)."""
 
     def _finish(items: list[SearchResultItem], partial: bool):
         if return_partial:
@@ -98,12 +191,12 @@ def search_files(
     if not folder.is_dir():
         return _finish([], False)
 
-    # Tüm dosyaları topla (gizli dosyalar hariç)
-    files = [
-        entry
-        for entry in folder.iterdir()
-        if entry.is_file() and not entry.name.startswith(".")
-    ]
+    # Tüm dosyaları topla (recursive, gizli dosyalar/klasörler hariç,
+    # derinlik sınırı ve döngü koruması ile - Saga #336). `discovery_timed_out`
+    # gezinmenin (content_contains'ten BAGIMSIZ) kendisinin 10sn'yi asip
+    # asmadigini tasir (red-team follow-up, Saga #336 medium bulgusu).
+    discovery_timed_out = [False]
+    files = list(_iter_files_recursive(folder, timed_out=discovery_timed_out))
 
     # Filtreleri uygula
     filtered_files = []
@@ -149,7 +242,11 @@ def search_files(
     # taranir, sonuclarin sirali olma garantisini korur).
     sorted_files = sorted(filtered_files, key=lambda entry: entry.name)
 
-    partial = False
+    # Gezinme (discovery) asamasi zaten timeout'a ugradiysa partial=True
+    # ile basla - content_contains dongusu bunu ayrica True'ya cekebilir
+    # ama asla False'a geri dondurmez (content-timeout'un da mevcut
+    # davranisiyla tutarli).
+    partial = discovery_timed_out[0]
     result = []
 
     start_time = time.monotonic()

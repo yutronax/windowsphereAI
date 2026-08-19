@@ -765,11 +765,13 @@ class TestSearchFilesContentContainsAndOtherFilters:
         assert filenames == {"fatura_2024.pdf"}
 
 
-class TestSearchFilesContentContainsNonRecursive:
-    """AC-7 [Medium]: content_contains da recursive DEGIL — sadece
-    allowed_root'un dogrudan altindaki dosyalar taranir."""
+class TestSearchFilesContentContainsNowRecursive:
+    """Saga #336 (dosya-arama-recursive) atdd.md AC-4: content_contains ARTIK
+    recursive çalışır (Saga #314'teki eski non-recursive davranışın AKSİNE —
+    bu test eskiden "nested.txt sonuca girmez" bekliyordu; AC-1 ile tutarlı
+    olması için GÜNCELLENDİ: artık girmesi GEREKİYOR)."""
 
-    def test_subfolder_file_content_is_not_matched(self, tmp_path: Path) -> None:
+    def test_subfolder_file_content_is_matched(self, tmp_path: Path) -> None:
         (tmp_path / "top_level.txt").write_text(
             "fatura no 12345", encoding="utf-8"
         )
@@ -780,8 +782,7 @@ class TestSearchFilesContentContainsNonRecursive:
         result = search_files(tmp_path, content_contains="fatura no 12345")
 
         filenames = {item.filename for item in result}
-        assert filenames == {"top_level.txt"}
-        assert "nested.txt" not in filenames
+        assert filenames == {"top_level.txt", "nested.txt"}
 
 
 class TestSearchFilesContentContainsSymlinkEscape:
@@ -820,3 +821,306 @@ class TestSearchFilesContentContainsSymlinkEscape:
         filenames = {item.filename for item in result}
         assert "escape_link.txt" not in filenames
         assert "normal.txt" in filenames
+
+
+# --- Saga #336: dosya-arama-recursive (RED STEP) ---
+# `search_files()` su an SADECE `folder.iterdir()` ile `folder`'in DOGRUDAN
+# altini tarar (Saga #313/#314, non-recursive). Asagidaki testler
+# artifacts/dosya-arama-recursive/atdd.md AC-1..7'yi dogrular ve implementasyon
+# HENUZ YAPILMADIGI icin KIRMIZI olmalari BEKLENEN/DOGRU davranistir.
+# Derinlik sayimi: allowed_root'un DOGRUDAN altini derinlik 1 sayar (atdd.md
+# Assumptions), yani `allowed_root/a/b/dosya.pdf` derinlik 2'dir.
+# security.py::MAX_PATH_DEPTH = 3 DEGERI referans alinir (BAGIMSIZ sabit,
+# security.py'ye dokunulmuyor - bkz. plan.md Risks).
+
+
+class TestSearchFilesRecursiveDiscovery:
+    """AC-1 [Critical]: coklu seviyeli klasor yapisinda alt klasordeki
+    dosyalar da sonuca girmeli."""
+
+    def test_file_two_levels_deep_is_found(self, tmp_path: Path) -> None:
+        nested = tmp_path / "a" / "b"
+        nested.mkdir(parents=True)
+        (nested / "dosya.pdf").write_bytes(b"%PDF-1.4 fake")
+        (tmp_path / "top_level.pdf").write_bytes(b"%PDF-1.4 fake")
+
+        result = search_files(tmp_path)
+
+        filenames = {item.filename for item in result}
+        assert "dosya.pdf" in filenames
+        assert "top_level.pdf" in filenames
+
+    def test_file_two_levels_deep_is_found_with_name_filter(
+        self, tmp_path: Path
+    ) -> None:
+        nested = tmp_path / "2024" / "Q1"
+        nested.mkdir(parents=True)
+        (nested / "fatura_ocak.pdf").write_bytes(b"%PDF-1.4 fake")
+
+        result = search_files(tmp_path, name_contains="fatura")
+
+        filenames = {item.filename for item in result}
+        assert filenames == {"fatura_ocak.pdf"}
+
+
+class TestSearchFilesDepthLimit:
+    """AC-2 [Critical]: security.py::MAX_PATH_DEPTH (3) asan dosyalar
+    sessizce sonuc disi birakilir, hata firlamaz."""
+
+    def test_file_beyond_max_depth_is_excluded_without_error(
+        self, tmp_path: Path
+    ) -> None:
+        # allowed_root/a/b/c/dosya.pdf -> derinlik 4, MAX_PATH_DEPTH=3'u asiyor.
+        too_deep = tmp_path / "a" / "b" / "c"
+        too_deep.mkdir(parents=True)
+        (too_deep / "too_deep.pdf").write_bytes(b"%PDF-1.4 fake")
+
+        # allowed_root/a/b/dosya.pdf -> derinlik 3, sinir icinde, gorunmeli.
+        within_limit = tmp_path / "a" / "b"
+        (within_limit / "within_limit.pdf").write_bytes(b"%PDF-1.4 fake")
+
+        result = search_files(tmp_path)
+
+        filenames = {item.filename for item in result}
+        assert "too_deep.pdf" not in filenames
+        assert "within_limit.pdf" in filenames
+
+
+class TestSearchFilesCycleProtection:
+    """AC-3 [Critical]: dongusel bir yapiya (gercek symlink olsun ya da
+    olmasin) girildiginde sonsuz donguye GIRILMEZ - ziyaret edilen resolved
+    path'ler bir sette tutulur, tekrar gorulen dizin atlanir."""
+
+    def test_visited_path_tracking_prevents_infinite_loop_without_real_symlink(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """plan.md Risks notu: AC-3'un CEKIRDEK mantigi (ziyaret edilen
+        resolved-path seti) gercek symlink KULLANMADAN, `Path.resolve()`
+        sahte bir dongu uretecek sekilde monkeypatch'lenerek test edilir -
+        boylece Windows'ta da (symlink admin yetkisi gerekmeden) gercekten
+        dogrulanir. `A/loop_back` gercekte AYRI bir klasordur, ama
+        `.resolve()`'i KASITLI olarak `A`nin resolved path'iyle AYNI deger
+        donecek sekilde sahtelenir - tipki `A/link -> A` gercek dongusel
+        symlink'inin davranacagi gibi."""
+        root_a = tmp_path / "A"
+        root_a.mkdir()
+        (root_a / "file_in_a.txt").write_text("icerik", encoding="utf-8")
+
+        loop_back = root_a / "loop_back"
+        loop_back.mkdir()
+        # loop_back'in altina da bir dosya koyalim - eger dongu korumasi
+        # calismiyorsa buraya asla inilmeyecek zaten (resolve sahteligi
+        # yuzunden "zaten ziyaret edildi" sayilmasi gerekiyor), calisiyorsa
+        # bu dosya higbir zaman ikinci kez "A" olarak taranmayacak.
+        (loop_back / "should_not_cause_recursion.txt").write_text(
+            "icerik", encoding="utf-8"
+        )
+
+        resolved_a = root_a.resolve()
+        original_resolve = Path.resolve
+
+        def fake_resolve(self: Path, *args, **kwargs):
+            if self == loop_back:
+                return resolved_a
+            return original_resolve(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", fake_resolve)
+
+        # Bu cagri sonsuz donguye girerse test hicbir zaman bitmez (pytest
+        # kendi global suresinde takilir) - testin TAMAMLANMASININ KENDISI
+        # dongu korumasinin calistiginin kaniti (atdd.md Benchmark notu).
+        result = search_files(tmp_path)
+
+        filenames = {item.filename for item in result}
+        assert "file_in_a.txt" in filenames
+
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason=(
+            "Windows'ta os.symlink() admin/developer-mode yetkisi gerektirir; "
+            "CI/gelistirme ortaminda bu yetki garanti degil, bu yuzden "
+            "Windows'ta atlanir (Unix'te calisir)."
+        ),
+    )
+    def test_real_cyclic_symlink_completes_without_hanging(
+        self, tmp_path: Path
+    ) -> None:
+        """A klasoru altinda A'ya geri donen gercek bir dongusel symlink
+        (A/link -> A). Aramanin sonsuz donguye girmeden, makul surede
+        TAMAMLANMASI tek basina en kritik kanittir (atdd.md Benchmark)."""
+        root_a = tmp_path / "A"
+        root_a.mkdir()
+        (root_a / "normal.txt").write_text("icerik", encoding="utf-8")
+
+        cyclic_link = root_a / "link"
+        os.symlink(root_a, cyclic_link, target_is_directory=True)
+
+        result = search_files(tmp_path)
+
+        filenames = {item.filename for item in result}
+        assert "normal.txt" in filenames
+
+
+class TestSearchFilesContentContainsRecursive:
+    """AC-4 [High]: content_contains da recursive calisir, AC-1 ile ayni
+    derinlik/dongu kurallarina tabidir."""
+
+    def test_content_search_finds_match_in_nested_folder(
+        self, tmp_path: Path
+    ) -> None:
+        # Derinlik 3 (tmp_path/2024/Ocak/fatura.txt) - security.py::MAX_PATH_DEPTH
+        # (=3) sinirinin TAM ICINDE kalir; derinlik 4 (2024/Q1/Ocak/fatura.txt)
+        # AC-2 tarafindan zaten hariç tutulur, bu test onunla celismemeli.
+        nested = tmp_path / "2024" / "Ocak"
+        nested.mkdir(parents=True)
+        (nested / "fatura.txt").write_text(
+            "fatura no 98765 - odendi", encoding="utf-8"
+        )
+        (tmp_path / "top_level.txt").write_text(
+            "alakasiz icerik", encoding="utf-8"
+        )
+
+        result = search_files(tmp_path, content_contains="fatura no 98765")
+
+        filenames = {item.filename for item in result}
+        assert filenames == {"fatura.txt"}
+
+
+class TestSearchFilesRecursiveTimeout:
+    """AC-5 [High]: recursive baglamda da 10sn timeout uygulanir, o ana
+    kadarki sonuclarla partial=True doner (Saga #314 timeout deseniyle
+    tutarli)."""
+
+    def test_recursive_search_times_out_and_returns_partial_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for level in range(3):
+            level_dir = tmp_path / f"level_{level}"
+            level_dir.mkdir()
+            for i in range(10):
+                (level_dir / f"file_{i}.txt").write_text(
+                    "fatura no 12345", encoding="utf-8"
+                )
+
+        import time as time_module
+
+        real_monotonic = time_module.monotonic
+        call_count = {"n": 0}
+
+        def fake_monotonic():
+            call_count["n"] += 1
+            if call_count["n"] <= 1:
+                return real_monotonic()
+            return real_monotonic() + 11
+
+        monkeypatch.setattr(time_module, "monotonic", fake_monotonic)
+
+        result, partial = search_files(
+            tmp_path, content_contains="fatura no 12345", return_partial=True
+        )
+
+        assert partial is True
+        assert isinstance(result, list)
+
+
+class TestSearchFilesDiscoveryTimeoutWithoutContentContains:
+    """Red-team follow-up (Saga #336, medium): `content_contains` VERİLMEDEN
+    (sadece name_contains gibi bir filtreyle) gezinmenin KENDİSİ 10sn'yi
+    aşarsa `partial=True` dönmeli - eskiden bu durumda hiçbir zaman bütçesi
+    yoktu."""
+
+    def test_discovery_times_out_without_content_contains_and_returns_partial(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for level in range(3):
+            level_dir = tmp_path / f"level_{level}"
+            level_dir.mkdir()
+            for i in range(10):
+                (level_dir / f"file_{i}.txt").write_text(
+                    "icerik", encoding="utf-8"
+                )
+
+        import time as time_module
+
+        real_monotonic = time_module.monotonic
+        call_count = {"n": 0}
+
+        def fake_monotonic():
+            # İlk çağrıdan sonra zamanı 11 saniye ileri attır, bu yüzden
+            # discovery (gezinme) icin de global 10sn timeout hemen
+            # tetiklenir - content_contains hic verilmiyor.
+            call_count["n"] += 1
+            if call_count["n"] <= 1:
+                return real_monotonic()
+            return real_monotonic() + 11
+
+        monkeypatch.setattr(time_module, "monotonic", fake_monotonic)
+
+        result, partial = search_files(
+            tmp_path, name_contains="file", return_partial=True
+        )
+
+        assert partial is True
+        assert isinstance(result, list)
+
+
+class TestSearchFilesRecursiveSymlinkEscape:
+    """AC-6 [Medium]: allowed_root disina isaret eden bir symlink, alt
+    klasorde (recursive derinlikte) olsa bile dislanir (Saga #314 AC-8'in
+    recursive baglamda da gecerliligi)."""
+
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason=(
+            "Windows'ta os.symlink() admin/developer-mode yetkisi gerektirir; "
+            "CI/gelistirme ortaminda bu yetki garanti degil, bu yuzden "
+            "Windows'ta atlanir (Unix'te calisir)."
+        ),
+    )
+    def test_nested_symlink_pointing_outside_allowed_root_is_excluded(
+        self, tmp_path: Path
+    ) -> None:
+        allowed_root = tmp_path / "allowed_root"
+        nested = allowed_root / "a" / "b"
+        nested.mkdir(parents=True)
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+
+        secret_file = outside_dir / "secret.txt"
+        secret_file.write_text("fatura no 12345 GIZLI", encoding="utf-8")
+
+        symlink_path = nested / "escape_link.txt"
+        os.symlink(secret_file, symlink_path)
+
+        (nested / "normal.txt").write_text("fatura no 12345", encoding="utf-8")
+
+        result = search_files(allowed_root, content_contains="fatura no 12345")
+
+        filenames = {item.filename for item in result}
+        assert "escape_link.txt" not in filenames
+        assert "normal.txt" in filenames
+
+
+class TestSearchFilesHiddenFolderNotDescended:
+    """AC-7 [Medium]: gizli (nokta ile baslayan) bir alt klasorun ALTINA
+    hic inilmez - mevcut gizli-DOSYA-atlama kuralinin klasorlere de
+    genisletilmesi."""
+
+    def test_files_under_hidden_subfolder_are_never_scanned(
+        self, tmp_path: Path
+    ) -> None:
+        git_dir = tmp_path / ".git"
+        git_dir.mkdir()
+        (git_dir / "config").write_text("gizli git config", encoding="utf-8")
+        nested_in_git = git_dir / "objects"
+        nested_in_git.mkdir()
+        (nested_in_git / "deep_file.txt").write_text("icerik", encoding="utf-8")
+
+        (tmp_path / "visible.txt").write_text("icerik", encoding="utf-8")
+
+        result = search_files(tmp_path)
+
+        filenames = {item.filename for item in result}
+        assert filenames == {"visible.txt"}
+        assert "config" not in filenames
+        assert "deep_file.txt" not in filenames
