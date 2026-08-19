@@ -251,3 +251,119 @@ def test_scan_ids_are_uuid_formatted_not_sequential(tmp_path):
     assert _UUID4_RE.match(second_id), f"scan_id uuid4 formatinda degil: {second_id}"
     # Sirali/artan bir sayac DEGIL (ornegin "1", "2") — threat-model AC-S1.
     assert first_id != "1" and second_id != "2"
+
+
+# ============================================================================
+# scan-fuzzy-name-pattern-forward (RED STEP)
+#
+# `_run_scan`'e gecirilen kwargs'ta `fuzzy_name`/`name_pattern` YOK (main.py
+# satir ~581-587) ve `start_search_scan`'de bu iki alan icin 422
+# validasyonu da YOK (senkron `search_endpoint`'in aksine). Bu yuzden
+# asagidaki AC-1/AC-2 testleri "beklenen dosya sonucta bulunamadi" (bos
+# results) ile, AC-3/AC-4 testleri ise "422 yerine 202 donuyor" ile
+# KIRMIZI olmalidir.
+#
+# Referans: artifacts/scan-fuzzy-name-pattern-forward/atdd.md (AC-1..4)
+# ============================================================================
+
+
+def _wait_for_scan_done(scan_id: str, deadline_seconds: float = 2.0):
+    deadline = time.monotonic() + deadline_seconds
+    status_response = None
+    while time.monotonic() < deadline:
+        status_response = client.get(f"/api/search/scan/{scan_id}")
+        if status_response.json().get("status") == "done":
+            break
+        time.sleep(0.02)
+    return status_response
+
+
+def test_scan_with_fuzzy_name_finds_typo_matched_file_after_completion(tmp_path):
+    """AC-1 [Critical]: fuzzyName="fatuura" ile baslatilan scan tamamlandiginda
+    "fatura.pdf" (Levenshtein mesafesi <=2) sonuclarda bulunmali."""
+    (tmp_path / "fatura.pdf").write_text("fatura icerigi")
+    (tmp_path / "alakasiz.txt").write_text("alakasiz icerik")
+    session_id = _create_session(str(tmp_path))
+
+    start_response = client.post(
+        "/api/search/scan",
+        json={"sessionId": session_id, "fuzzyName": "fatuura"},
+    )
+    assert start_response.status_code == 202
+    scan_id = start_response.json()["scanId"]
+
+    status_response = _wait_for_scan_done(scan_id)
+
+    assert status_response is not None
+    assert status_response.status_code == 200
+    body = status_response.json()
+    assert body["status"] == "done"
+    result_names = [r["filename"] for r in body["results"]]
+    assert "fatura.pdf" in result_names, (
+        f"fuzzyName='fatuura' ile 'fatura.pdf' bulunamadi (results={result_names}) — "
+        "_run_scan fuzzy_name'i search_files'a forward etmiyor"
+    )
+    # fuzzyName filtre olarak uygulanmadiysa TUM dosyalar (alakasiz.txt dahil)
+    # dondurulur — bu, filtrelemenin gercekten calistigini ayirt eder
+    # (aksi halde test "unfiltered" sonucla da sessizce gecer).
+    assert "alakasiz.txt" not in result_names, (
+        f"fuzzyName filtre olarak uygulanmamis, alakasiz.txt de sonuclarda (results={result_names})"
+    )
+
+
+def test_scan_with_name_pattern_finds_regex_matched_file_after_completion(tmp_path):
+    """AC-2 [Critical]: namePattern="fat.*" ile baslatilan scan tamamlandiginda
+    "fatura.pdf" sonuclarda bulunmali."""
+    (tmp_path / "fatura.pdf").write_text("fatura icerigi")
+    (tmp_path / "alakasiz.txt").write_text("alakasiz icerik")
+    session_id = _create_session(str(tmp_path))
+
+    start_response = client.post(
+        "/api/search/scan",
+        json={"sessionId": session_id, "namePattern": "fat.*"},
+    )
+    assert start_response.status_code == 202
+    scan_id = start_response.json()["scanId"]
+
+    status_response = _wait_for_scan_done(scan_id)
+
+    assert status_response is not None
+    assert status_response.status_code == 200
+    body = status_response.json()
+    assert body["status"] == "done"
+    result_names = [r["filename"] for r in body["results"]]
+    assert "fatura.pdf" in result_names, (
+        f"namePattern='fat.*' ile 'fatura.pdf' bulunamadi (results={result_names}) — "
+        "_run_scan name_pattern'i search_files'a forward etmiyor"
+    )
+    # namePattern filtre olarak uygulanmadiysa TUM dosyalar (alakasiz.txt dahil)
+    # dondurulur — bu, filtrelemenin gercekten calistigini ayirt eder.
+    assert "alakasiz.txt" not in result_names, (
+        f"namePattern filtre olarak uygulanmamis, alakasiz.txt de sonuclarda (results={result_names})"
+    )
+
+
+def test_scan_start_returns_422_for_invalid_name_pattern_regex_same_as_sync_search(tmp_path):
+    """AC-3 [High]: gecersiz regex ("(") ile /api/search/scan cagrilirsa
+    422 doner (tarama hic baslatilmaz) — /api/search'teki AYNI davranis."""
+    session_id = _create_session(str(tmp_path))
+
+    response = client.post(
+        "/api/search/scan",
+        json={"sessionId": session_id, "namePattern": "("},
+    )
+
+    assert response.status_code == 422
+
+
+def test_scan_start_returns_422_when_fuzzy_name_and_name_pattern_together(tmp_path):
+    """AC-4 [High]: fuzzyName VE namePattern AYNI istekte birlikte
+    /api/search/scan'e verilirse 422 doner (tarama hic baslatilmaz)."""
+    session_id = _create_session(str(tmp_path))
+
+    response = client.post(
+        "/api/search/scan",
+        json={"sessionId": session_id, "fuzzyName": "x", "namePattern": "y"},
+    )
+
+    assert response.status_code == 422

@@ -1,0 +1,44 @@
+{
+  "task": "scan-fuzzy-name-pattern-forward",
+  "reviewed_at": "2026-08-19",
+  "summary": "backend/main.py diff'i git diff ile satır satır doğrulandı: search_endpoint'teki eski satır içi fuzzyName/namePattern doğrulama mantığı, mesaj metinleri ve status kodları (422) DEĞİŞMEDEN _validate_fuzzy_regex_or_422'ye taşınmış. start_search_scan'de bu validasyon scan_id üretiminden ve _scans kaydından ÖNCE çağrılıyor, bu yüzden geçersiz girdide bellek sızıntısı riski yok. _run_scan'e eklenen fuzzy_name/name_pattern parametreleri immutable string değerler olarak kwargs ile geçiriliyor, paylaşılan mutable state yok, thread-safety bozulmamış. Kapsam atdd.md ile birebir örtüşüyor, yeni davranış icat edilmemiş.",
+  "findings": [
+    {
+      "severity": "low",
+      "category": "test-gap",
+      "file": "backend/tests/test_search_scan.py",
+      "issue": "AC-3/AC-4 testleri (test_scan_start_returns_422_for_invalid_name_pattern_regex_same_as_sync_search, test_scan_start_returns_422_when_fuzzy_name_and_name_pattern_together) sadece response.status_code == 422 doğruluyor; atdd.md Davranış Sözleşmesi tablosundaki '_scans kaydı hiç oluşmaz' iddiasını doğrudan (örn. GET /api/search/scan/{tahmini_id} veya iç _scans dict boyutu üzerinden) doğrulamıyor.",
+      "better_approach": "Testlere, 422 sonrası _scans dict'in scan öncesi/sonrası boyutunun değişmediğini (veya en azından yanıtta scanId dönmediğini) doğrulayan bir assert eklenebilir.",
+      "reason": "Kod incelemesinde (main.py satır 582-588) validasyonun scan_id üretiminden önce çağrıldığı doğrulandı, dolayısıyla mevcut davranış doğru; ancak bu regresyona karşı testle kilitlenmemiş — gelecekte biri validasyonu scan_id üretiminden sonraya taşırsa hiçbir test bunu yakalamaz."
+    }
+  ],
+  "strengths": [
+    "git diff backend/main.py, search_endpoint'teki eski satır içi kodun (mesaj metinleri: 'fuzzyName ve namePattern aynı anda kullanılamaz', 'namePattern geçersiz regex: ...', her ikisi de 422 UNPROCESSABLE_ENTITY) birebir aynı şekilde _validate_fuzzy_regex_or_422'ye taşındığını gösteriyor — davranış kayması yok.",
+    "start_search_scan içinde _validate_fuzzy_regex_or_422(payload) çağrısı, scan_id = str(uuid.uuid4()) ve _scans[scan_id] = ScanState(...) satırlarından ÖNCE konumlanmış (main.py satır 582 vs 585-588) — geçersiz girdide _scans kaydı hiç oluşmuyor, bellek sızıntısı riski yok.",
+    "_run_scan imzasına eklenen fuzzy_name/name_pattern parametreleri (str | None) immutable, thread'e kwargs olarak salt-okunur geçiriliyor; _scans_lock kullanan tek paylaşılan mutable state (_scans dict) bu değişiklikten etkilenmiyor.",
+    "Ortak yardımcı fonksiyon (_validate_fuzzy_regex_or_422) DRY prensibini uyguluyor ve kod tekrarını önlüyor, CAVEMAN açısından gereksiz bir soyutlama değil — iki endpoint arasında gerçek kod tekrarını ortadan kaldırıyor.",
+    "Test coverage: 371 passed, 0 failed (verify_report.md); AC-1/AC-2 testleri filtre uygulanmazsa da geçebilecek yanlış-pozitif riskini ele almak için 'alakasiz.txt' dosyasının sonuçlarda OLMADIĞINI da doğruluyor — güçlü test tasarımı."
+  ],
+  "risks": [],
+  "caveman_review": {
+    "complexity": "low",
+    "unnecessary_files": 0,
+    "unnecessary_helpers": 0,
+    "unnecessary_abstractions": 0
+  },
+  "scope_review": {
+    "matches_atdd": true,
+    "scope_expansion": false
+  },
+  "ready_to_commit": {
+    "atdd_satisfied": true,
+    "tests_passed": true,
+    "no_critical_findings": true,
+    "scope_respected": true,
+    "caveman_satisfied": true,
+    "security_acceptable": true,
+    "maintainability_acceptable": true,
+    "no_blocking_risks": true
+  },
+  "verdict": "approve"
+}

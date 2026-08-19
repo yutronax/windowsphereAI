@@ -1,5 +1,16 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Scan endpoint'ine fuzzyName/namePattern forward (epic #27 red-team takibi)
+
+Saga #316'nın red-team incelemesinde bulunan kapsam boşluğu (task_c5e4c577)
+kapatıldı — asenkron `/api/search/scan` artık senkron `/api/search` ile
+BİREBİR aynı fuzzy/regex davranışını uyguluyor. `_validate_fuzzy_regex_or_422`
+ortak yardımcı fonksiyonuna çıkarılarak kod tekrarı da önlendi. Ayrıca
+pypdf/pillow güvenlik güncellemesi de bu aralıkta yapıldı (requirements.txt),
+`security-scan` artık TAM PASS (daha önce python_deps FAIL idi).
+
+371/371 backend test yeşil (4 skip, Windows-only).
+
 ## Fuzzy dosya adı + regex desen arama (Saga #316, epic #27) — epic'in son task'ı
 
 **Bağımsız red-team turu iki gerçek, ucuz bulgu buldu.** İlk implementasyon,

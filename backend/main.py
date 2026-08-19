@@ -108,6 +108,8 @@ def _run_scan(
     modified_after: dt.datetime | None,
     modified_before: dt.datetime | None,
     content_contains: str | None,
+    fuzzy_name: str | None = None,
+    name_pattern: str | None = None,
 ) -> None:
     """Arka plan thread'inde çalışır — `search_files`'ı çağırır ve sonucu
     `_scans[scan_id]`'e yazar (AC-1: `POST /api/search/scan` bunu BEKLEMEZ).
@@ -131,6 +133,8 @@ def _run_scan(
             modified_after=modified_after,
             modified_before=modified_before,
             content_contains=content_contains,
+            fuzzy_name=fuzzy_name,
+            name_pattern=name_pattern,
             return_partial=True,
         )
     except Exception:
@@ -499,6 +503,28 @@ def _parse_search_date(value: str | None, field_name: str) -> dt.datetime | None
     return parsed
 
 
+def _validate_fuzzy_regex_or_422(payload: SearchRequest) -> None:
+    """`/api/search` ve `/api/search/scan` arasında paylaşılan fuzzyName/
+    namePattern doğrulama mantığı (refaktör, davranış aynı, Saga #316)."""
+    # Saga #316 AC-4: fuzzyName ve namePattern birbirini dislar, ikisi
+    # birden verilirse 422.
+    if payload.fuzzyName is not None and payload.namePattern is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="fuzzyName ve namePattern aynı anda kullanılamaz",
+        )
+
+    # Saga #316 AC-3: gecersiz regex erkenden 422 ile reddedilir, 500 degil.
+    if payload.namePattern is not None:
+        try:
+            re.compile(payload.namePattern)
+        except re.error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"namePattern geçersiz regex: '{payload.namePattern}'",
+            )
+
+
 @app.post("/api/search")
 def search_endpoint(
     payload: SearchRequest,
@@ -517,23 +543,7 @@ def search_endpoint(
     modified_after = _parse_search_date(payload.modifiedAfter, "modifiedAfter")
     modified_before = _parse_search_date(payload.modifiedBefore, "modifiedBefore")
 
-    # Saga #316 AC-4: fuzzyName ve namePattern birbirini dislar, ikisi
-    # birden verilirse 422.
-    if payload.fuzzyName is not None and payload.namePattern is not None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="fuzzyName ve namePattern aynı anda kullanılamaz",
-        )
-
-    # Saga #316 AC-3: gecersiz regex erkenden 422 ile reddedilir, 500 degil.
-    if payload.namePattern is not None:
-        try:
-            re.compile(payload.namePattern)
-        except re.error:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"namePattern geçersiz regex: '{payload.namePattern}'",
-            )
+    _validate_fuzzy_regex_or_422(payload)
 
     results, partial = search_files(
         allowed_root,
@@ -569,6 +579,8 @@ def start_search_scan(
     modified_after = _parse_search_date(payload.modifiedAfter, "modifiedAfter")
     modified_before = _parse_search_date(payload.modifiedBefore, "modifiedBefore")
 
+    _validate_fuzzy_regex_or_422(payload)
+
     # AC-S1 (threat-model): tahmin edilemez, sıralı-olmayan kimlik.
     scan_id = str(uuid.uuid4())
     with _scans_lock:
@@ -584,6 +596,8 @@ def start_search_scan(
             "modified_after": modified_after,
             "modified_before": modified_before,
             "content_contains": payload.contentContains,
+            "fuzzy_name": payload.fuzzyName,
+            "name_pattern": payload.namePattern,
         },
         daemon=True,
     )
