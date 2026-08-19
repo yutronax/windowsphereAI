@@ -3050,3 +3050,316 @@ def test_apply_plan_rejects_word_append_table_of_a_path_outside_allowed_root(
         apply_plan(session, plan, pdf_files, tmp_path)
 
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Saga #328: zip-temel-operasyonlar (TEST-FIRST / red step) -
+# `OperationType.ZIP_CREATE/ZIP_ADD/ZIP_EXTRACT/ZIP_MERGE`, ilgili
+# `PlanStep` alanları (zippedFileName/destinationFolder/filesToAdd/
+# addedFileName/mergedZipFileName) ve orchestrator'daki 4 yeni step-
+# uygulama bloğu henüz YOK. Bu testler şimdilik KIRMIZI kalmalı
+# (AttributeError/ValidationError - EXCEL_FILTER'in red-step testleriyle
+# AYNI desen). Referans: artifacts/zip-temel-operasyonlar/atdd.md (AC-1..
+# AC-6), plan.md.
+# ---------------------------------------------------------------------------
+
+
+import zipfile as _zipfile
+
+
+def _write_zip_file(root, filename: str, entries: dict[str, bytes]) -> None:
+    with _zipfile.ZipFile(root / filename, "w") as zf:
+        for name, data in entries.items():
+            zf.writestr(name, data)
+
+
+def _zip_create_step(order: int, file_names: list[str], zipped_file_name: str) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.ZIP_CREATE,
+        targetFolder="2026-08",
+        affectedFileCount=len(file_names),
+        fileNames=file_names,
+        zippedFileName=zipped_file_name,
+    )
+
+
+def _zip_add_step(order: int, file_name: str, files_to_add: list[str], added_file_name: str) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.ZIP_ADD,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=[file_name],
+        filesToAdd=files_to_add,
+        addedFileName=added_file_name,
+    )
+
+
+def _zip_extract_step(order: int, file_name: str, destination_folder: str) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.ZIP_EXTRACT,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=[file_name],
+        destinationFolder=destination_folder,
+    )
+
+
+def _zip_merge_step(order: int, file_names: list[str], merged_zip_file_name: str) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.ZIP_MERGE,
+        targetFolder="2026-08",
+        affectedFileCount=len(file_names),
+        fileNames=file_names,
+        mergedZipFileName=merged_zip_file_name,
+    )
+
+
+# --- ZIP_CREATE ---
+
+
+def test_apply_plan_zip_create_writes_a_new_zip_with_the_given_files(session, tmp_path):
+    _write_pdf(tmp_path, "a.pdf")
+    _write_pdf(tmp_path, "b.pdf")
+    pdf_files = [
+        PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
+    ]
+    plan = _plan([_zip_create_step(0, ["a.pdf", "b.pdf"], "arsiv.zip")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    output_path = tmp_path / "arsiv.zip"
+    assert output_path.exists()
+    with _zipfile.ZipFile(output_path) as zf:
+        assert sorted(zf.namelist()) == ["a.pdf", "b.pdf"]
+    assert transaction.status == "committed"
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_rejects_zip_create_when_a_source_file_is_missing(session, tmp_path):
+    _write_pdf(tmp_path, "a.pdf")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = _plan([_zip_create_step(0, ["a.pdf", "yok.pdf"], "arsiv.zip")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "arsiv.zip").exists()
+
+
+def test_apply_plan_rejects_zip_create_of_a_path_outside_allowed_root(session, tmp_path, monkeypatch):
+    pdf_files = [PdfFileMetadata(filename="..", createdAt="2026-08-01")]
+    plan = _plan([_zip_create_step(0, [".."], "arsiv.zip")])
+
+    calls: list = []
+    monkeypatch.setattr(
+        "backend.orchestrator.zip_ops.create_zip",
+        lambda *args, **kwargs: calls.append(args),
+    )
+
+    with pytest.raises(PathWhitelistError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert calls == []
+    assert not (tmp_path / "arsiv.zip").exists()
+
+
+# --- ZIP_ADD ---
+
+
+def test_apply_plan_zip_add_writes_old_content_plus_new_files_and_leaves_source_untouched(session, tmp_path):
+    _write_zip_file(tmp_path, "kaynak.zip", {"a.pdf": b"eski-a"})
+    _write_pdf(tmp_path, "c.docx")
+    original_bytes = (tmp_path / "kaynak.zip").read_bytes()
+    pdf_files = [PdfFileMetadata(filename="kaynak.zip", createdAt="2026-08-01")]
+    plan = _plan([_zip_add_step(0, "kaynak.zip", ["c.docx"], "eklendi.zip")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    output_path = tmp_path / "eklendi.zip"
+    assert output_path.exists()
+    with _zipfile.ZipFile(output_path) as zf:
+        assert sorted(zf.namelist()) == ["a.pdf", "c.docx"]
+    assert (tmp_path / "kaynak.zip").read_bytes() == original_bytes
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_rejects_zip_add_when_source_zip_is_missing_or_corrupt(session, tmp_path):
+    _write_pdf(tmp_path, "c.docx")
+    pdf_files = [PdfFileMetadata(filename="yok.zip", createdAt="2026-08-01")]
+    plan = _plan([_zip_add_step(0, "yok.zip", ["c.docx"], "eklendi.zip")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "eklendi.zip").exists()
+
+
+def test_apply_plan_rejects_zip_add_of_a_path_outside_allowed_root(session, tmp_path, monkeypatch):
+    pdf_files = [PdfFileMetadata(filename="..", createdAt="2026-08-01")]
+    plan = _plan([_zip_add_step(0, "..", ["c.docx"], "eklendi.zip")])
+
+    calls: list = []
+    monkeypatch.setattr(
+        "backend.orchestrator.zip_ops.add_to_zip",
+        lambda *args, **kwargs: calls.append(args),
+    )
+
+    with pytest.raises(PathWhitelistError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert calls == []
+    assert not (tmp_path / "eklendi.zip").exists()
+
+
+# --- ZIP_EXTRACT ---
+
+
+def test_apply_plan_zip_extract_writes_content_into_the_given_destination_folder(session, tmp_path):
+    _write_zip_file(tmp_path, "arsiv.zip", {"a.pdf": b"icerik-a"})
+    pdf_files = [PdfFileMetadata(filename="arsiv.zip", createdAt="2026-08-01")]
+    plan = _plan([_zip_extract_step(0, "arsiv.zip", "cikti")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert (tmp_path / "cikti" / "a.pdf").read_bytes() == b"icerik-a"
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_rejects_zip_extract_when_source_zip_is_missing_or_corrupt(session, tmp_path):
+    pdf_files = [PdfFileMetadata(filename="yok.zip", createdAt="2026-08-01")]
+    plan = _plan([_zip_extract_step(0, "yok.zip", "cikti")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "cikti").exists()
+
+
+def test_apply_plan_rejects_zip_extract_of_a_path_outside_allowed_root(session, tmp_path, monkeypatch):
+    pdf_files = [PdfFileMetadata(filename="..", createdAt="2026-08-01")]
+    plan = _plan([_zip_extract_step(0, "..", "cikti")])
+
+    calls: list = []
+    monkeypatch.setattr(
+        "backend.orchestrator.zip_ops.extract_zip",
+        lambda *args, **kwargs: calls.append(args),
+    )
+
+    with pytest.raises(PathWhitelistError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert calls == []
+
+
+def test_apply_plan_rejects_zip_extract_zip_slip_attempt_and_extracts_nothing(session, tmp_path):
+    # AC-3/AC-S1: zip icinde "../../evil.txt" gibi bir kacis girisimi ->
+    # PlanApplicationError, HICBIR dosya cikarilmaz (tum-ya-da-hic).
+    _write_zip_file(tmp_path, "kotu.zip", {"legit.txt": b"mesru", "../../evil.txt": b"kotu"})
+    pdf_files = [PdfFileMetadata(filename="kotu.zip", createdAt="2026-08-01")]
+    plan = _plan([_zip_extract_step(0, "kotu.zip", "cikti")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "cikti" / "legit.txt").exists()
+    assert not (tmp_path / "evil.txt").exists()
+
+
+def test_apply_plan_zip_extract_rollback_removes_destination_folder_when_it_did_not_exist_before(
+    session, tmp_path
+):
+    # plan.md: destinationFolder islem ONCESINDE YOKSA, rollback klasoru
+    # TAMAMEN siler (_rollback_zip_extract tasarimi).
+    _write_zip_file(tmp_path, "arsiv.zip", {"a.pdf": b"icerik-a"})
+    pdf_files = [PdfFileMetadata(filename="arsiv.zip", createdAt="2026-08-01")]
+    plan = _plan([_zip_extract_step(0, "arsiv.zip", "cikti")])
+
+    assert not (tmp_path / "cikti").exists()
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+    assert (tmp_path / "cikti").exists()
+
+    revert_transaction(session, transaction)
+
+    assert not (tmp_path / "cikti").exists()
+
+
+def test_apply_plan_zip_extract_rollback_is_a_no_op_when_destination_folder_already_existed(
+    session, tmp_path
+):
+    # plan.md: destinationFolder islem ONCESINDE ZATEN VARSA, rollback
+    # klasoru SILMEZ (no-op, var olan icerik geri alinamaz - DELETE'in
+    # "gercek anlamda geri donussuz" sinifi).
+    _write_zip_file(tmp_path, "arsiv.zip", {"a.pdf": b"icerik-a"})
+    destination_folder = tmp_path / "cikti"
+    destination_folder.mkdir()
+    (destination_folder / "onceden-var-olan.txt").write_text("dokunulmamali")
+    pdf_files = [PdfFileMetadata(filename="arsiv.zip", createdAt="2026-08-01")]
+    plan = _plan([_zip_extract_step(0, "arsiv.zip", "cikti")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+    assert (destination_folder / "a.pdf").exists()
+
+    revert_transaction(session, transaction)
+
+    assert destination_folder.exists()
+    assert (destination_folder / "onceden-var-olan.txt").exists()
+
+
+# --- ZIP_MERGE ---
+
+
+def test_apply_plan_zip_merge_writes_all_entries_of_both_source_zips(session, tmp_path):
+    _write_zip_file(tmp_path, "a.zip", {"a1.txt": b"a1"})
+    _write_zip_file(tmp_path, "b.zip", {"b1.txt": b"b1"})
+    pdf_files = [
+        PdfFileMetadata(filename="a.zip", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.zip", createdAt="2026-08-02"),
+    ]
+    plan = _plan([_zip_merge_step(0, ["a.zip", "b.zip"], "birlesik.zip")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    output_path = tmp_path / "birlesik.zip"
+    assert output_path.exists()
+    with _zipfile.ZipFile(output_path) as zf:
+        assert sorted(zf.namelist()) == ["a1.txt", "b1.txt"]
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_rejects_zip_merge_when_a_source_zip_is_missing_or_corrupt(session, tmp_path):
+    _write_zip_file(tmp_path, "a.zip", {"a1.txt": b"a1"})
+    pdf_files = [
+        PdfFileMetadata(filename="a.zip", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="yok.zip", createdAt="2026-08-02"),
+    ]
+    plan = _plan([_zip_merge_step(0, ["a.zip", "yok.zip"], "birlesik.zip")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "birlesik.zip").exists()
+
+
+def test_apply_plan_rejects_zip_merge_of_a_path_outside_allowed_root(session, tmp_path, monkeypatch):
+    pdf_files = [
+        PdfFileMetadata(filename="..", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="b.zip", createdAt="2026-08-02"),
+    ]
+    plan = _plan([_zip_merge_step(0, ["..", "b.zip"], "birlesik.zip")])
+
+    calls: list = []
+    monkeypatch.setattr(
+        "backend.orchestrator.zip_ops.merge_zips",
+        lambda *args, **kwargs: calls.append(args),
+    )
+
+    with pytest.raises(PathWhitelistError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert calls == []
+    assert not (tmp_path / "birlesik.zip").exists()

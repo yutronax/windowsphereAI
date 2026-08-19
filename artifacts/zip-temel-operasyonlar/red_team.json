@@ -1,0 +1,31 @@
+{
+  "task_slug": "zip-temel-operasyonlar",
+  "reviewer": "obss-red-team subagent (bağımsız — test VE kod da subagent'lar tarafından yazıldı, ayrıca sonradan bir refactor adımı da bağımsız incelendi)",
+  "verdict": "Ready to Commit (1. tur bulgusu doğrulama sonrası düzeltildi)",
+  "security_findings": [
+    {
+      "finding": "1. tur: ZIP_CREATE/ZIP_ADD/ZIP_MERGE'in hedef alanlarında (zippedFileName/addedFileName/mergedZipFileName) 'hiçbir whitelist kontrolü yok' denildi, extract_zip'in _validate_single_path'inden farklı olarak.",
+      "severity": "low (1. turda yanlışlıkla medium/blocker olarak değerlendirilmişti)",
+      "scenario": "Doğrulama: models.py'de HER ÜÇ alan için de field_validator ile '/' ve '\\\\' engelleniyor (satır 281-313), AYRICA collision check (normalized_zipped/normalized_merged, kaynak fileNames ile çakışma) mevcut — MERGE/EXCEL_SORT'un BİREBİR aynı deseni. Bu, Saga #338'de zaten takip edilen sınıfla AYNI: field-seviyesi ayraç-engelleme var, mimari-seviyesi _validate_single_path (resolve()+is_relative_to()) yok. Windows'ta sadece 2 ayraç karakteri olduğu için çok-segmentli kaçış zaten Pydantic'te imkansız; tek kalan boşluk tam '..' değeri.",
+      "status": "DÜZELTİLDİ (triage) — 1. turun 'hiçbir kontrol yok' iddiası yanlıştı, field-seviyesi kontrol MEVCUT. Gerçek boşluk (mimari-seviyesi ek kontrol eksikliği) zaten Saga #338'in kapsamına giriyor, task açıklaması ZIP_CREATE/ZIP_ADD/ZIP_MERGE'i de kapsayacak şekilde GÜNCELLENECEK (commit sonrası)."
+    },
+    {
+      "finding": "Zip bomb / DoS: extract_zip'in ön-tarama döngüsü (her giriş için path.resolve()) çok sayıda girişli bir zip'te pahalı olabilir; extractall sonrası toplam açılmış boyut sınırı yok.",
+      "severity": "low",
+      "scenario": "Binlerce girişli küçük bir zip, tarama+çıkarma sırasında isteği uzun süre bloke edebilir. Bloklamıyor, fast-follow olarak not edildi (max-entry-count/max-decompressed-size sınırı önerisi)."
+    },
+    {
+      "finding": "Sembolik link zip girişleri — Windows'ta zipfile.extractall bunları düz dosya olarak yazıyor (gerçek symlink oluşturmuyor), bu yüzden mevcut kontrol pratikte yeterli ama bu davranış kodda belgelenmemiş, POSIX'e taşınırsa risk geri dönebilir.",
+      "severity": "low",
+      "scenario": "Şu an exploit değil, gelecekte platform değişirse dikkat edilmeli — kod yorumuna not düşülebilir, bloklamıyor."
+    }
+  ],
+  "approved_points": [
+    "_write_zip_atomically refactor'ü davranışı DOĞRU korudu — kod okunarak doğrulandı, orijinal desenle birebir eşleşiyor.",
+    "extract_zip'in 'tümü-ya-da-hiç' ön-tarama tasarımı doğru — TÜM girişler extractall'dan ÖNCE taranıyor, kısmi çıkarma riski yok.",
+    "_rollback_zip_extract sentinel tasarımı doğrulandı — backup_path her zaman allowed_root altında, is_path_allowed kontrolünü geçiyor.",
+    "is_path_allowed'ın resolve()+is_relative_to() kontrolü Windows case-insensitive dosya sisteminde bir kaçış yolu BIRAKMIYOR (resolve() zaten OS-seviyesinde normalize ediyor).",
+    "pytest backend/tests -q bağımsız olarak yeniden çalıştırıldı: 500 passed, 5 skipped, 0 failed."
+  ],
+  "overall_assessment": "Ready to Commit. 1. turun asıl bloklayıcı bulgusu (hedef alanlarda 'hiçbir kontrol yok') yanlış çıktı — field-seviyesi ayraç-engelleme validator'ı zaten var, Saga #338'deki AYNI sınıf/önem düzeyinde bir boşluk (yeni/daha ciddi değil). Diğer bulgular (DoS, symlink belgeleme) düşük öncelikli, bloklamayan fast-follow'lar. Refactor sonrası davranış korunumu bağımsız olarak doğrulandı."
+}

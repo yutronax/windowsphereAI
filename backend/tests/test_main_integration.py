@@ -1632,3 +1632,84 @@ def test_excel_read_endpoint_returns_error_status_when_file_does_not_exist(tmp_p
     # deseni) - kesin kod code-copilot adımında netleşecek, burada sadece
     # 2xx OLMADIĞI doğrulanıyor.
     assert response.status_code >= 400
+
+
+# --- Saga #328: zip-temel-operasyonlar (TEST-FIRST / red step) ---
+# `POST /api/zip/list` henuz VAR DEGIL - bu testler simdilik KIRMIZI kalmali
+# (404 "Not Found" - route hic tanimli degil - beklenen red durumu).
+# Referans: artifacts/zip-temel-operasyonlar/atdd.md (AC-5b, AC-6),
+# `excel_read_endpoint`'in (Saga #326) AYNI session/allowed_root deseni.
+
+
+def _write_zip_for_list(root, filename: str, entries: dict[str, bytes]) -> None:
+    import zipfile
+
+    with zipfile.ZipFile(root / filename, "w") as zf:
+        for name, data in entries.items():
+            zf.writestr(name, data)
+
+
+def test_zip_list_endpoint_returns_404_for_unknown_session_id():
+    response = client.post(
+        "/api/zip/list",
+        json={"sessionId": str(uuid.uuid4()), "filename": "arsiv.zip"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_zip_list_endpoint_returns_410_when_selected_folder_no_longer_exists(tmp_path):
+    missing_folder = tmp_path / "silinmis-klasor"
+    session_id = _create_session(selected_folder=str(missing_folder))
+
+    response = client.post(
+        "/api/zip/list",
+        json={"sessionId": session_id, "filename": "arsiv.zip"},
+    )
+
+    assert response.status_code == 410
+
+
+def test_zip_list_endpoint_returns_200_with_entries_and_does_not_modify_the_filesystem(tmp_path):
+    # AC-5b: girislerin (ad, boyut) listesi doner, dosya sistemi HIC
+    # degismez.
+    _write_zip_for_list(tmp_path, "arsiv.zip", {"a.pdf": b"1234567890", "b.xlsx": b"12"})
+    original_bytes = (tmp_path / "arsiv.zip").read_bytes()
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/zip/list",
+        json={"sessionId": session_id, "filename": "arsiv.zip"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    names = {entry["name"] for entry in body["entries"]}
+    assert names == {"a.pdf", "b.xlsx"}
+    assert (tmp_path / "arsiv.zip").read_bytes() == original_bytes
+
+
+def test_zip_list_endpoint_returns_error_status_when_file_does_not_exist(tmp_path):
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/zip/list",
+        json={"sessionId": session_id, "filename": "yok.zip"},
+    )
+
+    # excel_read_endpoint ile TUTARLI (404/410/422 deseni) - kesin kod
+    # code-copilot adımında netleşecek, burada sadece 2xx OLMADIĞI
+    # doğrulanıyor.
+    assert response.status_code >= 400
+
+
+def test_zip_list_endpoint_returns_error_status_when_file_is_corrupt(tmp_path):
+    (tmp_path / "bozuk.zip").write_bytes(b"not a real zip")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/zip/list",
+        json={"sessionId": session_id, "filename": "bozuk.zip"},
+    )
+
+    assert response.status_code >= 400

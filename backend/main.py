@@ -36,6 +36,8 @@ from backend.models import (
     SessionRequest,
     TransactionApplyResponse,
     TransactionSummary,
+    ZipListRequest,
+    ZipListResponse,
 )
 from backend.orchestrator import (
     PlanApplicationError,
@@ -49,7 +51,7 @@ from backend.orchestrator import (
 # apply_plan_endpoint içindeki ön-kontrol yorumu) — bu, incelenmiş/onaylanmış
 # minimal düzeltmedir.
 from backend.orchestrator import _distribute_files_to_steps
-from backend import excel_rows
+from backend import excel_rows, zip_ops
 from backend.pdf_discovery import discover_pdf_files
 from backend.plan_generation import (
     LLMClient,
@@ -626,6 +628,48 @@ def excel_read_endpoint(
         )
 
     return ExcelReadResponse(values=values, range=payload.range)
+
+
+def get_session_for_zip_list(payload: ZipListRequest) -> SessionContext:
+    """`get_session_for_excel_read` ile AYNI mantık, `ZipListRequest` şeması
+    için - Saga #328."""
+    session = _sessions.get(payload.sessionId)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Oturum bulunamadı")
+    return session
+
+
+@app.post("/api/zip/list")
+def zip_list_endpoint(
+    payload: ZipListRequest,
+    session: SessionContext = Depends(get_session_for_zip_list),
+) -> ZipListResponse:
+    """Saga #328 (ATDD AC-5b): Zip içeriği listeleme endpoint'i - salt-okunur
+    senkron sorgu, `excel_read_endpoint`'in (Saga #326) AYNI session/
+    allowed_root doğrulama deseni."""
+    allowed_root = Path(session.selectedFolder)
+    if not allowed_root.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Seçili klasör artık mevcut değil",
+        )
+
+    source_path = allowed_root / payload.filename
+    if not source_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Dosya bulunamadı: '{payload.filename}'",
+        )
+
+    try:
+        entries = zip_ops.list_zip_entries(source_path)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Zip dosyası okunamıyor: '{payload.filename}' ({exc})",
+        )
+
+    return ZipListResponse(entries=entries)
 
 
 @app.post("/api/search/scan", status_code=status.HTTP_202_ACCEPTED)

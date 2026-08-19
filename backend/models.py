@@ -82,6 +82,13 @@ class OperationType(str, Enum):
     # güncelle" deseni, ama satır (appendRows) yerine bir Word tablosu
     # (tableHeaders opsiyonel + tableRows zorunlu) ekler.
     WORD_APPEND_TABLE = "Word Tablo Ekle"
+    # Saga #328: ZIP_CREATE/ZIP_ADD/ZIP_EXTRACT/ZIP_MERGE - zipfile stdlib
+    # üzerinden dört temel zip operasyonu (bkz. artifacts/zip-temel-
+    # operasyonlar/atdd.md).
+    ZIP_CREATE = "Zip Oluştur"
+    ZIP_ADD = "Zip'e Ekle"
+    ZIP_EXTRACT = "Zip Çıkar"
+    ZIP_MERGE = "Zip Birleştir"
 
 
 class RedactionRegion(BaseModel):
@@ -198,6 +205,22 @@ class PlanStep(BaseModel):
     # operationType'larda None kalmalı).
     tableHeaders: list | None = None
     tableRows: list | None = None
+    # Saga #328: ZIP_CREATE icin - olusturulacak zip'in dosya adi,
+    # mergedFileName ile AYNI desende (SADECE operationType==ZIP_CREATE
+    # olduğunda dolu olmalı, diğer operationType'larda None kalmalı).
+    zippedFileName: str | None = None
+    # Saga #328: ZIP_EXTRACT icin - cikarilacak hedef klasor adi. targetFolder
+    # (YYYY-MM'e kilitli) ile AYNI ALAN DEGIL - plan.md karari geregi AYRI,
+    # serbest-formatli bir alan (path-separator validator'i var ama YYYY-MM
+    # kisiti YOK).
+    destinationFolder: str | None = None
+    # Saga #328: ZIP_ADD icin - zip'e eklenecek dosyalarin listesi (fileNames
+    # ile AYNI tip), addedFileName eklenmis ciktinin dosya adi.
+    filesToAdd: list[str] | None = None
+    addedFileName: str | None = None
+    # Saga #328: ZIP_MERGE icin - birlestirilmis ciktinin dosya adi,
+    # mergedFileName ile AYNI desende ama ZIP_MERGE'e ozel.
+    mergedZipFileName: str | None = None
 
     @field_validator("mergedFileName")
     @classmethod
@@ -253,6 +276,41 @@ class PlanStep(BaseModel):
     def created_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
         if value is not None and ("/" in value or "\\" in value):
             raise ValueError("createdFileName must not contain path separators")
+        return value
+
+    @field_validator("zippedFileName")
+    @classmethod
+    def zipped_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
+        if value is not None and ("/" in value or "\\" in value):
+            raise ValueError("zippedFileName must not contain path separators")
+        return value
+
+    @field_validator("destinationFolder")
+    @classmethod
+    def destination_folder_has_no_path_separators(cls, value: str | None) -> str | None:
+        if value is not None and ("/" in value or "\\" in value):
+            raise ValueError("destinationFolder must not contain path separators")
+        return value
+
+    @field_validator("addedFileName")
+    @classmethod
+    def added_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
+        if value is not None and ("/" in value or "\\" in value):
+            raise ValueError("addedFileName must not contain path separators")
+        return value
+
+    @field_validator("mergedZipFileName")
+    @classmethod
+    def merged_zip_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
+        if value is not None and ("/" in value or "\\" in value):
+            raise ValueError("mergedZipFileName must not contain path separators")
+        return value
+
+    @field_validator("filesToAdd")
+    @classmethod
+    def files_to_add_has_no_path_separators(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and any("/" in name or "\\" in name for name in value):
+            raise ValueError("filesToAdd entries must not contain path separators")
         return value
 
     @field_validator("appendText")
@@ -648,6 +706,85 @@ class PlanStep(BaseModel):
                 raise ValueError("tableRows must be omitted unless operationType is WORD_APPEND_TABLE")
         return self
 
+    @model_validator(mode="after")
+    def zip_create_fields_only_for_zip_create(self) -> "PlanStep":
+        # Saga #328: MERGE'in ">=2" degil, en az 1 dosya zip'lemek yeterli
+        # (klasor rekursif DEGIL, atdd.md karari) - zippedFileName SADECE
+        # ZIP_CREATE icin zorunlu, diger operationType'larda tamamen yasak.
+        if self.operationType == OperationType.ZIP_CREATE:
+            if self.zippedFileName is None or self.zippedFileName.strip() == "":
+                raise ValueError("zippedFileName is required when operationType is ZIP_CREATE")
+            if len(self.fileNames) < 1:
+                raise ValueError("fileNames must contain at least 1 entry when operationType is ZIP_CREATE")
+            normalized_zipped = os.path.normcase(self.zippedFileName)
+            normalized_sources = [os.path.normcase(name) for name in self.fileNames]
+            if normalized_zipped in normalized_sources:
+                raise ValueError(
+                    f"zippedFileName ('{self.zippedFileName}') collides with one of this "
+                    "step's fileNames (case-insensitive) — zip output must not overwrite "
+                    "a source file"
+                )
+        else:
+            if self.zippedFileName is not None:
+                raise ValueError("zippedFileName must be omitted unless operationType is ZIP_CREATE")
+        return self
+
+    @model_validator(mode="after")
+    def zip_add_fields_only_for_zip_add(self) -> "PlanStep":
+        # Saga #328: EXCEL_FILTER'in "==1 kaynak" deseni - filesToAdd/
+        # addedFileName SADECE ZIP_ADD icin zorunlu, diger operationType'larda
+        # tamamen yasak.
+        if self.operationType == OperationType.ZIP_ADD:
+            if self.filesToAdd is None or len(self.filesToAdd) == 0:
+                raise ValueError("filesToAdd is required when operationType is ZIP_ADD")
+            if self.addedFileName is None or self.addedFileName.strip() == "":
+                raise ValueError("addedFileName is required when operationType is ZIP_ADD")
+            if len(self.fileNames) != 1:
+                raise ValueError("fileNames must contain exactly 1 entry when operationType is ZIP_ADD")
+        else:
+            if self.filesToAdd is not None:
+                raise ValueError("filesToAdd must be omitted unless operationType is ZIP_ADD")
+            if self.addedFileName is not None:
+                raise ValueError("addedFileName must be omitted unless operationType is ZIP_ADD")
+        return self
+
+    @model_validator(mode="after")
+    def zip_extract_fields_only_for_zip_extract(self) -> "PlanStep":
+        # Saga #328: EXCEL_FILTER'in "==1 kaynak" deseni - destinationFolder
+        # SADECE ZIP_EXTRACT icin zorunlu, diger operationType'larda tamamen
+        # yasak.
+        if self.operationType == OperationType.ZIP_EXTRACT:
+            if self.destinationFolder is None or self.destinationFolder.strip() == "":
+                raise ValueError("destinationFolder is required when operationType is ZIP_EXTRACT")
+            if len(self.fileNames) != 1:
+                raise ValueError("fileNames must contain exactly 1 entry when operationType is ZIP_EXTRACT")
+        else:
+            if self.destinationFolder is not None:
+                raise ValueError("destinationFolder must be omitted unless operationType is ZIP_EXTRACT")
+        return self
+
+    @model_validator(mode="after")
+    def zip_merge_fields_only_for_zip_merge(self) -> "PlanStep":
+        # Saga #328: MERGE'in ">=2 kaynak" deseni - mergedZipFileName SADECE
+        # ZIP_MERGE icin zorunlu, diger operationType'larda tamamen yasak.
+        if self.operationType == OperationType.ZIP_MERGE:
+            if self.mergedZipFileName is None or self.mergedZipFileName.strip() == "":
+                raise ValueError("mergedZipFileName is required when operationType is ZIP_MERGE")
+            if len(self.fileNames) < 2:
+                raise ValueError("fileNames must contain at least 2 entries when operationType is ZIP_MERGE")
+            normalized_merged = os.path.normcase(self.mergedZipFileName)
+            normalized_sources = [os.path.normcase(name) for name in self.fileNames]
+            if normalized_merged in normalized_sources:
+                raise ValueError(
+                    f"mergedZipFileName ('{self.mergedZipFileName}') collides with one of this "
+                    "step's fileNames (case-insensitive) — merge output must not overwrite "
+                    "a source file"
+                )
+        else:
+            if self.mergedZipFileName is not None:
+                raise ValueError("mergedZipFileName must be omitted unless operationType is ZIP_MERGE")
+        return self
+
 
 class DateSource(str, Enum):
     """Not: `PlanSkeleton.steps` boşsa (taşınacak PDF yoksa),
@@ -887,6 +1024,28 @@ class ExcelReadResponse(BaseModel):
 
     values: list[list]
     range: str | None = None
+
+
+class ZipListRequest(BaseModel):
+    """Saga #328: `/api/zip/list` istek şeması - `ExcelReadRequest` ile AYNI
+    session/allowed_root doğrulama deseni (senkron sorgu, plan/transaction
+    kavramı YOK)."""
+
+    sessionId: str
+    filename: str
+
+    @field_validator("filename")
+    @classmethod
+    def filename_has_no_path_separators(cls, value: str) -> str:
+        if "/" in value or "\\" in value:
+            raise ValueError("filename must not contain path separators")
+        return value
+
+
+class ZipListResponse(BaseModel):
+    """Saga #328: `/api/zip/list` yanıt şeması."""
+
+    entries: list[dict]
 
 
 class ScanStartResponse(BaseModel):

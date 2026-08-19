@@ -1,5 +1,39 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Zip temel operasyonları (Saga #328, epic #29) — 5 operasyon + gerçek refactor + red-team yanlış alarmı
+
+**Oturumun en büyük tek-görev kapsamı.** ZIP_CREATE/ZIP_ADD/ZIP_EXTRACT/
+ZIP_MERGE (4 Plan operasyonu) + `/api/zip/list` (senkron sorgu) tek
+görüşmede netleştirildi — Python'ın `zipfile` stdlib'i kullanıldığı için
+(LibreOffice/Ghostscript'in aksine) yeni bir dış bağımlılık yoktu. Eski
+projenin bilinen bug'ı (ZIP_EXTRACT'in `destination` parametresi yanlış
+okunuyordu) AC-2 ile açıkça kapatıldı; zip-slip (path-traversal) koruması
+`backend/security.py`'nin MEVCUT `_validate_single_path`'i yeniden
+kullanılarak eklendi — yeni bir güvenlik algoritması yazılmadı.
+
+**Bu görevde ilk kez gerçek bir refactor uygulandı.** Önceki görevlerde
+(EXCEL_SORT, PDF_COMPRESS, EXCEL_CREATE/APPEND) tempfile+atomik-replace
+tekrarı hep CROSS-MODULE olduğu için ertelenmişti. Burada `create_zip`/
+`add_to_zip`/`merge_zips` AYNI dosyada, AYNI deseni üç kez tekrarladı —
+red-team'in önceki görevlerde ısrarla belirttiği "3. tekrardan sonra çıkar"
+eşiği aşıldı. `_write_zip_atomically` yardımcı fonksiyonu çıkarıldı, her
+adımda test koşuldu, davranış korundu (testler + bağımsız red-team turu
+ikisi de doğruladı).
+
+**Bağımsız red-team turu önce yanlış bir "blocker" verdi, triage ile
+düzeltildi.** İlk tur, ZIP_CREATE/ZIP_ADD/ZIP_MERGE'in hedef alanlarında
+"hiçbir whitelist kontrolü yok" dedi ve bunu Ready-to-Commit-değil olarak
+işaretledi. Doğrulama: `models.py`'de HER ÜÇ alan için de path-ayracı
+engelleme `field_validator`'ı ZATEN vardı (red-team bunu kontrol etmeden
+"sıfır koruma" varsaymıştı) — gerçek boşluk, Saga #338'de ZATEN takip
+edilen sınıfla (field-seviyesi var, mimari-seviyesi `_validate_single_path`
+yok) AYNIydı, yeni/daha ciddi değildi. Ders: red-team bulgularını da
+körü körüne kabul etmemek gerekiyor — "ready to commit değil" verdiğinde
+bile, iddia edilen "sıfır koruma"nın gerçekten sıfır olup olmadığı koda
+bakılarak doğrulanmalı.
+
+500/500 backend test yeşil (5 skip, Windows-only).
+
 ## Word tablo ekleme (Saga #327, epic #29) — kapsam daraltma + venv/global-Python tuzağı
 
 **Görev ortam incelemesiyle ikiye ayrıştırıldı.** Saga #327 hem Word→PDF

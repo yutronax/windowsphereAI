@@ -8,13 +8,13 @@ from pathlib import Path
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from backend import excel_rows, excel_sort, pdf_compress, pdf_pages, word_table
+from backend import excel_rows, excel_sort, pdf_compress, pdf_pages, word_table, zip_ops
 from backend.db_models import FileOperation, Transaction
 from backend.file_operations import create_transaction, record_file_operation
 from backend.models import OperationType, PdfFileMetadata, PlanSkeleton, PlanStep
 from backend.pdf_ocr import ocr_pdf_file
 from backend.pdf_redact import redact_pdf_page
-from backend.security import is_path_allowed, validate_plan_paths
+from backend.security import PathWhitelistError, is_path_allowed, validate_plan_paths
 
 
 class PlanApplicationError(Exception):
@@ -63,6 +63,10 @@ _SUPPORTED_OPERATION_TYPES = {
     OperationType.EXCEL_CREATE,
     OperationType.EXCEL_APPEND,
     OperationType.WORD_APPEND_TABLE,
+    OperationType.ZIP_CREATE,
+    OperationType.ZIP_ADD,
+    OperationType.ZIP_EXTRACT,
+    OperationType.ZIP_MERGE,
 }
 
 # DELETE'in fiziksel yedeklerinin saklandığı, `allowed_root` altında gizli
@@ -323,6 +327,29 @@ def _rollback_append(destination_path: Path, backup_path: Path) -> None:
     shutil.copy2(str(backup_path), str(destination_path))
 
 
+def _zip_extract_backup_marker(destination_path: Path, *, folder_existed_before: bool) -> Path:
+    # Saga #328 (plan.md): ZIP_EXTRACT'in hedefi bir KLASOR (potansiyel
+    # olarak cok sayida dosya), _rollback_copy'nin "tek dosya sil" semantigi
+    # dogrudan kullanilamaz. `backup_path` burada "destinationFolder islem
+    # ONCESINDE var miydi" bilgisini tasiyan bir SENTINEL: `destination_path`
+    # ile AYNI deger = klasor ONCEDEN VARDI -> rollback no-op (DELETE'in
+    # "gercek anlamda geri donussuz" sinifiyla AYNI, var olan icerik geri
+    # alinamaz). FARKLI bir deger (ayni klasorun altinda, `allowed_root`
+    # sinirini asmayan bir isaretci) = klasor orchestrator TARAFINDAN
+    # olusturuldu -> rollback TUM klasoru siler. `_rollback_completed_operations`
+    # `is_path_allowed(backup_path, allowed_root)` kontrolu yaptigi icin bu
+    # isaretci gercekten var olmasa bile `allowed_root` altinda kalmali.
+    if folder_existed_before:
+        return destination_path
+    return destination_path.parent / (destination_path.name + ".zip-extract-created")
+
+
+def _rollback_zip_extract(destination_path: Path, backup_path: Path) -> None:
+    if backup_path == destination_path:
+        return  # no-op - klasor onceden vardi, dokunulmaz.
+    shutil.rmtree(destination_path, ignore_errors=True)
+
+
 _ROLLBACK_OPERATIONS = {
     OperationType.MOVE: _rollback_move,
     OperationType.COPY: _rollback_copy,
@@ -372,6 +399,14 @@ _ROLLBACK_OPERATIONS = {
     # fonksiyonu (dosya-tipinden bağımsız, sadece `shutil.copy2` ile
     # backup_path'i geri kopyalar).
     OperationType.WORD_APPEND_TABLE: _rollback_append,
+    # Saga #328: ZIP_CREATE/ZIP_ADD/ZIP_MERGE rollback'i COPY ile AYNI -
+    # kaynak(lar) hic degismedi, rollback SADECE hedefteki yeni zip'i siler.
+    OperationType.ZIP_CREATE: _rollback_copy,
+    OperationType.ZIP_ADD: _rollback_copy,
+    OperationType.ZIP_MERGE: _rollback_copy,
+    # Saga #328: ZIP_EXTRACT rollback'i - bkz. `_rollback_zip_extract`
+    # docstring'i (klasor onceden var miydi izlemesi).
+    OperationType.ZIP_EXTRACT: _rollback_zip_extract,
 }
 
 
@@ -934,6 +969,103 @@ def apply_plan(
                 session.commit()
                 applied.append(operation)
                 continue
+            if step.operationType == OperationType.ZIP_CREATE:
+                # Saga #328: MERGE'in "N kaynak -> 1 hedef" deseni.
+                source_paths = [allowed_root / f.filename for f in files]
+                destination_path = allowed_root / step.zippedFileName
+                operation = record_file_operation(
+                    session,
+                    transaction,
+                    operation_type=step.operationType.value,
+                    source_path=";".join(str(p) for p in source_paths),
+                    destination_path=str(destination_path),
+                    backup_path=str(destination_path),
+                )
+                try:
+                    zip_ops.create_zip(source_paths, destination_path)
+                except Exception as exc:
+                    raise PlanApplicationError(
+                        f"ZIP_CREATE kaynağı okunamıyor: '{exc}'"
+                    ) from exc
+                operation.status = "completed"
+                session.commit()
+                applied.append(operation)
+                continue
+            if step.operationType == OperationType.ZIP_ADD:
+                # Saga #328: EXCEL_FILTER'in "1 kaynak -> 1 hedef" deseni.
+                source_path = allowed_root / files[0].filename
+                files_to_add_paths = [allowed_root / name for name in step.filesToAdd]
+                destination_path = allowed_root / step.addedFileName
+                operation = record_file_operation(
+                    session,
+                    transaction,
+                    operation_type=step.operationType.value,
+                    source_path=str(source_path),
+                    destination_path=str(destination_path),
+                    backup_path=str(destination_path),
+                )
+                try:
+                    zip_ops.add_to_zip(source_path, files_to_add_paths, destination_path)
+                except Exception as exc:
+                    raise PlanApplicationError(
+                        f"ZIP_ADD kaynağı okunamıyor: '{source_path.name}' ({exc})"
+                    ) from exc
+                operation.status = "completed"
+                session.commit()
+                applied.append(operation)
+                continue
+            if step.operationType == OperationType.ZIP_EXTRACT:
+                source_path = allowed_root / files[0].filename
+                destination_folder = allowed_root / step.destinationFolder
+                # Rollback icin gerekli: destinationFolder mkdir'DEN (burada
+                # zip_ops.extract_zip'in kendi extractall'i) ONCE var miydi?
+                folder_existed_before = destination_folder.exists()
+                backup_marker = _zip_extract_backup_marker(
+                    destination_folder, folder_existed_before=folder_existed_before
+                )
+                operation = record_file_operation(
+                    session,
+                    transaction,
+                    operation_type=step.operationType.value,
+                    source_path=str(source_path),
+                    destination_path=str(destination_folder),
+                    backup_path=str(backup_marker),
+                )
+                try:
+                    zip_ops.extract_zip(source_path, destination_folder, allowed_root)
+                except PathWhitelistError as exc:
+                    raise PlanApplicationError(
+                        f"ZIP_EXTRACT reddedildi, güvenli olmayan giriş yolu: '{exc}'"
+                    ) from exc
+                except Exception as exc:
+                    raise PlanApplicationError(
+                        f"ZIP_EXTRACT kaynağı okunamıyor: '{source_path.name}' ({exc})"
+                    ) from exc
+                operation.status = "completed"
+                session.commit()
+                applied.append(operation)
+                continue
+            if step.operationType == OperationType.ZIP_MERGE:
+                source_paths = [allowed_root / f.filename for f in files]
+                destination_path = allowed_root / step.mergedZipFileName
+                operation = record_file_operation(
+                    session,
+                    transaction,
+                    operation_type=step.operationType.value,
+                    source_path=";".join(str(p) for p in source_paths),
+                    destination_path=str(destination_path),
+                    backup_path=str(destination_path),
+                )
+                try:
+                    zip_ops.merge_zips(source_paths, destination_path)
+                except Exception as exc:
+                    raise PlanApplicationError(
+                        f"ZIP_MERGE kaynağı okunamıyor: '{exc}'"
+                    ) from exc
+                operation.status = "completed"
+                session.commit()
+                applied.append(operation)
+                continue
             if step.operationType == OperationType.OCR:
                 source_path = allowed_root / files[0].filename
                 if not is_path_allowed(source_path, allowed_root):
@@ -962,6 +1094,10 @@ def apply_plan(
                 OperationType.EXCEL_CREATE,
                 OperationType.EXCEL_APPEND,
                 OperationType.WORD_APPEND_TABLE,
+                OperationType.ZIP_CREATE,
+                OperationType.ZIP_ADD,
+                OperationType.ZIP_EXTRACT,
+                OperationType.ZIP_MERGE,
             ):
                 target_dir = allowed_root / step.targetFolder
                 target_dir.mkdir(parents=True, exist_ok=True)
