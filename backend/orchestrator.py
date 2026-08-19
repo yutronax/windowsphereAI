@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from backend import excel_rows, excel_sort, pdf_compress, pdf_pages, word_table, zip_ops
+from backend import excel_rows, excel_sort, image_ops, pdf_compress, pdf_pages, word_table, zip_ops
 from backend.db_models import FileOperation, Transaction
 from backend.file_operations import create_transaction, record_file_operation
 from backend.models import OperationType, PdfFileMetadata, PlanSkeleton, PlanStep
@@ -67,6 +67,8 @@ _SUPPORTED_OPERATION_TYPES = {
     OperationType.ZIP_ADD,
     OperationType.ZIP_EXTRACT,
     OperationType.ZIP_MERGE,
+    OperationType.IMAGE_CROP,
+    OperationType.IMAGE_THUMBNAIL,
 }
 
 # DELETE'in fiziksel yedeklerinin saklandığı, `allowed_root` altında gizli
@@ -407,6 +409,10 @@ _ROLLBACK_OPERATIONS = {
     # Saga #328: ZIP_EXTRACT rollback'i - bkz. `_rollback_zip_extract`
     # docstring'i (klasor onceden var miydi izlemesi).
     OperationType.ZIP_EXTRACT: _rollback_zip_extract,
+    # Saga #329: IMAGE_CROP/IMAGE_THUMBNAIL rollback'i COPY ile AYNI -
+    # kaynak hic degismedi, rollback SADECE hedefteki yeni gorseli siler.
+    OperationType.IMAGE_CROP: _rollback_copy,
+    OperationType.IMAGE_THUMBNAIL: _rollback_copy,
 }
 
 
@@ -1066,6 +1072,64 @@ def apply_plan(
                 session.commit()
                 applied.append(operation)
                 continue
+            if step.operationType == OperationType.IMAGE_CROP:
+                # Saga #329: EXCEL_FILTER'ın "1 kaynak -> 1 hedef" deseni.
+                source_path = allowed_root / files[0].filename
+                destination_path = allowed_root / step.croppedFileName
+                operation = record_file_operation(
+                    session,
+                    transaction,
+                    operation_type=step.operationType.value,
+                    source_path=str(source_path),
+                    destination_path=str(destination_path),
+                    backup_path=str(destination_path),
+                )
+                try:
+                    image_ops.crop_image(
+                        source_path,
+                        (step.cropBox.x0, step.cropBox.y0, step.cropBox.x1, step.cropBox.y1),
+                        destination_path,
+                    )
+                except ValueError as exc:
+                    raise PlanApplicationError(
+                        f"IMAGE_CROP alanı geçersiz: '{source_path.name}' ({exc})"
+                    ) from exc
+                except Exception as exc:
+                    raise PlanApplicationError(
+                        f"IMAGE_CROP kaynağı okunamıyor: '{source_path.name}' ({exc})"
+                    ) from exc
+                operation.status = "completed"
+                session.commit()
+                applied.append(operation)
+                continue
+            if step.operationType == OperationType.IMAGE_THUMBNAIL:
+                # Saga #329: IMAGE_CROP bloğunun BİREBİR kopyası.
+                source_path = allowed_root / files[0].filename
+                destination_path = allowed_root / step.thumbnailFileName
+                operation = record_file_operation(
+                    session,
+                    transaction,
+                    operation_type=step.operationType.value,
+                    source_path=str(source_path),
+                    destination_path=str(destination_path),
+                    backup_path=str(destination_path),
+                )
+                try:
+                    image_ops.create_thumbnail(
+                        source_path, step.maxWidth, step.maxHeight, destination_path
+                    )
+                except ValueError as exc:
+                    raise PlanApplicationError(
+                        f"IMAGE_THUMBNAIL boyutu geçersiz: '{source_path.name}' ({exc})"
+                    ) from exc
+                except Exception as exc:
+                    raise PlanApplicationError(
+                        f"IMAGE_THUMBNAIL kaynağı okunamıyor: '{source_path.name}' ({exc})"
+                    ) from exc
+                operation.status = "completed"
+                session.commit()
+                applied.append(operation)
+                continue
             if step.operationType == OperationType.OCR:
                 source_path = allowed_root / files[0].filename
                 if not is_path_allowed(source_path, allowed_root):
@@ -1098,6 +1162,8 @@ def apply_plan(
                 OperationType.ZIP_ADD,
                 OperationType.ZIP_EXTRACT,
                 OperationType.ZIP_MERGE,
+                OperationType.IMAGE_CROP,
+                OperationType.IMAGE_THUMBNAIL,
             ):
                 target_dir = allowed_root / step.targetFolder
                 target_dir.mkdir(parents=True, exist_ok=True)

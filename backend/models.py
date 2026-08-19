@@ -89,6 +89,27 @@ class OperationType(str, Enum):
     ZIP_ADD = "Zip'e Ekle"
     ZIP_EXTRACT = "Zip Çıkar"
     ZIP_MERGE = "Zip Birleştir"
+    # Saga #329: IMAGE_CROP/IMAGE_THUMBNAIL - EXCEL_FILTER ile AYNI "1
+    # kaynak -> 1 hedef, kaynak asla degismez" deseni, gorsel (PNG/JPEG vb.)
+    # uzerinde piksel-uzayinda kirpma/kucultme yapar.
+    IMAGE_CROP = "Görsel Kırp"
+    IMAGE_THUMBNAIL = "Görsel Küçük Resim"
+
+
+class CropBox(BaseModel):
+    """Saga #329: IMAGE_CROP icin kirpma alani - `RedactionRegion`'in
+    x0/y0/x1/y1 alan yapisinin kopyasi, ama PDF-nokta-uzayindaki `page`
+    alani OLMADAN (IMAGE_CROP tek-gorsel, piksel-uzayinda calisir).
+    ÖNEMLİ: geometri (x1>x0/y1>y0) VE kaynak sınırlarını aşma kontrolü
+    BİLİNÇLİ olarak burada YAPILMAZ (test_orchestrator.py AC-3 çalışma
+    zamanında `PlanApplicationError` bekliyor, şema seviyesinde
+    `ValidationError` değil) — bu kontrol `image_ops.crop_image` içinde
+    ELLE yapılır (plan.md Risks)."""
+
+    x0: float
+    y0: float
+    x1: float
+    y1: float
 
 
 class RedactionRegion(BaseModel):
@@ -221,6 +242,19 @@ class PlanStep(BaseModel):
     # Saga #328: ZIP_MERGE icin - birlestirilmis ciktinin dosya adi,
     # mergedFileName ile AYNI desende ama ZIP_MERGE'e ozel.
     mergedZipFileName: str | None = None
+    # Saga #329: IMAGE_CROP icin - kirpilacak piksel-uzayi alani + cikti
+    # dosya adi, filterColumn/filteredFileName ile AYNI desende (SADECE
+    # operationType==IMAGE_CROP olduğunda dolu olmalı, diğer
+    # operationType'larda None kalmalı).
+    cropBox: "CropBox | None" = None
+    croppedFileName: str | None = None
+    # Saga #329: IMAGE_THUMBNAIL icin - en-boy orani korunarak kucultmenin
+    # ust siniri + cikti dosya adi, cropBox/croppedFileName ile AYNI
+    # desende (SADECE operationType==IMAGE_THUMBNAIL olduğunda dolu olmalı,
+    # diğer operationType'larda None kalmalı).
+    maxWidth: int | None = None
+    maxHeight: int | None = None
+    thumbnailFileName: str | None = None
 
     @field_validator("mergedFileName")
     @classmethod
@@ -311,6 +345,20 @@ class PlanStep(BaseModel):
     def files_to_add_has_no_path_separators(cls, value: list[str] | None) -> list[str] | None:
         if value is not None and any("/" in name or "\\" in name for name in value):
             raise ValueError("filesToAdd entries must not contain path separators")
+        return value
+
+    @field_validator("croppedFileName")
+    @classmethod
+    def cropped_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
+        if value is not None and ("/" in value or "\\" in value):
+            raise ValueError("croppedFileName must not contain path separators")
+        return value
+
+    @field_validator("thumbnailFileName")
+    @classmethod
+    def thumbnail_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
+        if value is not None and ("/" in value or "\\" in value):
+            raise ValueError("thumbnailFileName must not contain path separators")
         return value
 
     @field_validator("appendText")
@@ -783,6 +831,68 @@ class PlanStep(BaseModel):
         else:
             if self.mergedZipFileName is not None:
                 raise ValueError("mergedZipFileName must be omitted unless operationType is ZIP_MERGE")
+        return self
+
+    @model_validator(mode="after")
+    def image_crop_fields_only_for_image_crop(self) -> "PlanStep":
+        # Saga #329: excel_filter_fields_only_for_excel_filter ile AYNI
+        # desen - cropBox/croppedFileName SADECE IMAGE_CROP icin zorunlu,
+        # diger operationType'larda tamamen yasak.
+        if self.operationType == OperationType.IMAGE_CROP:
+            if self.cropBox is None:
+                raise ValueError("cropBox is required when operationType is IMAGE_CROP")
+            if self.croppedFileName is None or self.croppedFileName.strip() == "":
+                raise ValueError("croppedFileName is required when operationType is IMAGE_CROP")
+            if len(self.fileNames) != 1:
+                raise ValueError("fileNames must contain exactly 1 entry when operationType is IMAGE_CROP")
+            normalized_cropped = os.path.normcase(self.croppedFileName)
+            normalized_sources = [os.path.normcase(name) for name in self.fileNames]
+            if normalized_cropped in normalized_sources:
+                raise ValueError(
+                    f"croppedFileName ('{self.croppedFileName}') collides with one of this "
+                    "step's fileNames (case-insensitive) — crop output must not overwrite "
+                    "a source file"
+                )
+        else:
+            if self.cropBox is not None:
+                raise ValueError("cropBox must be omitted unless operationType is IMAGE_CROP")
+            if self.croppedFileName is not None:
+                raise ValueError("croppedFileName must be omitted unless operationType is IMAGE_CROP")
+        return self
+
+    @model_validator(mode="after")
+    def image_thumbnail_fields_only_for_image_thumbnail(self) -> "PlanStep":
+        # Saga #329: image_crop_fields_only_for_image_crop ile AYNI desen -
+        # maxWidth/maxHeight/thumbnailFileName SADECE IMAGE_THUMBNAIL icin
+        # zorunlu, diger operationType'larda tamamen yasak. maxWidth/
+        # maxHeight'in POZITIF olması (AC-6) BİLİNÇLİ olarak burada
+        # kontrol EDİLMEZ — test_orchestrator.py AC-6 çalışma zamanında
+        # `PlanApplicationError` bekliyor, şema seviyesinde `ValidationError`
+        # değil; bu kontrol `image_ops.create_thumbnail` içinde yapılır.
+        if self.operationType == OperationType.IMAGE_THUMBNAIL:
+            if self.maxWidth is None:
+                raise ValueError("maxWidth is required when operationType is IMAGE_THUMBNAIL")
+            if self.maxHeight is None:
+                raise ValueError("maxHeight is required when operationType is IMAGE_THUMBNAIL")
+            if self.thumbnailFileName is None or self.thumbnailFileName.strip() == "":
+                raise ValueError("thumbnailFileName is required when operationType is IMAGE_THUMBNAIL")
+            if len(self.fileNames) != 1:
+                raise ValueError("fileNames must contain exactly 1 entry when operationType is IMAGE_THUMBNAIL")
+            normalized_thumbnail = os.path.normcase(self.thumbnailFileName)
+            normalized_sources = [os.path.normcase(name) for name in self.fileNames]
+            if normalized_thumbnail in normalized_sources:
+                raise ValueError(
+                    f"thumbnailFileName ('{self.thumbnailFileName}') collides with one of this "
+                    "step's fileNames (case-insensitive) — thumbnail output must not overwrite "
+                    "a source file"
+                )
+        else:
+            if self.maxWidth is not None:
+                raise ValueError("maxWidth must be omitted unless operationType is IMAGE_THUMBNAIL")
+            if self.maxHeight is not None:
+                raise ValueError("maxHeight must be omitted unless operationType is IMAGE_THUMBNAIL")
+            if self.thumbnailFileName is not None:
+                raise ValueError("thumbnailFileName must be omitted unless operationType is IMAGE_THUMBNAIL")
         return self
 
 

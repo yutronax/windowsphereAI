@@ -1,5 +1,35 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Image kırpma/thumbnail (Saga #329, epic #29) — kritik veri kaybı sınıfı iki katmanlı kapatıldı
+
+**Epic'in en düşük öncelikli ama en KRİTİK gerekçeli görevi.** Eski
+projede koordinat/boyut alanları gelmediğinde sessizce `(0,0,100,100)`
+gibi bir varsayılana düşülüp, orijinal görsel yedeksiz ve geri dönüşsüz
+şekilde küçük bir kareye düşürülüp `success:True` ile üzerine
+yazılabiliyordu. Bu görüşmede iki katmanlı bir savunma tasarlandı: (1)
+koordinat/boyut EKSİKSE Pydantic şema seviyesinde reddedilir, (2) VAR ama
+GEÇERSİZSE (geometri/sınır-dışı) çalışma zamanında reddedilir — VE çıktı
+HER ZAMAN yeni bir dosyaya yazılır (kaynak asla değişmez), "üzerine yazma"
+riski mimari olarak imkânsız kılındı.
+
+**Pillow'un sessiz toleransı önceden tespit edildi.** Plan adımında gerçek
+kurulumla doğrulandı: `Image.crop(box)` sınır-dışı bir `box` için HATA
+VERMİYOR, sessizce siyah/boş alanla dolduruyor — implementasyona bu
+AÇIKÇA aktarıldı, `crop_image` kendi sınır kontrolünü `img.crop()`
+çağrılmadan ÖNCE elle yapıyor. Ayrıca `Image.thumbnail()`'ın in-place/
+None-dönüş davranışı (yaygın bir Pillow tuzağı: `new_img =
+img.thumbnail(...)` yazılırsa `new_img` `None` olur) doğrulanıp
+implementasyona aktarıldı.
+
+**Bağımsız red-team turu, görevin ANA MOTİVASYONUNU kod okuyarak
+doğruladı** — model_validator'ların eksik alan için GERÇEKTEN hiçbir
+varsayılana düşme yolu bırakmadığını, `img.crop()`'un sessiz toleransına
+güvenilmediğini, `thumbnail()`'ın doğru kullanıldığını satır satır
+teyit etti. Ready to Commit, sadece Saga #338'in kapsamına giren düşük
+öncelikli tutarlılık notları.
+
+522/522 backend test yeşil (5 skip, Windows-only).
+
 ## Zip temel operasyonları (Saga #328, epic #29) — 5 operasyon + gerçek refactor + red-team yanlış alarmı
 
 **Oturumun en büyük tek-görev kapsamı.** ZIP_CREATE/ZIP_ADD/ZIP_EXTRACT/

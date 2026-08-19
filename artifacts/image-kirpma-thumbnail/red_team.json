@@ -1,0 +1,32 @@
+{
+  "task_slug": "image-kirpma-thumbnail",
+  "reviewer": "obss-red-team subagent (bağımsız — test VE kod da subagent'lar tarafından yazıldı)",
+  "verdict": "Ready to Commit",
+  "security_findings": [
+    {
+      "finding": "croppedFileName/thumbnailFileName için Saga #338'in kapsamındaki merkezi _validate_single_path yardımcısı kullanılmıyor, sadece field-seviyesi ayraç-engelleme var.",
+      "severity": "low",
+      "scenario": "YENİ bir regresyon değil — EXCEL_FILTER/PDF_COMPRESS/ZIP_* ile AYNI mevcut sınıfa katılıyor. Bloklamıyor.",
+      "status": "NOT FIXED — Saga #338'in kapsamına dahil, ayrıca task açılmadı (zaten aynı sınıfın kayıtlı takip görevi var)."
+    },
+    {
+      "finding": "orchestrator.py'de IMAGE_CROP/IMAGE_THUMBNAIL bloklarında source_path için ayrıca is_path_allowed çağrısı yok (OCR bloğunda var).",
+      "severity": "low",
+      "scenario": "Path-separator validator + fileNames'in ayraçsız olması traversal'ı fiilen kapatıyor (defense-in-depth ilkesiyle tutarlı) — diğer 1-kaynak-1-hedef operasyonlarla (EXCEL_FILTER) aynı desen, ayrı bir regresyon değil."
+    },
+    {
+      "finding": "maxWidth/maxHeight için üst sınır kontrolü yok, sadece pozitiflik.",
+      "severity": "low",
+      "scenario": "Image.thumbnail() sadece küçültür, büyütmez — çok büyük bir değer bile orijinal boyutu aşamaz, gerçek DoS yüzeyi yok."
+    }
+  ],
+  "approved_points": [
+    "Ana motivasyon (sessiz varsayılana düşme) TAMAMEN kapatıldı — model_validator'lar eksik cropBox/maxWidth/maxHeight için ValueError fırlatıyor, hiçbir kod yolunda varsayılan değere düşme YOK, kod okunarak doğrulandı.",
+    "crop_image'in img.crop() çağrısı, geometri VE sınır-dışı kontrollerinden SONRA geliyor — Pillow'un sessiz toleransına güvenilmiyor.",
+    "create_thumbnail, Image.thumbnail()'ın in-place/None-dönüş davranışını doğru kullanıyor.",
+    "Her iki fonksiyon da tempfile+atomik-replace deseni kullanıyor, with Image.open() bloğu içinde save() tamamlanıyor (lazy-loading sorunu yok).",
+    "Çıktı dosya adı çakışma kontrolü diğer 14 operasyonla aynı desende.",
+    "pytest backend/tests -q bağımsız olarak yeniden çalıştırıldı: 522 passed, 5 skipped, 0 failed."
+  ],
+  "overall_assessment": "Ready to Commit. Görevin kritik veri-kaybı motivasyonu iki katmanlı savunmayla (şema + runtime) gerçekten kapatıldı, kod okunarak doğrulandı. Bulunan bulgular düşük öncelikli, mevcut/bilinen sınıflara giren tutarlılık notları."
+}

@@ -3363,3 +3363,194 @@ def test_apply_plan_rejects_zip_merge_of_a_path_outside_allowed_root(session, tm
 
     assert calls == []
     assert not (tmp_path / "birlesik.zip").exists()
+
+
+# ---------------------------------------------------------------------------
+# Saga #329: image-kirpma-thumbnail (TEST-FIRST / red step) -
+# `OperationType.IMAGE_CROP`/`IMAGE_THUMBNAIL`, `PlanStep.cropBox`/
+# `croppedFileName`/`maxWidth`/`maxHeight`/`thumbnailFileName` ve
+# orchestrator'daki IMAGE_CROP/IMAGE_THUMBNAIL dalları henüz YOK. Bu
+# testler şimdilik KIRMIZI kalmalı (AttributeError/ValidationError -
+# EXCEL_FILTER'in red-step testleriyle AYNI desen).
+# ---------------------------------------------------------------------------
+
+
+def _write_real_image(root, filename: str, width: int, height: int, color: str = "red") -> None:
+    from PIL import Image
+
+    Image.new("RGB", (width, height), color=color).save(root / filename)
+
+
+def _image_crop_step(order: int, file_name: str, crop_box: dict, cropped_file_name: str) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.IMAGE_CROP,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=[file_name],
+        cropBox=crop_box,
+        croppedFileName=cropped_file_name,
+    )
+
+
+def _image_thumbnail_step(
+    order: int, file_name: str, max_width: int, max_height: int, thumbnail_file_name: str
+) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.IMAGE_THUMBNAIL,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=[file_name],
+        maxWidth=max_width,
+        maxHeight=max_height,
+        thumbnailFileName=thumbnail_file_name,
+    )
+
+
+def test_apply_plan_crops_image_writes_new_file_and_leaves_source_untouched(session, tmp_path):
+    # AC-1: happy path.
+    from PIL import Image
+
+    _write_real_image(tmp_path, "kaynak.png", 200, 200)
+    original_bytes = (tmp_path / "kaynak.png").read_bytes()
+    pdf_files = [PdfFileMetadata(filename="kaynak.png", createdAt="2026-08-01")]
+    plan = _plan(
+        [_image_crop_step(0, "kaynak.png", {"x0": 10, "y0": 10, "x1": 100, "y1": 100}, "kirpilmis.png")]
+    )
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    output_path = tmp_path / "kirpilmis.png"
+    assert output_path.exists()
+    with Image.open(output_path) as cropped:
+        assert cropped.size == (90, 90)
+    assert (tmp_path / "kaynak.png").read_bytes() == original_bytes
+    assert transaction.status == "committed"
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_rejects_image_crop_with_invalid_geometry_and_writes_no_file(session, tmp_path):
+    # AC-3: x1<=x0.
+    _write_real_image(tmp_path, "kaynak.png", 200, 200)
+    pdf_files = [PdfFileMetadata(filename="kaynak.png", createdAt="2026-08-01")]
+    plan = _plan(
+        [_image_crop_step(0, "kaynak.png", {"x0": 100, "y0": 10, "x1": 50, "y1": 100}, "kirpilmis.png")]
+    )
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "kirpilmis.png").exists()
+
+
+def test_apply_plan_rejects_image_crop_exceeding_source_bounds_and_writes_no_file(session, tmp_path):
+    # AC-3: box kaynağın GERÇEK piksel sınırlarını aşıyor - Pillow'un
+    # img.crop() kendisi hata vermez, orchestrator/image_ops bunu ELLE
+    # kontrol etmeli (plan.md Risks).
+    _write_real_image(tmp_path, "kaynak.png", 200, 200)
+    pdf_files = [PdfFileMetadata(filename="kaynak.png", createdAt="2026-08-01")]
+    plan = _plan(
+        [_image_crop_step(0, "kaynak.png", {"x0": 0, "y0": 0, "x1": 500, "y1": 500}, "kirpilmis.png")]
+    )
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "kirpilmis.png").exists()
+
+
+def test_apply_plan_rejects_image_crop_when_source_is_missing_or_corrupt(session, tmp_path):
+    # AC-7.
+    (tmp_path / "bozuk.png").write_bytes(b"not a real image")
+    pdf_files = [PdfFileMetadata(filename="bozuk.png", createdAt="2026-08-01")]
+    plan = _plan(
+        [_image_crop_step(0, "bozuk.png", {"x0": 0, "y0": 0, "x1": 50, "y1": 50}, "kirpilmis.png")]
+    )
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "kirpilmis.png").exists()
+
+
+def test_apply_plan_rejects_image_crop_of_a_path_outside_allowed_root(session, tmp_path, monkeypatch):
+    # EXCEL_FILTER'in ".." teknigiyle AYNI desen (Saga #307/#324/#325).
+    pdf_files = [PdfFileMetadata(filename="..", createdAt="2026-08-01")]
+    plan = _plan([_image_crop_step(0, "..", {"x0": 0, "y0": 0, "x1": 50, "y1": 50}, "kirpilmis.png")])
+
+    calls: list = []
+    monkeypatch.setattr(
+        "backend.orchestrator.image_ops.crop_image",
+        lambda *args, **kwargs: calls.append(args),
+    )
+
+    with pytest.raises(PathWhitelistError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert calls == []
+    assert not (tmp_path / "kirpilmis.png").exists()
+
+
+def test_apply_plan_creates_thumbnail_preserving_aspect_ratio_and_leaves_source_untouched(session, tmp_path):
+    # AC-4: happy path.
+    from PIL import Image
+
+    _write_real_image(tmp_path, "kaynak.png", 400, 200)
+    original_bytes = (tmp_path / "kaynak.png").read_bytes()
+    pdf_files = [PdfFileMetadata(filename="kaynak.png", createdAt="2026-08-01")]
+    plan = _plan([_image_thumbnail_step(0, "kaynak.png", 100, 100, "kucuk.png")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    output_path = tmp_path / "kucuk.png"
+    assert output_path.exists()
+    with Image.open(output_path) as thumb:
+        width, height = thumb.size
+        assert width <= 100
+        assert height <= 100
+        assert (width, height) != (100, 100)
+    assert (tmp_path / "kaynak.png").read_bytes() == original_bytes
+    assert transaction.status == "committed"
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_rejects_image_thumbnail_with_non_positive_size_and_writes_no_file(session, tmp_path):
+    # AC-6: maxWidth/maxHeight sıfır veya negatif.
+    _write_real_image(tmp_path, "kaynak.png", 400, 200)
+    pdf_files = [PdfFileMetadata(filename="kaynak.png", createdAt="2026-08-01")]
+    plan = _plan([_image_thumbnail_step(0, "kaynak.png", 0, 100, "kucuk.png")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "kucuk.png").exists()
+
+
+def test_apply_plan_rejects_image_thumbnail_when_source_is_missing_or_corrupt(session, tmp_path):
+    # AC-7.
+    (tmp_path / "bozuk.png").write_bytes(b"not a real image")
+    pdf_files = [PdfFileMetadata(filename="bozuk.png", createdAt="2026-08-01")]
+    plan = _plan([_image_thumbnail_step(0, "bozuk.png", 100, 100, "kucuk.png")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "kucuk.png").exists()
+
+
+def test_apply_plan_rejects_image_thumbnail_of_a_path_outside_allowed_root(session, tmp_path, monkeypatch):
+    pdf_files = [PdfFileMetadata(filename="..", createdAt="2026-08-01")]
+    plan = _plan([_image_thumbnail_step(0, "..", 100, 100, "kucuk.png")])
+
+    calls: list = []
+    monkeypatch.setattr(
+        "backend.orchestrator.image_ops.create_thumbnail",
+        lambda *args, **kwargs: calls.append(args),
+    )
+
+    with pytest.raises(PathWhitelistError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert calls == []
+    assert not (tmp_path / "kucuk.png").exists()

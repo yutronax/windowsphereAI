@@ -344,3 +344,31 @@ def test_excel_sort_sorted_file_name_rejects_case_variant_overlap_with_source_fi
             sort_ascending=True,
             sorted_file_name="A.XLSX",
         )
+
+
+# ---------------------------------------------------------------------------
+# Saga #329 (image-kirpma-thumbnail, red step): AC-2/AC-5 - cropBox/
+# maxWidth+maxHeight VERİLMEMİŞSE plan Pydantic seviyesinde reddedilir
+# (sessiz varsayılana DÜŞÜLMEZ). `_step()` fixture'ının "operationType
+# değişince belirli alan zorunlu olur" deseni RENAME/newFileNames
+# testleriyle AYNI (yukarıdaki test_new_file_names_required_when_...).
+# `OperationType.IMAGE_CROP`/`IMAGE_THUMBNAIL` ve `PlanStep.cropBox`/
+# `maxWidth`/`maxHeight` henüz backend/models.py'de YOK - bu testler
+# şimdilik KIRMIZI kalmalı (AttributeError).
+# ---------------------------------------------------------------------------
+
+
+def test_crop_box_required_when_operation_type_is_image_crop():
+    with pytest.raises(ValidationError):
+        _step(
+            operationType=OperationType.IMAGE_CROP,
+            croppedFileName="kirpilmis.png",
+        )
+
+
+def test_max_width_and_max_height_required_when_operation_type_is_image_thumbnail():
+    with pytest.raises(ValidationError):
+        _step(
+            operationType=OperationType.IMAGE_THUMBNAIL,
+            thumbnailFileName="kucuk.png",
+        )
