@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from backend import excel_rows, excel_sort, pdf_compress, pdf_pages
+from backend import excel_rows, excel_sort, pdf_compress, pdf_pages, word_table
 from backend.db_models import FileOperation, Transaction
 from backend.file_operations import create_transaction, record_file_operation
 from backend.models import OperationType, PdfFileMetadata, PlanSkeleton, PlanStep
@@ -62,6 +62,7 @@ _SUPPORTED_OPERATION_TYPES = {
     OperationType.PDF_COMPRESS,
     OperationType.EXCEL_CREATE,
     OperationType.EXCEL_APPEND,
+    OperationType.WORD_APPEND_TABLE,
 }
 
 # DELETE'in fiziksel yedeklerinin saklandığı, `allowed_root` altında gizli
@@ -367,6 +368,10 @@ _ROLLBACK_OPERATIONS = {
     # ile AYNI fonksiyonu (dosya-tipinden bağımsız, sadece `shutil.copy2`
     # ile backup_path'i geri kopyalar).
     OperationType.EXCEL_APPEND: _rollback_append,
+    # Saga #327: WORD_APPEND_TABLE rollback'i - EXCEL_APPEND'in AYNI
+    # fonksiyonu (dosya-tipinden bağımsız, sadece `shutil.copy2` ile
+    # backup_path'i geri kopyalar).
+    OperationType.WORD_APPEND_TABLE: _rollback_append,
 }
 
 
@@ -881,6 +886,31 @@ def apply_plan(
                 session.commit()
                 applied.append(operation)
                 continue
+            if step.operationType == OperationType.WORD_APPEND_TABLE:
+                # Saga #327: EXCEL_APPEND bloğunun BİREBİR kopyası -
+                # WORD_APPEND_TABLE de YERİNDE günceller (destination ==
+                # source).
+                source_path = allowed_root / files[0].filename
+                destination_path = source_path
+                backup_path = _append_backup_path(allowed_root, transaction.id, files[0].filename)
+                operation = record_file_operation(
+                    session,
+                    transaction,
+                    operation_type=step.operationType.value,
+                    source_path=str(source_path),
+                    destination_path=str(destination_path),
+                    backup_path=str(backup_path),
+                )
+                try:
+                    word_table.append_table(source_path, step.tableHeaders, step.tableRows, backup_path)
+                except Exception as exc:
+                    raise PlanApplicationError(
+                        f"WORD_APPEND_TABLE kaynağı okunamıyor: '{source_path.name}' ({exc})"
+                    ) from exc
+                operation.status = "completed"
+                session.commit()
+                applied.append(operation)
+                continue
             if step.operationType == OperationType.APPEND:
                 # Saga #323: APPEND YERINDE gunceller - destination_path ==
                 # source_path (MERGE/REDACT/EXCEL_SORT'un aksine, kaynak
@@ -931,6 +961,7 @@ def apply_plan(
                 OperationType.PDF_COMPRESS,
                 OperationType.EXCEL_CREATE,
                 OperationType.EXCEL_APPEND,
+                OperationType.WORD_APPEND_TABLE,
             ):
                 target_dir = allowed_root / step.targetFolder
                 target_dir.mkdir(parents=True, exist_ok=True)

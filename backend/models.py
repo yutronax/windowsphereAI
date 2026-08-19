@@ -78,6 +78,10 @@ class OperationType(str, Enum):
     # YERİNDE güncelle" deseni, ama metin sayfası yerine satır (appendRows)
     # ekler.
     EXCEL_APPEND = "Excel Ekle"
+    # Saga #327: WORD_APPEND_TABLE - EXCEL_APPEND ile AYNI "kaynağı YERİNDE
+    # güncelle" deseni, ama satır (appendRows) yerine bir Word tablosu
+    # (tableHeaders opsiyonel + tableRows zorunlu) ekler.
+    WORD_APPEND_TABLE = "Word Tablo Ekle"
 
 
 class RedactionRegion(BaseModel):
@@ -188,6 +192,12 @@ class PlanStep(BaseModel):
     # appendText ile AYNI desende (SADECE operationType==EXCEL_APPEND
     # olduğunda dolu olmalı, diğer operationType'larda None kalmalı).
     appendRows: list | None = None
+    # Saga #327: WORD_APPEND_TABLE icin - eklenecek tablonun basligi
+    # (opsiyonel) ve veri satirlari, appendRows ile AYNI desende (SADECE
+    # operationType==WORD_APPEND_TABLE olduğunda dolu olmalı, diğer
+    # operationType'larda None kalmalı).
+    tableHeaders: list | None = None
+    tableRows: list | None = None
 
     @field_validator("mergedFileName")
     @classmethod
@@ -618,6 +628,24 @@ class PlanStep(BaseModel):
                 raise ValueError("fileNames must contain exactly 1 entry when operationType is EXCEL_APPEND")
         elif self.appendRows is not None:
             raise ValueError("appendRows must be omitted unless operationType is EXCEL_APPEND")
+        return self
+
+    @model_validator(mode="after")
+    def word_append_table_fields_only_for_word_append_table(self) -> "PlanStep":
+        # Saga #327: excel_append_fields_only_for_excel_append ile AYNI
+        # desen - tableRows SADECE WORD_APPEND_TABLE icin zorunlu,
+        # tableHeaders OPSIYONEL (None olabilir), diger operationType'larda
+        # ikisi de tamamen yasak.
+        if self.operationType == OperationType.WORD_APPEND_TABLE:
+            if self.tableRows is None or len(self.tableRows) == 0:
+                raise ValueError("tableRows is required when operationType is WORD_APPEND_TABLE")
+            if len(self.fileNames) != 1:
+                raise ValueError("fileNames must contain exactly 1 entry when operationType is WORD_APPEND_TABLE")
+        else:
+            if self.tableHeaders is not None:
+                raise ValueError("tableHeaders must be omitted unless operationType is WORD_APPEND_TABLE")
+            if self.tableRows is not None:
+                raise ValueError("tableRows must be omitted unless operationType is WORD_APPEND_TABLE")
         return self
 
 

@@ -1,0 +1,27 @@
+{
+  "task_slug": "word-tablo-basligi",
+  "reviewer": "obss-red-team subagent (bağımsız — test VE kod da subagent'lar tarafından yazıldı, Codex kotası dolu olduğundan; ayrıca .venv/global-Python ortam tutarsızlığı ayrıca doğrulandı)",
+  "verdict": "Ready to Commit",
+  "security_findings": [
+    {
+      "finding": "AC-3 (sütun uyuşmazlığı) ve AC-4 (bozuk kaynak) orchestrator.py'de TEK bir geniş 'except Exception' bloğuna düşüyor, ikisi de aynı genel mesajı ('kaynağı okunamıyor') üretiyor — atdd.md'nin Davranış Sözleşmesi tablosu iki AYRI mesaj vaat ediyordu.",
+      "severity": "low",
+      "scenario": "Kullanıcı sütun sayısını yanlış girdiğinde, kaynağın bozuk olduğunu düşünebilir — hata ayıklamayı zorlaştırır ama işlem doğru şekilde reddediliyor, veri kaybı yok.",
+      "status": "NOT FIXED — bloklamıyor, kolay bir fast-follow (except ValueError'ı ayrı yakala) olarak not edildi."
+    },
+    {
+      "finding": "word_table.append_table, rows=[] + headers=None ile doğrudan çağrılırsa (Pydantic validator'ı bypass edilirse) IndexError fırlatabilir — ValueError değil.",
+      "severity": "low",
+      "scenario": "Şu an ULAŞILAMAZ: PlanStep'in model_validator'ı tableRows boşsa zaten reddediyor, fonksiyon SADECE bu yoldan çağrılıyor. Gelecekte fonksiyon başka bir yerden (CLI/script) çağrılırsa savunma-derinliği eksik.",
+      "status": "NOT FIXED — bloklamıyor, mevcut tek çağrı yolunda zaten iki kat korumalı (Pydantic + geniş except)."
+    }
+  ],
+  "approved_points": [
+    ".venv'de python-docx 1.2.0 kurulu, requirements.txt'teki python-docx==1.2.0 ile BİREBİR eşleşiyor — subagent'ın yanlışlıkla global Python'a kurduğu bağımlılık sorunu GERÇEKTEN düzeltilmiş, red-team kendi bağımsız `.venv/Scripts/python.exe -m pytest` çalıştırmasıyla (subagent özetine güvenmeden) doğruladı: 11/11 hedefli, 463/463 tam suite.",
+    "Sütun sayısı doğrulaması TÜM satırları kontrol ediyor (sadece ilkini değil) — kod okunarak doğrulandı.",
+    "Backup+tempfile+atomik-replace sırası doğru: document.save(source_path) DOĞRUDAN hiç çağrılmıyor, python-docx canlı dosyaya asla dokunmuyor.",
+    "Path/whitelist tutarlılığı: EXCEL_APPEND ile aynı desen (yerinde güncelleme, yeni hedef dosya adı yok), path-whitelist testi geçti.",
+    "Yeni python-docx bağımlılığı security-scan'de pip-audit ile PASS — bilinen açık yok."
+  ],
+  "overall_assessment": "Ready to Commit. Mimari doğru (EXCEL_APPEND/PDF APPEND desenini birebir izliyor), ortam tutarsızlığı gerçekten düzeltilmiş ve bağımsız olarak yeniden doğrulanmış. İki düşük öncelikli, bloklamayan bulgu (hata mesajı ayrımı, teorik ulaşılamaz IndexError) fast-follow olarak kaydedildi."
+}

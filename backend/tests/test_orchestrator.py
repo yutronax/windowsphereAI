@@ -2917,3 +2917,136 @@ def test_apply_plan_rejects_excel_append_of_a_path_outside_allowed_root(session,
     with pytest.raises(PathWhitelistError):
         apply_plan(session, plan, pdf_files, tmp_path)
     assert not (tmp_path / "sikistirilmis.pdf").exists()
+
+
+# Saga #327: word-tablo-basligi (TEST-FIRST / red step) -
+# `OperationType.WORD_APPEND_TABLE`, `PlanStep.tableHeaders`/`tableRows` ve
+# orchestrator'daki WORD_APPEND_TABLE step-uygulama dali henuz YOK. Bu
+# testler simdilik KIRMIZI kalmali (AttributeError -
+# OperationType.WORD_APPEND_TABLE yok - EXCEL_APPEND'in red-step
+# testleriyle AYNI desen). Referans: artifacts/word-tablo-basligi/atdd.md
+# (AC-1, AC-2, AC-3, AC-4), plan.md (EXCEL_APPEND step blogunun BIREBIR
+# kopyasi, word_table.append_table cagrisi).
+
+
+def _write_docx_for_orchestrator(root, filename: str, previous_text: str = "mevcut içerik") -> None:
+    from docx import Document
+
+    doc = Document()
+    doc.add_paragraph(previous_text)
+    doc.save(str(root / filename))
+
+
+def _word_append_table_step(
+    order: int, file_name: str, headers: list | None, rows: list
+) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.WORD_APPEND_TABLE,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=[file_name],
+        tableHeaders=headers,
+        tableRows=rows,
+    )
+
+
+def test_apply_plan_appends_word_table_with_headers_in_place_and_commits(session, tmp_path):
+    # AC-1: headers verilince kaynak YERİNDE güncellenir, `FileOperation`
+    # kaydı oluşur, "completed" olarak commit edilir.
+    from docx import Document
+
+    _write_docx_for_orchestrator(tmp_path, "kaynak.docx")
+    pdf_files = [PdfFileMetadata(filename="kaynak.docx", createdAt="2026-08-01")]
+    plan = _plan(
+        [_word_append_table_step(0, "kaynak.docx", ["Ad", "Tutar"], [["Ali", "100"], ["Veli", "200"]])]
+    )
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    doc = Document(str(tmp_path / "kaynak.docx"))
+    assert doc.paragraphs[0].text == "mevcut içerik"
+    table = doc.tables[-1]
+    assert len(table.rows) == 3
+    assert [cell.text for cell in table.rows[0].cells] == ["Ad", "Tutar"]
+    assert transaction.status == "committed"
+    assert len(transaction.operations) == 1
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_appends_word_table_without_headers_and_commits(session, tmp_path):
+    # AC-2: headers=None -> başlıksız tablo eklenir, hata FIRLATILMAZ.
+    from docx import Document
+
+    _write_docx_for_orchestrator(tmp_path, "kaynak.docx")
+    pdf_files = [PdfFileMetadata(filename="kaynak.docx", createdAt="2026-08-01")]
+    plan = _plan([_word_append_table_step(0, "kaynak.docx", None, [["Ali", "100"]])])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    doc = Document(str(tmp_path / "kaynak.docx"))
+    table = doc.tables[-1]
+    assert len(table.rows) == 1
+    assert [cell.text for cell in table.rows[0].cells] == ["Ali", "100"]
+    assert transaction.status == "committed"
+
+
+def test_apply_plan_rejects_word_append_table_on_column_count_mismatch_and_leaves_document_unchanged(
+    session, tmp_path
+):
+    # AC-3: sütun sayısı uyuşmazlığı -> `PlanApplicationError`, belge
+    # değişmez.
+    _write_docx_for_orchestrator(tmp_path, "kaynak.docx")
+    pre_bytes = (tmp_path / "kaynak.docx").read_bytes()
+    pdf_files = [PdfFileMetadata(filename="kaynak.docx", createdAt="2026-08-01")]
+    plan = _plan(
+        [_word_append_table_step(0, "kaynak.docx", ["Ad", "Tutar", "Şehir"], [["Ali", "100"]])]
+    )
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert (tmp_path / "kaynak.docx").read_bytes() == pre_bytes
+
+
+def test_apply_plan_rejects_word_append_table_when_source_missing_or_corrupt_and_creates_no_file(
+    session, tmp_path
+):
+    # AC-4: kaynak dosya YOK veya BOZUK -> `PlanApplicationError`, HİÇBİR
+    # yeni/boş dosya oluşturulmaz, kaynak (varsa) değişmez.
+    corrupt_bytes = b"not a real docx"
+    (tmp_path / "bozuk.docx").write_bytes(corrupt_bytes)
+    pdf_files_corrupt = [PdfFileMetadata(filename="bozuk.docx", createdAt="2026-08-01")]
+    plan_corrupt = _plan([_word_append_table_step(0, "bozuk.docx", ["Ad"], [["Ali"]])])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan_corrupt, pdf_files_corrupt, tmp_path)
+
+    assert (tmp_path / "bozuk.docx").read_bytes() == corrupt_bytes
+
+    pdf_files_missing = [PdfFileMetadata(filename="yok.docx", createdAt="2026-08-01")]
+    plan_missing = _plan([_word_append_table_step(0, "yok.docx", ["Ad"], [["Ali"]])])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan_missing, pdf_files_missing, tmp_path)
+
+    assert not (tmp_path / "yok.docx").exists()
+
+
+def test_apply_plan_rejects_word_append_table_of_a_path_outside_allowed_root(
+    session, tmp_path, monkeypatch
+):
+    # EXCEL_APPEND/PDF APPEND'in ".." teknigiyle AYNI desen.
+    pdf_files = [PdfFileMetadata(filename="..", createdAt="2026-08-01")]
+    plan = _plan([_word_append_table_step(0, "..", ["Ad"], [["Ali"]])])
+
+    calls: list = []
+    monkeypatch.setattr(
+        "backend.orchestrator.word_table.append_table",
+        lambda *args, **kwargs: calls.append(args),
+    )
+
+    with pytest.raises(PathWhitelistError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert calls == []

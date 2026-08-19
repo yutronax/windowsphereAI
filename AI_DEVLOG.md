@@ -1,5 +1,41 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Word tablo ekleme (Saga #327, epic #29) — kapsam daraltma + venv/global-Python tuzağı
+
+**Görev ortam incelemesiyle ikiye ayrıştırıldı.** Saga #327 hem Word→PDF
+dönüştürme (LibreOffice/`soffice` gerektiriyor) hem tabloya başlık ekleme
+istiyordu. `soffice` bu ortamda KURULU DEĞİL ve pip ile de kurulamaz (dış
+binary) — kullanıcı kararıyla dönüştürme TAMAMEN kapsam dışı bırakıldı,
+ayrı bir Saga task'a ertelendi (LibreOffice kurulana kadar). Bu görev
+sadece `python-docx` tabanlı WORD_APPEND_TABLE'ı (EXCEL_APPEND'in yerinde-
+güncelleme desenini izleyen) kapsadı — proje genelinde ilk `python-docx`
+kullanımı, `requirements.txt`'e yeni bağımlılık olarak eklendi.
+
+**`plan` adımı read-only olduğu için yeni bir kütüphanenin API'sini
+canlı doğrulayamadı** — python-docx henüz kurulu değildi, pip install
+plan aşamasının salt-okunur kuralını ihlal ederdi. Bunun yerine
+python-docx'in yıllardır değişmemiş, iyi belgelenmiş çekirdek API'si
+(`add_table`, `.rows[i].cells[j].text`) plan.md'de ÖNERİ olarak yazıldı,
+gerçek doğrulama code-copilot adımına (zaten venv değiştiren bir adım)
+bırakıldı — implementasyon subagent'ı bunu gerçek kurulumla doğruladı,
+öneri doğru çıktı.
+
+**Ortam tuzağı: iki farklı Python yorumlayıcısı.** Test-yazım subagent'ı
+`pip install python-docx`'i proje `.venv`'i YERİNE bir global Python 3.11
+kurulumuna (`AppData\Local\Programs\Python\Python311`) çalıştırmıştı —
+bu global kurulumda openpyxl/fastapi gibi proje bağımlılıkları da
+TESADÜFEN kuruluydu, bu yüzden testler orada "geçiyor" görünüyordu ama
+projenin GERÇEKTEN kullandığı `.venv`'de python-docx yoktu. Bu, Claude
+tarafından `.venv/Scripts/python -c "import docx"` ile fark edilip
+düzeltildi (python-docx `.venv`'e de kuruldu), kırmızı/yeşil durumların
+İKİSİ DE `.venv` ile bağımsız olarak yeniden koşuldu. Bağımsız red-team
+turu da ayrıca kendi `.venv/Scripts/python.exe -m pytest` çalıştırmasıyla
+(subagent özetine güvenmeden) bunu teyit etti. Ders: bir subagent'ın
+"testler geçti" iddiası, HANGİ Python yorumlayıcısıyla çalıştığını
+doğrulamadan güvenilir kanıt sayılmamalı.
+
+463/463 backend test yeşil (5 skip, Windows-only).
+
 ## Excel create/read/append (Saga #326, epic #29) — kaynaksız operasyon + eksik whitelist bulgusu
 
 **Üç mimari olarak farklı operasyon tek görüşmede netleştirildi.**
