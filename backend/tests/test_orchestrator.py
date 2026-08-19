@@ -502,30 +502,30 @@ def test_apply_plan_renames_a_file_in_place(session, tmp_path):
 
 
 def test_apply_plan_rename_output_filename_changes_when_new_file_names_changes(session, tmp_path):
-    _write_pdf(tmp_path, "one.pdf")
-    _write_pdf(tmp_path, "two.pdf")
-    _write_pdf(tmp_path, "three.pdf")
-    pdf_files = [
-        PdfFileMetadata(filename="one.pdf", createdAt="2026-08-01"),
-        PdfFileMetadata(filename="two.pdf", createdAt="2026-08-02"),
-        PdfFileMetadata(filename="three.pdf", createdAt="2026-08-03"),
+    def make_pair(old_name, new_name, created_at):
+        def setup(run_dir):
+            _write_pdf(run_dir, old_name)
+
+        def build_plan():
+            return _plan([_step(0, "2026-08", [old_name], operation_type=OperationType.RENAME, new_file_names=[new_name])])
+
+        def check(run_dir):
+            assert (run_dir / new_name).exists()
+            assert not (run_dir / old_name).exists()
+
+        return (
+            setup,
+            build_plan,
+            [PdfFileMetadata(filename=old_name, createdAt=created_at)],
+            check,
+        )
+
+    pairs = [
+        make_pair("one.pdf", "alpha.pdf", "2026-08-01"),
+        make_pair("two.pdf", "beta.pdf", "2026-08-02"),
+        make_pair("three.pdf", "gamma.pdf", "2026-08-03"),
     ]
-    plan = _plan(
-        [
-            _step(0, "2026-08", ["one.pdf"], operation_type=OperationType.RENAME, new_file_names=["alpha.pdf"]),
-            _step(1, "2026-08", ["two.pdf"], operation_type=OperationType.RENAME, new_file_names=["beta.pdf"]),
-            _step(2, "2026-08", ["three.pdf"], operation_type=OperationType.RENAME, new_file_names=["gamma.pdf"]),
-        ]
-    )
-
-    apply_plan(session, plan, pdf_files, tmp_path)
-
-    assert (tmp_path / "alpha.pdf").exists()
-    assert not (tmp_path / "one.pdf").exists()
-    assert (tmp_path / "beta.pdf").exists()
-    assert not (tmp_path / "two.pdf").exists()
-    assert (tmp_path / "gamma.pdf").exists()
-    assert not (tmp_path / "three.pdf").exists()
+    _assert_apply_plan_wiring_pairs(session, tmp_path, pairs)
 
 
 def test_apply_plan_rolls_back_a_rename_by_restoring_the_old_name(session, tmp_path, monkeypatch):
@@ -598,6 +598,35 @@ def test_apply_plan_rejects_cross_step_chained_renames_without_losing_data(sessi
 # kaynaklara dokunulmaz, rollback COPY semantigiyle (sadece hedefi sil).
 
 
+def _assert_apply_plan_wiring_pairs(session, tmp_path, pairs):
+    """Saga #332: apply_plan'i farkli field degerleriyle cagirip farkli
+    dosya ciktilarini dogrulayan testler icin paylasilan helper.
+
+    pairs: [(setup_fn, build_plan_fn, pdf_files, check_fn), ...]
+      - setup_fn(run_dir): run_dir icine kaynak dosyalari yazar
+      - build_plan_fn() -> PlanSkeleton: o cift icin plani uretir
+      - pdf_files: apply_plan'a gecilecek PdfFileMetadata listesi
+      - check_fn(run_dir): apply_plan sonrasi dogrulama assert'lerini yapar
+
+    Iki-asamali surec: ONCE tum pair'ler icin setup -> apply_plan arast yapilir,
+    SONRA TUM pair'lerin check_fn'leri calistirili. Bu, sonraki bir apply_plan
+    cagrisi oenceki pair'in ciktisini bozup bozmadigi kontrolunu saglar.
+    Hicbir try/except sarmalamasi yapmaz - assert/exception oldugu gibi yukselir.
+    """
+    run_dirs = []
+    # Asama 1: Tum setup'lar ve apply_plan'lar
+    for index, (setup_fn, build_plan_fn, pdf_files, check_fn) in enumerate(pairs):
+        run_dir = tmp_path / f"pair_{index}"
+        run_dir.mkdir()
+        setup_fn(run_dir)
+        plan = build_plan_fn()
+        apply_plan(session, plan, pdf_files, run_dir)
+        run_dirs.append(run_dir)
+    # Asama 2: Tum check_fn'ler (TUM apply_plan'lar bittikten SONRA)
+    for run_dir, (_, _, _, check_fn) in zip(run_dirs, pairs):
+        check_fn(run_dir)
+
+
 def _merge_step(order: int, file_names: list[str], merged_file_name: str) -> PlanStep:
     return PlanStep(
         order=order,
@@ -632,35 +661,30 @@ def test_apply_plan_merges_real_pdfs_into_one_file_with_the_correct_total_page_c
 
 
 def test_apply_plan_merge_output_filename_changes_when_merged_file_name_changes(session, tmp_path):
-    run1 = tmp_path / "run1"
-    run1.mkdir()
-    run2 = tmp_path / "run2"
-    run2.mkdir()
+    def make_pair(source_files, source_created_ats, merged_name, other_merged_name):
+        def setup(run_dir):
+            for src_file in source_files:
+                _write_real_pdf(run_dir, src_file, 1)
 
-    _write_real_pdf(run1, "s1.pdf", 1)
-    _write_real_pdf(run1, "s2.pdf", 1)
-    pdf_files_1 = [
-        PdfFileMetadata(filename="s1.pdf", createdAt="2026-08-01"),
-        PdfFileMetadata(filename="s2.pdf", createdAt="2026-08-02"),
+        def build_plan():
+            return _plan([_merge_step(0, source_files, merged_name)])
+
+        def check(run_dir):
+            assert (run_dir / merged_name).exists()
+            assert not (run_dir / other_merged_name).exists()
+
+        pdf_files = [
+            PdfFileMetadata(filename=src, createdAt=created_at)
+            for src, created_at in zip(source_files, source_created_ats)
+        ]
+
+        return (setup, build_plan, pdf_files, check)
+
+    pairs = [
+        make_pair(["s1.pdf", "s2.pdf"], ["2026-08-01", "2026-08-02"], "merged_a.pdf", "merged_b.pdf"),
+        make_pair(["s3.pdf", "s4.pdf"], ["2026-08-03", "2026-08-04"], "merged_b.pdf", "merged_a.pdf"),
     ]
-    plan_1 = _plan([_merge_step(0, ["s1.pdf", "s2.pdf"], "merged_a.pdf")])
-    apply_plan(session, plan_1, pdf_files_1, run1)
-
-    assert (run1 / "merged_a.pdf").exists()
-
-    _write_real_pdf(run2, "s3.pdf", 1)
-    _write_real_pdf(run2, "s4.pdf", 1)
-    pdf_files_2 = [
-        PdfFileMetadata(filename="s3.pdf", createdAt="2026-08-03"),
-        PdfFileMetadata(filename="s4.pdf", createdAt="2026-08-04"),
-    ]
-    plan_2 = _plan([_merge_step(0, ["s3.pdf", "s4.pdf"], "merged_b.pdf")])
-    apply_plan(session, plan_2, pdf_files_2, run2)
-
-    assert (run2 / "merged_b.pdf").exists()
-    assert (run1 / "merged_a.pdf").exists()
-    assert not (run2 / "merged_a.pdf").exists()
-    assert not (run1 / "merged_b.pdf").exists()
+    _assert_apply_plan_wiring_pairs(session, tmp_path, pairs)
 
 
 def test_apply_plan_leaves_merge_sources_untouched(session, tmp_path):

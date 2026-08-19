@@ -1,0 +1,61 @@
+{
+  "task": "orchestrator-test-helper-wiring",
+  "reviewed_at": "2026-08-19",
+  "summary": "Saf test-suite refactor (backend/orchestrator.py degismedi). Helper _assert_apply_plan_wiring_pairs caveman-basit, tum testler yesil. Ilk red-team turunda bulunan F1 (kalicilik-sonrasi-ikinci-cagri kontrolu kaybi) duzeltildi: helper iki asamali hale getirildi (once TUM apply_plan cagrilari, sonra TUM check_fn'ler) - bagimsiz olarak dogrulandi (141 passed, 1 skipped, kod okunarak iki-asamali dongu teyit edildi).",
+  "findings": [
+    {
+      "severity": "high",
+      "category": "test-gap",
+      "file": "backend/tests/test_orchestrator.py",
+      "issue": "[DUZELTILDI] _assert_apply_plan_wiring_pairs helper'i once setup->apply_plan'i TUM pair'ler icin sirayla calistiracak, check_fn'leri AYRI bir ikinci dongude TUM apply_plan'lar bittikten sonra calistiracak sekilde yeniden yazildi (satir 601-627). Artik son pair'in apply_plan'i calistiktan sonra ilk pair'in ciktisinin hala durdugu da dogrulaniyor.",
+      "better_approach": "Uygulandi.",
+      "reason": "atdd.md AC-2, 'onceki ile ayni senaryolari dogrular' diyor; duzeltme sonrasi orijinal testin kalicilik-sonrasi-ikinci-cagri davranisi geri geldi ve kod okunarak (satir 616-627) + pytest calistirilarak (141 passed) bagimsiz dogrulandi."
+    },
+    {
+      "severity": "low",
+      "category": "scope",
+      "file": "plan.md",
+      "issue": "plan.md, rename testinin kaybettigi 'tek transaction'da 3 adimin birlikte islenmesi' davranisinin satir 236/266'daki testlerce zaten kapsandigini iddia ediyor; o testler RENAME degil OperationType.MOVE kullaniyor - kod yolu muhtemelen ortak ama 'birebir esdeger test' iddiasi tam dogru degil.",
+      "better_approach": "plan.md'deki ifade 'ayni kod yolunun baska bir operation type ile dolayli testi' olarak yumusatilabilir.",
+      "reason": "Iddia ile kanit arasinda kucuk bir tutarsizlik var; pratik risk dusuk (coverage kaybi degil, iddia hassasiyeti)."
+    },
+    {
+      "severity": "low",
+      "category": "test-gap",
+      "file": "backend/tests/test_orchestrator.py",
+      "issue": "atdd.md Davranis Sozlesmesi AC-4 (kismi basari: N. cift assert hatasi verirse) icin dogrudan bir negatif-test yok; statik kod incelemesiyle (helper'da try/except olmadigi) dogrulaniyor ama calisir bir test yok.",
+      "better_approach": "Istenirse ayri bir negatif-test eklenebilir, ama atdd.md bunu zaten bilinen/kabul edilen bir bosluk olarak isaretlemisti.",
+      "reason": "atdd.md'de onceden kabul edilmis bir kapsam kararidir, yeni bir sorun degil."
+    }
+  ],
+  "strengths": [
+    "Helper imzasi (setup_fn, build_plan_fn, pdf_files, check_fn) dortlusu CAVEMAN-basit: duz for-loop, try/except yok, gereksiz siniflandirma/dekorator yok.",
+    "Her pair icin ayri tmp_path alt-klasoru (pair_0, pair_1, ...) test izolasyonunu koruyor.",
+    "Production kodu (backend/orchestrator.py) hic degismedi - git status ve code_diff.md bunu dogruluyor.",
+    "verify_report.md'de bagimsiz ikinci bir pytest calistirmasi yapilmis (141 passed, 1 skipped), subagent raporuna korlemesine guvenilmemis."
+  ],
+  "risks": [
+    "Helper'in 3. bir field-wiring testine (orn. excel_sort) yetersiz kalabilecegi risk atdd.md/plan.md'de zaten bilinip kapsam disi birakilmis - yeni bir risk degil."
+  ],
+  "caveman_review": {
+    "complexity": "low",
+    "unnecessary_files": 0,
+    "unnecessary_helpers": 0,
+    "unnecessary_abstractions": 0
+  },
+  "scope_review": {
+    "matches_atdd": true,
+    "scope_expansion": false
+  },
+  "ready_to_commit": {
+    "atdd_satisfied": true,
+    "tests_passed": true,
+    "no_critical_findings": true,
+    "scope_respected": true,
+    "caveman_satisfied": true,
+    "security_acceptable": true,
+    "maintainability_acceptable": true,
+    "no_blocking_risks": true
+  },
+  "verdict": "approve"
+}

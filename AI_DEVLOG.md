@@ -1,5 +1,33 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Orchestrator field-wiring test helper (Saga #332, epic #29) — Codex kotası dolu, red-team iki gerçek kapsam kaybını yakaladı
+
+**Codex kotası 15 Eylül 2026'ya kadar dolu olduğu için** bu dar kapsamlı
+test-suite refactor'ü (backend/orchestrator.py'a hiç dokunulmadı, sadece
+`backend/tests/test_orchestrator.py`) kullanıcı onayıyla bir Claude Haiku
+alt ajanına yazdırıldı — pipeline'ın normal "kod her zaman Codex yazar"
+kuralının bilinçli, dar kapsamlı bir istisnası.
+
+**Bağımsız `verify` ve `red-team` turları, alt ajanın ilk yazımında iki
+ayrı kapsam kaybını yakaladı.** rename+merge testlerini ortak bir
+`_assert_apply_plan_wiring_pairs` helper'ına taşırken: (1) merge testinin
+orijinal çapraz-run izolasyon assert'leri (`assert not (run2/"merged_a.pdf")`
+vb.) ilk yazımda sessizce düştü — `verify` sırasında bulunup helper'ın
+`check_fn`'lerine geri eklendi; (2) ilk düzeltme sonrası bile, orijinal
+testteki "ikinci apply_plan çağrısından SONRA birinci pair'in çıktısı hâlâ
+duruyor mu" kalıcılık kontrolü hâlâ eksikti — bu ikinci kayıp sadece
+bağımsız `red-team` turunda (F1, high, test-gap) yakalandı, çünkü helper
+her pair'i `setup->apply_plan->check_fn` sırayla işliyordu. Helper iki
+aşamalı hale getirildi (önce TÜM `apply_plan` çağrıları, sonra TÜM
+`check_fn`'ler) ve her ikisi de kod okunarak + pytest bağımsız çalıştırılarak
+(141 passed, 1 skipped) doğrulandı, red-team ikinci turda `approve` verdi.
+
+**Ders:** alt ajan/Copilot'un "testler geçti" raporu, orijinal testin
+kapsadığı TÜM davranışsal senaryoların korunduğunun kanıtı değildir —
+refactor'ün diff'i eski assert'lerle satır satır karşılaştırılmadan
+kapsam kaybı (özellikle "N. çağrıdan SONRA" türü kalıcılık kontrolleri)
+gözden kaçabiliyor.
+
 ## Image kırpma/thumbnail (Saga #329, epic #29) — kritik veri kaybı sınıfı iki katmanlı kapatıldı
 
 **Epic'in en düşük öncelikli ama en KRİTİK gerekçeli görevi.** Eski
