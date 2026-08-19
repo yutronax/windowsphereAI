@@ -1,5 +1,39 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## PDF sayfa aralığı seçimi (Saga #321, epic #29) — extract/delete + off-by-one güvenlik ağı
+
+**Kapsam görüşme sırasında ikiye ayrıştırıldı.** Görev açıklaması hem
+"sayfaları çıkar/böl" hem "güvenli sayfa silme sırası" diyordu; kullanıcı
+onayıyla iki ayrı operasyona bölündü: `PDF_EXTRACT_PAGES` (seçili sayfalar
+→ tek yeni dosya) ve `PDF_DELETE_PAGES` (seçili sayfalar çıkarılır, kalan
+→ yeni dosya). İkisi de `parse_page_spec` ("1,3,5-9" gibi karışık
+ayrık+aralık) üzerinden EXCEL_FILTER'ın (Saga #325) kanıtlanmış mimari
+desenini izliyor.
+
+**Yazım motoru bu görevde ayrıca değişti.** Codex kotası hâlâ dolu; bu kez
+kullanıcı test/kod yazımını Claude'un doğrudan yazması yerine İKİ AYRI
+subagent'a devretmeyi istedi (biri kırmızı testleri, biri implementasyonu
+yazdı) — Claude sadece orkestre etti.
+
+**Bağımsız red-team turu tam olarak önlemesi gereken riski yakaladı.**
+atdd.md'nin Risks bölümü, `parse_page_spec`'in 1-indexed→0-indexed
+dönüşümünde bir off-by-one riskine özellikle işaret etmişti. İlk test
+paketi bunu YAKALAYAMAZDI — testler seçili/kalan sayfa SAYISINI
+doğruluyordu, sayfa KİMLİĞİNİ değil (pypdf'in blank sayfaları ayırt
+edilemiyor). Red-team bunu manuel kod izlemesiyle tespit etti (mevcut kod
+DOĞRUYDU, ama test ağı bunu kanıtlamıyordu). Ayrı bir düzeltme turu
+fixture'lara ayırt edici sayfa boyutu ekledi ve düzeltmenin gerçekten işe
+yaradığını, `page_number - 1`'i geçici olarak bozup testin GERÇEKTEN
+kırıldığını gözlemleyerek kanıtladı — "test yazdım" iddiasının kendisi de
+doğrulanabilir olmalı ilkesinin somut bir örneği.
+
+**Red-team'in bulduğu ikinci, kozmetik bulgu:** "tüm sayfalar silinemez"
+hata mesajı atdd.md'nin Davranış Sözleşmesi tablosuyla uyuşmuyordu (genel
+"sayfa aralığı çözülemedi" mesajına düşüyordu) — ayrı bir mesaj dalıyla
+düzeltildi.
+
+418/418 backend test yeşil (5 skip, Windows-only).
+
 ## Excel satır filtreleme (Saga #325, epic #29) — sütun harfi/başlık karışıklığı
 
 **Kapsam görüşme sırasında genişletildi.** Saga #325'in orijinal talebi

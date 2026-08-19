@@ -56,6 +56,11 @@ class OperationType(str, Enum):
     # kaynak asla degismez" deseni, satir sirasi degil satir ALT KUMESI
     # (bir sutun degerine esit satirlar) uretir.
     EXCEL_FILTER = "Excel Filtrele"
+    # Saga #321: PDF_EXTRACT_PAGES/PDF_DELETE_PAGES - EXCEL_FILTER ile AYNI
+    # "1 kaynak -> 1 hedef, kaynak asla degismez" deseni, PDF sayfa
+    # aralığı/listesi (`pageSpec`) uzerinde calisir.
+    PDF_EXTRACT_PAGES = "PDF Sayfa Çıkar"
+    PDF_DELETE_PAGES = "PDF Sayfa Sil"
     # Saga #323: APPEND - 1 kaynak PDF'in SONUNA appendText'ten render
     # edilmis yeni bir sayfa eklenir, kaynak dosya YERINDE guncellenir
     # (gecici-dosya+atomik-replace deseniyle, bkz. orchestrator._forward_append).
@@ -142,6 +147,14 @@ class PlanStep(BaseModel):
     filterColumn: str | None = None
     filterValue: str | int | float | None = None
     filteredFileName: str | None = None
+    # Saga #321: PDF_EXTRACT_PAGES/PDF_DELETE_PAGES icin - cikarilacak/
+    # silinecek sayfalari belirten "1,3,5-9" bicimindeki metin +
+    # operationType'a gore cikti dosya adi, filterColumn/filteredFileName ile
+    # AYNI desende (SADECE ilgili operationType'da dolu olmali, digerlerinde
+    # None kalmali).
+    pageSpec: str | None = None
+    extractedFileName: str | None = None
+    remainingFileName: str | None = None
     # Saga #323: APPEND icin - kaynagin sonuna eklenecek metin, mergedFileName
     # ile AYNI desende (SADECE operationType==APPEND olduğunda dolu olmalı,
     # diğer operationType'larda None kalmalı). max_length=5000 (Threat-Model
@@ -174,6 +187,20 @@ class PlanStep(BaseModel):
     def filtered_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
         if value is not None and ("/" in value or "\\" in value):
             raise ValueError("filteredFileName must not contain path separators")
+        return value
+
+    @field_validator("extractedFileName")
+    @classmethod
+    def extracted_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
+        if value is not None and ("/" in value or "\\" in value):
+            raise ValueError("extractedFileName must not contain path separators")
+        return value
+
+    @field_validator("remainingFileName")
+    @classmethod
+    def remaining_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
+        if value is not None and ("/" in value or "\\" in value):
+            raise ValueError("remainingFileName must not contain path separators")
         return value
 
     @field_validator("appendText")
@@ -401,6 +428,63 @@ class PlanStep(BaseModel):
                 raise ValueError("filterValue must be omitted unless operationType is EXCEL_FILTER")
             if self.filteredFileName is not None:
                 raise ValueError("filteredFileName must be omitted unless operationType is EXCEL_FILTER")
+        return self
+
+    @model_validator(mode="after")
+    def pdf_extract_pages_fields_only_for_pdf_extract_pages(self) -> "PlanStep":
+        # Saga #321: excel_filter_fields_only_for_excel_filter ile AYNI desen -
+        # pageSpec/extractedFileName SADECE PDF_EXTRACT_PAGES icin zorunlu,
+        # diger operationType'larda tamamen yasak.
+        if self.operationType == OperationType.PDF_EXTRACT_PAGES:
+            if self.pageSpec is None or self.pageSpec.strip() == "":
+                raise ValueError("pageSpec is required when operationType is PDF_EXTRACT_PAGES")
+            if self.extractedFileName is None or self.extractedFileName.strip() == "":
+                raise ValueError("extractedFileName is required when operationType is PDF_EXTRACT_PAGES")
+            if len(self.fileNames) != 1:
+                raise ValueError("fileNames must contain exactly 1 entry when operationType is PDF_EXTRACT_PAGES")
+            normalized_extracted = os.path.normcase(self.extractedFileName)
+            normalized_sources = [os.path.normcase(name) for name in self.fileNames]
+            if normalized_extracted in normalized_sources:
+                raise ValueError(
+                    f"extractedFileName ('{self.extractedFileName}') collides with one of this "
+                    "step's fileNames (case-insensitive) — extract output must not overwrite "
+                    "a source file"
+                )
+        else:
+            if self.extractedFileName is not None:
+                raise ValueError("extractedFileName must be omitted unless operationType is PDF_EXTRACT_PAGES")
+        return self
+
+    @model_validator(mode="after")
+    def pdf_delete_pages_fields_only_for_pdf_delete_pages(self) -> "PlanStep":
+        # Saga #321: excel_filter_fields_only_for_excel_filter ile AYNI desen -
+        # pageSpec/remainingFileName SADECE PDF_DELETE_PAGES icin zorunlu,
+        # diger operationType'larda tamamen yasak.
+        if self.operationType == OperationType.PDF_DELETE_PAGES:
+            if self.pageSpec is None or self.pageSpec.strip() == "":
+                raise ValueError("pageSpec is required when operationType is PDF_DELETE_PAGES")
+            if self.remainingFileName is None or self.remainingFileName.strip() == "":
+                raise ValueError("remainingFileName is required when operationType is PDF_DELETE_PAGES")
+            if len(self.fileNames) != 1:
+                raise ValueError("fileNames must contain exactly 1 entry when operationType is PDF_DELETE_PAGES")
+            normalized_remaining = os.path.normcase(self.remainingFileName)
+            normalized_sources = [os.path.normcase(name) for name in self.fileNames]
+            if normalized_remaining in normalized_sources:
+                raise ValueError(
+                    f"remainingFileName ('{self.remainingFileName}') collides with one of this "
+                    "step's fileNames (case-insensitive) — delete output must not overwrite "
+                    "a source file"
+                )
+        else:
+            if self.remainingFileName is not None:
+                raise ValueError("remainingFileName must be omitted unless operationType is PDF_DELETE_PAGES")
+        if self.operationType not in (
+            OperationType.PDF_EXTRACT_PAGES,
+            OperationType.PDF_DELETE_PAGES,
+        ) and self.pageSpec is not None:
+            raise ValueError(
+                "pageSpec must be omitted unless operationType is PDF_EXTRACT_PAGES or PDF_DELETE_PAGES"
+            )
         return self
 
     @model_validator(mode="after")

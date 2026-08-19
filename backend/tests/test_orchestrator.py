@@ -2468,3 +2468,203 @@ def test_apply_plan_rejects_append_of_a_path_outside_allowed_root(session, tmp_p
 
     with pytest.raises(PathWhitelistError):
         apply_plan(session, plan, pdf_files, tmp_path)
+
+
+# Saga #321: pdf-sayfa-araligi-secimi (red step) -
+# `OperationType.PDF_EXTRACT_PAGES`/`OperationType.PDF_DELETE_PAGES`,
+# `PlanStep.pageSpec`/`extractedFileName`/`remainingFileName` ve
+# orchestrator'daki iki step-uygulama dali henuz YOK. Bu testler simdilik
+# KIRMIZI kalmali (AttributeError / ValidationError - EXCEL_FILTER'in
+# red-step testleriyle AYNI desen).
+
+
+def _write_tagged_pdf(root, filename: str, page_count: int) -> None:
+    # _write_real_pdf'in tum sayfalari ayni boyutta uretmesi, secili
+    # sayfa KIMLIGININ dogrulanmasini imkansiz kilar (red-team bulgu 1,
+    # Saga #321) - bu yardimci her sayfaya ayirt edici bir genislik
+    # (100+i, i=0-indexed sayfa sirasi) verir.
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    for i in range(page_count):
+        writer.add_blank_page(width=100 + i, height=100 + i)
+    with open(root / filename, "wb") as f:
+        writer.write(f)
+    writer.close()
+
+
+def _pdf_extract_pages_step(
+    order: int,
+    file_name: str,
+    page_spec: str,
+    extracted_file_name: str,
+) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.PDF_EXTRACT_PAGES,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=[file_name],
+        pageSpec=page_spec,
+        extractedFileName=extracted_file_name,
+    )
+
+
+def _pdf_delete_pages_step(
+    order: int,
+    file_name: str,
+    page_spec: str,
+    remaining_file_name: str,
+) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.PDF_DELETE_PAGES,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=[file_name],
+        pageSpec=page_spec,
+        remainingFileName=remaining_file_name,
+    )
+
+
+def test_apply_plan_extracts_pdf_pages_happy_path(session, tmp_path):
+    from pypdf import PdfReader
+
+    _write_tagged_pdf(tmp_path, "kaynak.pdf", 10)
+    original_bytes = (tmp_path / "kaynak.pdf").read_bytes()
+    pdf_files = [PdfFileMetadata(filename="kaynak.pdf", createdAt="2026-08-01")]
+    plan = _plan([_pdf_extract_pages_step(0, "kaynak.pdf", "1,3,5-9", "cikarilan.pdf")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    output_path = tmp_path / "cikarilan.pdf"
+    assert output_path.exists()
+    reader = PdfReader(str(output_path))
+    assert len(reader.pages) == 7
+    # Sadece SAYIYI degil, HANGI sayfalarin ORIJINAL sirayla secildigini de
+    # dogrula (red-team bulgu 1, Saga #321).
+    assert [p.mediabox.width for p in reader.pages] == [100, 102, 104, 105, 106, 107, 108]
+    # Kaynak dosya asla degismemeli.
+    assert (tmp_path / "kaynak.pdf").read_bytes() == original_bytes
+    assert transaction.status == "committed"
+    assert len(transaction.operations) == 1
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_deletes_pdf_pages_happy_path(session, tmp_path):
+    from pypdf import PdfReader
+
+    _write_tagged_pdf(tmp_path, "kaynak.pdf", 10)
+    original_bytes = (tmp_path / "kaynak.pdf").read_bytes()
+    pdf_files = [PdfFileMetadata(filename="kaynak.pdf", createdAt="2026-08-01")]
+    plan = _plan([_pdf_delete_pages_step(0, "kaynak.pdf", "1,3,5-9", "kalan.pdf")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    output_path = tmp_path / "kalan.pdf"
+    assert output_path.exists()
+    reader = PdfReader(str(output_path))
+    # 10 sayfadan [1,3,5,6,7,8,9] silinince [2,4,10] kalir -> 3 sayfa.
+    assert len(reader.pages) == 3
+    # Sadece SAYIYI degil, kalan sayfalarin DOGRU KIMLIKTE ve ORIJINAL
+    # sirada oldugunu da dogrula (red-team bulgu 1, Saga #321).
+    assert [p.mediabox.width for p in reader.pages] == [101, 103, 109]
+    # Kaynak dosya asla degismemeli.
+    assert (tmp_path / "kaynak.pdf").read_bytes() == original_bytes
+    assert transaction.status == "committed"
+    assert len(transaction.operations) == 1
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_rejects_pdf_extract_pages_with_reversed_range(session, tmp_path):
+    _write_real_pdf(tmp_path, "kaynak.pdf", 10)
+    pdf_files = [PdfFileMetadata(filename="kaynak.pdf", createdAt="2026-08-01")]
+    plan = _plan([_pdf_extract_pages_step(0, "kaynak.pdf", "9-5", "cikarilan.pdf")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "cikarilan.pdf").exists()
+
+
+def test_apply_plan_rejects_pdf_extract_pages_with_out_of_document_page_number(session, tmp_path):
+    _write_real_pdf(tmp_path, "kaynak.pdf", 5)
+    pdf_files = [PdfFileMetadata(filename="kaynak.pdf", createdAt="2026-08-01")]
+    plan = _plan([_pdf_extract_pages_step(0, "kaynak.pdf", "1,3,8", "cikarilan.pdf")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "cikarilan.pdf").exists()
+
+
+def test_apply_plan_rejects_pdf_delete_pages_with_reversed_range(session, tmp_path):
+    _write_real_pdf(tmp_path, "kaynak.pdf", 10)
+    pdf_files = [PdfFileMetadata(filename="kaynak.pdf", createdAt="2026-08-01")]
+    plan = _plan([_pdf_delete_pages_step(0, "kaynak.pdf", "9-5", "kalan.pdf")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "kalan.pdf").exists()
+
+
+def test_apply_plan_rejects_pdf_delete_pages_with_out_of_document_page_number(session, tmp_path):
+    _write_real_pdf(tmp_path, "kaynak.pdf", 5)
+    pdf_files = [PdfFileMetadata(filename="kaynak.pdf", createdAt="2026-08-01")]
+    plan = _plan([_pdf_delete_pages_step(0, "kaynak.pdf", "1,3,8", "kalan.pdf")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "kalan.pdf").exists()
+
+
+def test_apply_plan_rejects_pdf_delete_pages_when_all_pages_are_deleted(session, tmp_path):
+    # ATDD AC-5: tum sayfalar silinirse (0 sayfa kalir) PlanApplicationError,
+    # hicbir dosya yazilmaz - EXCEL_FILTER'in "0 satir eslesti = basari"
+    # kararindan KASITLI OLARAK FARKLI.
+    _write_real_pdf(tmp_path, "kaynak.pdf", 3)
+    pdf_files = [PdfFileMetadata(filename="kaynak.pdf", createdAt="2026-08-01")]
+    plan = _plan([_pdf_delete_pages_step(0, "kaynak.pdf", "1-3", "kalan.pdf")])
+
+    with pytest.raises(PlanApplicationError, match="tüm sayfaları silinemez"):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "kalan.pdf").exists()
+
+
+def test_apply_plan_rejects_pdf_extract_pages_of_a_path_outside_allowed_root(session, tmp_path, monkeypatch):
+    # EXCEL_FILTER'in ".." teknigiyle AYNI desen (Saga #307/#324/#325).
+    pdf_files = [PdfFileMetadata(filename="..", createdAt="2026-08-01")]
+    plan = _plan([_pdf_extract_pages_step(0, "..", "1,3", "cikarilan.pdf")])
+
+    calls: list = []
+    monkeypatch.setattr(
+        "backend.orchestrator.pdf_pages.extract_pdf_pages",
+        lambda *args, **kwargs: calls.append(args),
+    )
+
+    with pytest.raises(PathWhitelistError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert calls == []
+    assert not (tmp_path / "cikarilan.pdf").exists()
+
+
+def test_apply_plan_rejects_pdf_delete_pages_of_a_path_outside_allowed_root(session, tmp_path, monkeypatch):
+    # EXCEL_FILTER'in ".." teknigiyle AYNI desen (Saga #307/#324/#325).
+    pdf_files = [PdfFileMetadata(filename="..", createdAt="2026-08-01")]
+    plan = _plan([_pdf_delete_pages_step(0, "..", "1,3", "kalan.pdf")])
+
+    calls: list = []
+    monkeypatch.setattr(
+        "backend.orchestrator.pdf_pages.delete_pdf_pages",
+        lambda *args, **kwargs: calls.append(args),
+    )
+
+    with pytest.raises(PathWhitelistError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert calls == []
+    assert not (tmp_path / "kalan.pdf").exists()

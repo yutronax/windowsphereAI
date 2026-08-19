@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from backend import excel_sort
+from backend import excel_sort, pdf_pages
 from backend.db_models import FileOperation, Transaction
 from backend.file_operations import create_transaction, record_file_operation
 from backend.models import OperationType, PdfFileMetadata, PlanSkeleton, PlanStep
@@ -56,6 +56,8 @@ _SUPPORTED_OPERATION_TYPES = {
     OperationType.REDACT,
     OperationType.EXCEL_SORT,
     OperationType.EXCEL_FILTER,
+    OperationType.PDF_EXTRACT_PAGES,
+    OperationType.PDF_DELETE_PAGES,
     OperationType.APPEND,
 }
 
@@ -343,6 +345,11 @@ _ROLLBACK_OPERATIONS = {
     # Saga #325: EXCEL_FILTER rollback'i de COPY ile AYNI - kaynak hic
     # degismedi, rollback SADECE hedefteki filtrelenmis dosyayi siler.
     OperationType.EXCEL_FILTER: _rollback_copy,
+    # Saga #321: PDF_EXTRACT_PAGES/PDF_DELETE_PAGES rollback'i de COPY ile
+    # AYNI - kaynak hic degismedi, rollback SADECE hedefteki cikti dosyasini
+    # siler.
+    OperationType.PDF_EXTRACT_PAGES: _rollback_copy,
+    OperationType.PDF_DELETE_PAGES: _rollback_copy,
     # Saga #323: APPEND rollback'i - bkz. `_rollback_append` docstring'i.
     OperationType.APPEND: _rollback_append,
 }
@@ -736,6 +743,52 @@ def apply_plan(
                 session.commit()
                 applied.append(operation)
                 continue
+            if step.operationType == OperationType.PDF_EXTRACT_PAGES:
+                source_path = allowed_root / files[0].filename
+                destination_path = allowed_root / step.extractedFileName
+                operation = record_file_operation(
+                    session,
+                    transaction,
+                    operation_type=step.operationType.value,
+                    source_path=str(source_path),
+                    destination_path=str(destination_path),
+                    backup_path=str(destination_path),
+                )
+                try:
+                    pdf_pages.extract_pdf_pages(source_path, step.pageSpec, destination_path)
+                except ValueError as exc:
+                    raise PlanApplicationError(
+                        f"PDF sayfa aralığı çözülemedi: '{source_path.name}' ({exc})"
+                    ) from exc
+                operation.status = "completed"
+                session.commit()
+                applied.append(operation)
+                continue
+            if step.operationType == OperationType.PDF_DELETE_PAGES:
+                source_path = allowed_root / files[0].filename
+                destination_path = allowed_root / step.remainingFileName
+                operation = record_file_operation(
+                    session,
+                    transaction,
+                    operation_type=step.operationType.value,
+                    source_path=str(source_path),
+                    destination_path=str(destination_path),
+                    backup_path=str(destination_path),
+                )
+                try:
+                    pdf_pages.delete_pdf_pages(source_path, step.pageSpec, destination_path)
+                except ValueError as exc:
+                    if "all pages would be deleted" in str(exc):
+                        raise PlanApplicationError(
+                            f"PDF'in tüm sayfaları silinemez: '{source_path.name}' ({exc})"
+                        ) from exc
+                    raise PlanApplicationError(
+                        f"PDF sayfa aralığı çözülemedi: '{source_path.name}' ({exc})"
+                    ) from exc
+                operation.status = "completed"
+                session.commit()
+                applied.append(operation)
+                continue
             if step.operationType == OperationType.APPEND:
                 # Saga #323: APPEND YERINDE gunceller - destination_path ==
                 # source_path (MERGE/REDACT/EXCEL_SORT'un aksine, kaynak
@@ -781,6 +834,8 @@ def apply_plan(
                 OperationType.REDACT,
                 OperationType.EXCEL_SORT,
                 OperationType.EXCEL_FILTER,
+                OperationType.PDF_EXTRACT_PAGES,
+                OperationType.PDF_DELETE_PAGES,
             ):
                 target_dir = allowed_root / step.targetFolder
                 target_dir.mkdir(parents=True, exist_ok=True)
