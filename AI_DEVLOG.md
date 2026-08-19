@@ -1,5 +1,33 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Dosya arama için asenkron ilerleme göstergesi (Saga #337, epic #27)
+
+**Geriye dönük uyumluluk bilinçli tercih.** Asenkron/polling modeli
+`/api/search`'ün response sözleşmesini kökten değiştirirdi (sonuç yerine
+scan_id) — bu, #334'teki SearchPanel'i ve mevcut testleri kırardı. ATDD
+sorusunda kullanıcıyla netleştirilip mevcut `/api/search` AYNEN bırakıldı,
+paralel yeni bir çift eklendi: `POST /api/search/scan` (anında scan_id) +
+`GET /api/search/scan/{scan_id}` (polling). Frontend'in bunu kullanması
+KAPSAM DIŞI bırakıldı, ayrı bir takip görevi gerekiyor.
+
+**Bağımsız red-team turu gerçek bir hata-yönetimi boşluğu buldu.** İlk
+implementasyonda `_run_scan()` (arka plan thread'i) `search_files()`
+çağrısını try/except olmadan yapıyordu — bir exception olursa thread
+sessizce ölüyor, `ScanState.status` SONSUZA KADAR "running" kalıyordu ve
+5 dakikalık TTL temizliği sadece "done" kayıtları hedeflediği için bu
+asla temizlenmiyordu (her çökme için kalıcı bellek sızıntısı). İkinci
+subagent turu try/except ekleyip hata durumunda da status="done" (+
+partial=True) yazacak şekilde düzeltti; bağımsız red-team ikinci turda
+doğruladı.
+
+**Mimari karar: threading, asyncio değil.** `backend/main.py`'deki tüm
+endpoint'ler `def` (senkron) — FastAPI bunları zaten kendi threadpool'unda
+çalıştırıyor. Bu yüzden arka plan taraması için `threading.Thread` +
+`threading.Lock` seçildi (asyncio.to_thread değil), mevcut kod tabanının
+senkron doğasıyla tutarlı.
+
+360/360 backend test yeşil (4 skip, Windows-only).
+
 ## Dosya aramayı recursive'e çevirme (Saga #336, epic #27)
 
 **Kapsam çelişkisinden doğan bölünme.** Saga #315 ("büyük klasör taramalarında

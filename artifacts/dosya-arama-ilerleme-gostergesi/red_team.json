@@ -1,0 +1,40 @@
+{
+  "task": "dosya-arama-ilerleme-gostergesi (Saga #337)",
+  "review_round": 2,
+  "reviewed_files": [
+    "backend/main.py",
+    "backend/tests/test_search_scan.py"
+  ],
+  "prior_round_reference": "artifacts/dosya-arama-ilerleme-gostergesi/red_team.json (round 1, approve-with-changes; medium finding: _run_scan() exception handling eksikti)",
+  "verified_fix": {
+    "original_finding": "_run_scan icinde search_files() cagrisinin etrafinda try/except yok. search_files() beklenmeyen bir istisna firlatirsa (izin hatasi, OSError, vb.) arka plan thread'i sessizce olur ve ScanState.status hicbir zaman 'done'a cekilmez; kayit sonsuza kadar 'running' olarak kalir.",
+    "severity_was": "medium",
+    "status": "closed",
+    "evidence": [
+      "backend/main.py satir 125-146: search_files() cagrisi artik try/except Exception ile sarilmis. except blogunda logger.exception('Arka plan tarama basarisiz oldu (scan_id=%s)', scan_id) ile hata loglaniyor (sessizce yutulmuyor).",
+      "Hata durumunda _scans_lock altinda: state.status='done', state.scanned_count=0, state.results=[], state.partial=True, state.completed_at=time.monotonic() set ediliyor -- bu sayede _cleanup_expired_scans() artik bu kaydi normal TTL akisiyla suphurebiliyor ve client polling'i sonsuza kadar 'running' beklemiyor.",
+      "state is None erken-donus dali korunmus (kayit temizlenmisse sessizce return) -- mevcut davranisla tutarli.",
+      "backend/tests/test_search_scan.py satir 203-229: yeni test _raising_search_files ile backend.main.search_files'i patch('backend.main.search_files', side_effect=...) ile mock'luyor, gercekten Exception firlatiyor. Test polling dongusuyle final status'un 'running' OLMADIGINI ve 'done' OLDUGUNU dogruluyor (iki ayri assert: != 'running' ve == 'done').",
+      "Thread-safety yeniden dogrulandi: hem try hem except dalinda _scans mutation'i _scans_lock altinda yapiliyor, kilitsiz erisim yok; kilit disinda sadece search_files() cagrisi (I/O-agir islem) kaliyor -- round 1'deki dogru desen bozulmamis."
+    ]
+  },
+  "test_run": {
+    "command": ".venv/Scripts/python.exe -m pytest backend/tests/ -v",
+    "result": "360 passed, 4 skipped, 0 failed"
+  },
+  "security_findings": [],
+  "alternative_approach": {
+    "recommended_direction": "Round 1'de onerilen kucuk/lokal fix (try/except + hata durumunda completed_at set etme) aynen uygulandi, mimari degismedi (threading.Thread + Lock + lazy cleanup korunuyor). Ek bir mimari degisiklik onerilmiyor; bu round sadece dogrulama amacliydi.",
+    "files_that_should_change": [],
+    "rationale": "Fix, atdd.md'nin 'running'de asla takili kalmaz' garantisini artik kod seviyesinde saglıyor ve TTL temizligini de dogru sekilde tetikliyor. Daha buyuk bir mimari degisiklik (ayri bir 'error' status'u eklemek gibi) su an icin gereksiz karmasiklik olurdu; partial=True ile isaretlemek client tarafinda zaten ayirt edilebilir bir sinyal."
+  },
+  "approved_points": [
+    "backend/main.py satir 125-146: try/except Exception dogru sekilde search_files() cagrisini sariyor, hata loglaniyor (logger.exception), state 'done'+partial=True olarak isaretleniyor, completed_at set ediliyor.",
+    "backend/tests/test_search_scan.py: yeni test gercekten search_files'i mock'layip exception firlatiyor ve status'un 'running' degil 'done' oldugunu dogruluyor -- testin kendisi de round 1 bulgusuna doğrudan karsilik geliyor, sahte-yesil degil.",
+    ".venv/Scripts/python.exe -m pytest backend/tests/ -v calistirildi: 360 passed, 4 skipped, 0 failed -- tam yesil, regresyon yok.",
+    "Thread-safety yeniden kontrol edildi: _scans_lock kapsami hem happy-path hem error-path'te dogru, kilitsiz erisim bulunamadi."
+  ],
+  "overall_assessment": "Round 1'de bulunan medium-severity bulgu (_run_scan() exception handling eksikligi, 'running'de sonsuza kadar takili kalma + TTL temizliginin bu kayitlari hic gormemesi) tam olarak kapatilmis: kod try/except ile sarilmis, hata durumunda status='done'+partial=True+completed_at set ediliyor, logger.exception ile loglaniyor, ve _scans_lock altinda thread-safe sekilde yapiliyor. Yeni test bu senaryoyu gercekten mock'layip dogruluyor. Tam test suite yesil (360 passed, 4 skipped, 0 failed). Baska acik bulgu yok.",
+  "verdict": "approved",
+  "ready_to_commit": true
+}

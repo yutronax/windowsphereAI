@@ -1,11 +1,14 @@
+import dataclasses
 import datetime as dt
 import logging
 import os
+import threading
+import time
 import uuid
 from collections.abc import Generator
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession, sessionmaker
@@ -22,6 +25,8 @@ from backend.models import (
     PlanSkeleton,
     RevertTransactionRequest,
     RevertTransactionResponse,
+    ScanStartResponse,
+    ScanStatusResponse,
     SearchRequest,
     SearchResponse,
     SessionContext,
@@ -55,6 +60,102 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 
 _sessions: dict[str, SessionContext] = {}
+
+
+@dataclasses.dataclass
+class ScanState:
+    """Saga #337: bellek-içi tarama durumu. `_scans`'ın değeri — hem başlangıç
+    thread'i hem de status-poll eden istek thread'i tarafından okunur/yazılır,
+    bu yüzden HER erişim `_scans_lock` altında yapılmalı."""
+
+    status: str  # "running" | "done"
+    scanned_count: int = 0
+    results: list | None = None
+    partial: bool | None = None
+    completed_at: float | None = None
+
+
+_scans: dict[str, ScanState] = {}
+_scans_lock = threading.Lock()
+
+# Saga #337 plan.md: ayrı bir zamanlanmış temizlik görevi YERİNE, her
+# GET /api/search/scan/{scan_id} çağrısında 5 dakikadan eski VE "done"
+# durumundaki kayıtlar "lazy" olarak silinir.
+_SCAN_TTL_SECONDS = 300
+
+
+def _cleanup_expired_scans() -> None:
+    """`_scans_lock` ZATEN TUTULUYORKEN çağrılmalı (caller sorumluluğu)."""
+    now = time.monotonic()
+    expired_ids = [
+        scan_id
+        for scan_id, state in _scans.items()
+        if state.status == "done"
+        and state.completed_at is not None
+        and (now - state.completed_at) > _SCAN_TTL_SECONDS
+    ]
+    for scan_id in expired_ids:
+        del _scans[scan_id]
+
+
+def _run_scan(
+    scan_id: str,
+    allowed_root: Path,
+    *,
+    name_contains: str | None,
+    extension: str | None,
+    modified_after: dt.datetime | None,
+    modified_before: dt.datetime | None,
+    content_contains: str | None,
+) -> None:
+    """Arka plan thread'inde çalışır — `search_files`'ı çağırır ve sonucu
+    `_scans[scan_id]`'e yazar (AC-1: `POST /api/search/scan` bunu BEKLEMEZ).
+
+    Red-team bulgusu (artifacts/dosya-arama-ilerleme-gostergesi/red_team.json,
+    medium severity): `search_files()` beklenmedik bir exception fırlatırsa
+    (ör. OSError), thread sessizce ölür ve `ScanState.status` sonsuza kadar
+    "running" kalırdı — bu hem atdd.md'nin "asla running'de takılı kalmaz"
+    garantisini ihlal eder hem de `_cleanup_expired_scans()` sadece
+    status=="done" kayıtları hedeflediği için TTL temizliği hiç devreye
+    girmez (kalıcı bellek sızıntısı). Bu yüzden `search_files` çağrısı
+    try/except ile sarılır: hata durumunda kayıt "done" + partial=True
+    olarak işaretlenir (client polling'i sonsuza kadar beklemez, TTL
+    temizliği de artık bu kaydı normal şekilde süpürebilir) ve hata
+    sessizce yutulmaz, loglanır."""
+    try:
+        results, partial = search_files(
+            allowed_root,
+            name_contains=name_contains,
+            extension=extension,
+            modified_after=modified_after,
+            modified_before=modified_before,
+            content_contains=content_contains,
+            return_partial=True,
+        )
+    except Exception:
+        logger.exception("Arka plan tarama basarisiz oldu (scan_id=%s)", scan_id)
+        with _scans_lock:
+            state = _scans.get(scan_id)
+            if state is None:
+                return
+            state.status = "done"
+            state.scanned_count = 0
+            state.results = []
+            state.partial = True
+            state.completed_at = time.monotonic()
+        return
+
+    with _scans_lock:
+        state = _scans.get(scan_id)
+        if state is None:
+            # Kayıt taşındıktan sonra (ör. çok agresif bir temizlik) buraya
+            # düşülürse sessizce yok say — kimsenin poll edecek referansı yok.
+            return
+        state.status = "done"
+        state.scanned_count = len(results)
+        state.results = results
+        state.partial = partial
+        state.completed_at = time.monotonic()
 
 app.add_middleware(
     CORSMiddleware,
@@ -380,6 +481,23 @@ def get_session_for_search(payload: SearchRequest) -> SessionContext:
     return session
 
 
+def _parse_search_date(value: str | None, field_name: str) -> dt.datetime | None:
+    """`/api/search` ve `/api/search/scan` arasında paylaşılan ISO 8601
+    parse + naive->UTC normalizasyon mantığı (refaktör, davranış aynı)."""
+    if value is None:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"{field_name} geçersiz ISO 8601 formatı: '{value}'",
+        )
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed
+
+
 @app.post("/api/search")
 def search_endpoint(
     payload: SearchRequest,
@@ -395,30 +513,8 @@ def search_endpoint(
         )
 
     # modifiedAfter/modifiedBefore ISO 8601 string'lerini datetime'a çevir
-    modified_after: dt.datetime | None = None
-    modified_before: dt.datetime | None = None
-
-    if payload.modifiedAfter is not None:
-        try:
-            modified_after = dt.datetime.fromisoformat(payload.modifiedAfter)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"modifiedAfter geçersiz ISO 8601 formatı: '{payload.modifiedAfter}'",
-            )
-        if modified_after.tzinfo is None:
-            modified_after = modified_after.replace(tzinfo=dt.timezone.utc)
-
-    if payload.modifiedBefore is not None:
-        try:
-            modified_before = dt.datetime.fromisoformat(payload.modifiedBefore)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"modifiedBefore geçersiz ISO 8601 formatı: '{payload.modifiedBefore}'",
-            )
-        if modified_before.tzinfo is None:
-            modified_before = modified_before.replace(tzinfo=dt.timezone.utc)
+    modified_after = _parse_search_date(payload.modifiedAfter, "modifiedAfter")
+    modified_before = _parse_search_date(payload.modifiedBefore, "modifiedBefore")
 
     results, partial = search_files(
         allowed_root,
@@ -431,3 +527,68 @@ def search_endpoint(
     )
 
     return SearchResponse(results=results, partial=partial)
+
+
+@app.post("/api/search/scan", status_code=status.HTTP_202_ACCEPTED)
+def start_search_scan(
+    payload: SearchRequest,
+    session: SessionContext = Depends(get_session_for_search),
+) -> ScanStartResponse:
+    """Saga #337: `/api/search`in asenkron kardeşi — session/allowed_root
+    doğrulaması `get_session_for_search` dependency'si sayesinde AYNI
+    (404/410, AC-6), ama `search_files()` bir arka plan thread'inde
+    çalıştırılır ve yanıt onu BEKLEMEDEN hemen döner (AC-1)."""
+    allowed_root = Path(session.selectedFolder)
+    if not allowed_root.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Seçili klasör artık mevcut değil",
+        )
+
+    modified_after = _parse_search_date(payload.modifiedAfter, "modifiedAfter")
+    modified_before = _parse_search_date(payload.modifiedBefore, "modifiedBefore")
+
+    # AC-S1 (threat-model): tahmin edilemez, sıralı-olmayan kimlik.
+    scan_id = str(uuid.uuid4())
+    with _scans_lock:
+        _cleanup_expired_scans()
+        _scans[scan_id] = ScanState(status="running")
+
+    thread = threading.Thread(
+        target=_run_scan,
+        args=(scan_id, allowed_root),
+        kwargs={
+            "name_contains": payload.nameContains,
+            "extension": payload.extension,
+            "modified_after": modified_after,
+            "modified_before": modified_before,
+            "content_contains": payload.contentContains,
+        },
+        daemon=True,
+    )
+    thread.start()
+
+    return ScanStartResponse(scanId=scan_id)
+
+
+@app.get("/api/search/scan/{scan_id}")
+def get_search_scan_status(scan_id: str, response: Response) -> ScanStatusResponse:
+    """Saga #337: bir taramanın durumunu sorgular. Lazy cleanup: erişim
+    öncesi 5 dakikadan eski `done` kayıtlar silinir (plan.md).
+
+    Bilinmeyen `scan_id` için gövde `{"status": "not_found", ...}` olmalı
+    (test_search_scan.py AC-4/AC-7) — standart FastAPI `HTTPException`
+    `{"detail": ...}` üretir, bu yüzden burada durum kodu doğrudan
+    `Response` üzerinden ayarlanıp ScanStatusResponse gövdesi döndürülür."""
+    with _scans_lock:
+        _cleanup_expired_scans()
+        state = _scans.get(scan_id)
+        if state is None:
+            response.status_code = status.HTTP_404_NOT_FOUND
+            return ScanStatusResponse(status="not_found", scannedCount=0)
+        return ScanStatusResponse(
+            status=state.status,
+            scannedCount=state.scanned_count,
+            results=state.results,
+            partial=state.partial,
+        )

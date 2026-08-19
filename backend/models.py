@@ -2,6 +2,7 @@ import datetime as dt
 import os
 import re
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -557,3 +558,19 @@ class SearchResponse(BaseModel):
     # Saga #314 (AC-2): global 10sn timeout asilirsa True - o ana kadarki
     # kismi sonuclar dondurulur, hata firlatilmaz.
     partial: bool = False
+
+
+class ScanStartResponse(BaseModel):
+    """Saga #337: `POST /api/search/scan` yanıtı — arka planda başlatılan
+    taramanın kimliği, tarama henüz TAMAMLANMADAN döner (AC-1)."""
+
+    scanId: str
+
+
+class ScanStatusResponse(BaseModel):
+    """Saga #337: `GET /api/search/scan/{scan_id}` yanıtı."""
+
+    status: Literal["running", "done", "not_found"]
+    scannedCount: int
+    results: list[SearchResultItem] | None = None
+    partial: bool | None = None
