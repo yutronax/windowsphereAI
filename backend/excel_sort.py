@@ -15,6 +15,15 @@ class ExcelSortFormulaGuardError(Exception):
     değiştirilir, çıktı dosyası hiç oluşturulmaz."""
 
 
+class ExcelFilterFormulaGuardError(Exception):
+    """Filtrelenecek veri aralığında en az bir GERÇEK formül hücresi
+    (`cell.data_type == "f"`) bulunduğunda fırlatılır (Saga #325, ATDD
+    AC-5) - ExcelSortFormulaGuardError ile AYNI gerekçe: satır alt
+    kümesi yeni dosyaya kopyalanırken hücre konumları değişebilir,
+    formül metni otomatik güncellenmez. İşlem TAMAMEN reddedilir, sıfır
+    satır işlenir, çıktı dosyası hiç oluşturulmaz."""
+
+
 def resolve_sort_column(header_row: tuple, column_spec: str) -> int:
     """`column_spec`i 0-indexed bir sütun numarasına çözer (Saga #324,
     ATDD P0 #3 / P1 #4/#5 - `header_row` tuple'ının Python indexiyle
@@ -112,3 +121,73 @@ def _sort_key(row: list, sort_index: int):
     # arasındaki sıralama karşılaştırmasını patlatmamak için, None'ı her
     # zaman en küçük kabul eden bir (has_value, value) anahtarı kullanılır.
     return (value is None, value if value is not None else "")
+
+
+def filter_excel_sheet(
+    source_path: Path, filter_column: str, filter_value, destination_path: Path
+) -> None:
+    """`source_path`teki .xlsx dosyasının aktif sayfasında `filter_column`
+    (header metni veya sütun harfi, `resolve_sort_column` ile çözülür)
+    değeri `filter_value`ya EŞİT olan satırları (+ header) YENİ bir
+    dosyaya (`destination_path`) yazar - kaynağa asla dokunulmaz (Saga
+    #325, ATDD Davranış Sözleşmesi #1, `sort_excel_sheet` ile AYNI desen).
+
+    Karşılaştırma `str(hücre) == str(filter_value)` ile yapılır. Hiçbir
+    satır eşleşmezse hata FIRLATILMAZ - sadece header içeren bir dosya
+    yazılır (ATDD AC-4, sessiz başarı değil ama hata da değil).
+
+    Veri aralığında herhangi bir hücre GERÇEK bir formül ise
+    (`cell.data_type == "f"`) `ExcelFilterFormulaGuardError` fırlatılır,
+    hiçbir dosya yazılmaz (ATDD AC-5). 0 veri satırı varsa (boş sayfa
+    veya sadece header) işlem no-op sayılır - dosya olduğu gibi
+    `destination_path`'e kopyalanır, hata FIRLATILMAZ (ATDD AC-6).
+
+    `sort_excel_sheet` ile AYNI geçici-dosya-yaz + atomik `Path.replace`
+    deseni kullanılır - yazma yarıda kesilirse `destination_path`'te
+    YARIM/BOZUK bir dosya KALMAZ. Path whitelist kontrolü BU MODÜLDE
+    YAPILMAZ - merkezi doğrulama backend/security.py'de yapılır."""
+    workbook = openpyxl.load_workbook(str(source_path))
+    sheet = workbook.active
+
+    max_row = sheet.max_row
+    data_row_count = max(max_row - 1, 0) if max_row and max_row >= 1 else 0
+
+    fd, temp_path_str = tempfile.mkstemp(
+        suffix=".tmp", prefix=destination_path.name + ".", dir=str(destination_path.parent)
+    )
+    temp_path = Path(temp_path_str)
+    os.close(fd)
+    try:
+        if data_row_count <= 0:
+            # ATDD AC-6: filtrelenecek veri satırı yok - no-op, dosya
+            # olduğu gibi kopyalanır, sütun çözümlemesi/formül taraması
+            # anlamsız olduğu için hiç YAPILMAZ.
+            workbook.save(str(temp_path))
+            temp_path.replace(destination_path)
+            return
+
+        header_row = next(iter(sheet.iter_rows(min_row=1, max_row=1, values_only=True)))
+        filter_column_index = resolve_sort_column(header_row, filter_column)
+
+        for row in sheet.iter_rows(min_row=2, max_row=max_row):
+            for cell in row:
+                if cell.data_type == "f":
+                    raise ExcelFilterFormulaGuardError(
+                        f"Filtrelenecek veri aralığında formül bulundu ('{cell.coordinate}'), "
+                        "işlem güvenle yapılamıyor - reddedildi."
+                    )
+
+        new_workbook = openpyxl.Workbook()
+        new_sheet = new_workbook.active
+        new_sheet.append(list(header_row))
+        target_value = str(filter_value)
+        for row in sheet.iter_rows(min_row=2, max_row=max_row, values_only=True):
+            cell_value = row[filter_column_index] if filter_column_index < len(row) else None
+            if str(cell_value) == target_value:
+                new_sheet.append(list(row))
+
+        new_workbook.save(str(temp_path))
+        temp_path.replace(destination_path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise

@@ -1,0 +1,35 @@
+{
+  "task_slug": "excel-satir-filtreleme",
+  "reviewer": "obss-red-team subagent (bağımsız — Codex kotası dolu olduğundan kod Claude tarafından yazıldı, bu yüzden bağımsız inceleme özellikle gerekliydi)",
+  "security_findings": [
+    {
+      "finding": "filteredFileName path-separator kontrolü naif substring kontrolü (\"/\" in value or \"\\\\\" in value) — sortedFileName/mergedFileName ile AYNI mevcut konvansiyon. Tek segmentli '..' veya Windows özel aygıt adları (CON, NUL, AUX.xlsx) ayrıca reddedilmiyor.",
+      "severity": "low",
+      "scenario": "filteredFileName == 'NUL' gibi bir plan allowed_root içindeki yazmayı sessizce bozabilir. Düşük önem: is_path_allowed son çözümlenmiş path'i yine sınırlıyor, ve bu sortedFileName'in mevcut davranışının birebir aynısı — yeni bir saldırı yüzeyi değil, bu görevde bilinçli olarak dokunulmadı."
+    },
+    {
+      "finding": "filter_excel_sheet karşılaştırması str(cell_value) == str(filter_value), sayısal tip normalizasyonu yok (int vs float).",
+      "severity": "low",
+      "scenario": "filterValue=90 (int) gönderilirse ama hücre 90.0 (float) tutuyorsa str(90.0)!=str(90), satır sessizce dışlanır. atdd.md'de zaten 'kullanıcı onaylamadı, varsayım' olarak işaretliydi — kapsam bilinçli olarak tam string eşitliğiyle sınırlandı, ama sayısal sütunlar için gerçek bir gelecek görev adayı."
+    },
+    {
+      "finding": "openpyxl.load_workbook read_only=True olmadan çağrılıyor, tüm sayfa belleğe alınıyor.",
+      "severity": "low",
+      "scenario": "Çok büyük XLSX'te yüksek bellek kullanımı — ama bu sort_excel_sheet'ten (Saga #324) miras alınan mevcut mimari tavan, bu görevle yeni gelen bir regresyon değil."
+    }
+  ],
+  "alternative_approach": {
+    "recommended_direction": "sort_excel_sheet/filter_excel_sheet arasındaki tempfile+atomik-replace+formula-guard iskelet tekrarı (~140 satır, 2x kopya) üçüncü bir EXCEL_* operasyonu eklenmeden önce ortak bir yardımcıya çıkarılmalı.",
+    "files_that_should_change": ["backend/excel_sort.py"],
+    "rationale": "plan.md bu riski resolve_sort_column için zaten öngörmüş ve bilinçli ertelemişti; tek bir ek operasyon için ertelemek makuldü ama üçüncü bir EXCEL_* operasyonu geldiğinde üçe katlanır — bu commit'i engellemiyor, ayrı bir Saga task önerisi."
+  },
+  "approved_points": [
+    "models.py'deki filteredFileName validator + collision kontrolü EXCEL_SORT desenin sadık kopyası, eksik yok.",
+    "Formula guard filter'da da sort ile AYNI satır aralığını (min_row=2..max_row) tarıyor ve herhangi bir satır yazılmadan ÖNCE çalışıyor — AC-5'i karşılıyor.",
+    "0-satır-eşleşme (AC-4), 0-veri-satırı no-op (AC-6) ve sütun-çözülemedi (AC-3) üç FARKLI kod yolu — sessiz başarı/hata karışması yok.",
+    "Atomiklik: tempfile.mkstemp + Path.replace + except'te unlink(missing_ok=True) — sort ile birebir aynı, yarım dosya riski yok.",
+    "orchestrator.py'de üç kayıt noktası da (_SUPPORTED_OPERATION_TYPES, _ROLLBACK_HANDLERS, hedef-klasör hariç-tutma listesi) doğru güncellendi — proje hafızasındaki 'Parametre Ekleme Tuzağı' bu görevde YAŞANMADI.",
+    "test_excel_filter.py, ATDD Davranış Sözleşmesi tablosunun HER satırını kapsıyor, sadece happy-path değil."
+  ],
+  "overall_assessment": "Ready to commit. Engelleyici bulgu yok. Bulgular ya önceden kabul edilmiş/miras riskler ya da bilinçli kapsam kararları (atdd.md'de işaretli). Sayısal filterValue karşılaştırması kullanıcıya ayrıca hatırlatılmalı (atdd.md'de 'kullanıcı onaylamadı' notluydu). Gelecekte 3. bir EXCEL_* operasyonu öncesi ortak yardımcıya çıkarma önerisi var, bu commit'i engellemiyor."
+}

@@ -1830,6 +1830,189 @@ def test_apply_plan_rejects_excel_sort_of_a_path_outside_allowed_root(session, t
     assert not (tmp_path / "siralanmis.xlsx").exists()
 
 
+# Saga #325: EXCEL_FILTER operasyonu (red step) - `OperationType.EXCEL_FILTER`,
+# `PlanStep.filterColumn`/`filterValue`/`filteredFileName` ve orchestrator'daki
+# EXCEL_FILTER dali henuz YOK. Bu testler simdilik KIRMIZI kalmali
+# (AttributeError / ValidationError - EXCEL_SORT'un red-step testleriyle AYNI
+# desen).
+
+
+def _excel_filter_step(
+    order: int,
+    file_name: str,
+    filter_column: str,
+    filter_value,
+    filtered_file_name: str,
+) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.EXCEL_FILTER,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=[file_name],
+        filterColumn=filter_column,
+        filterValue=filter_value,
+        filteredFileName=filtered_file_name,
+    )
+
+
+def test_apply_plan_rejects_excel_filter_when_a_data_row_contains_a_formula(session, tmp_path):
+    _write_excel_with_formula(
+        tmp_path,
+        "kaynak.xlsx",
+        header=["Ad", "Puan"],
+        data_rows=[["Ali", 90], ["Veli", 80]],
+        formula_cell="C2",
+        formula="=B2+B3",
+    )
+    pdf_files = [PdfFileMetadata(filename="kaynak.xlsx", createdAt="2026-08-01")]
+    plan = _plan([_excel_filter_step(0, "kaynak.xlsx", "Puan", 90, "filtrelenmis.xlsx")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "filtrelenmis.xlsx").exists()
+
+
+def test_apply_plan_filters_excel_rows_when_there_are_no_formulas(session, tmp_path):
+    import openpyxl
+
+    _write_excel(
+        tmp_path,
+        "kaynak.xlsx",
+        [
+            ["Ad", "Puan"],
+            ["Ali", 90],
+            ["Veli", 80],
+            ["Can", 90],
+        ],
+    )
+    original_bytes = (tmp_path / "kaynak.xlsx").read_bytes()
+    pdf_files = [PdfFileMetadata(filename="kaynak.xlsx", createdAt="2026-08-01")]
+    plan = _plan([_excel_filter_step(0, "kaynak.xlsx", "Puan", 90, "filtrelenmis.xlsx")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    output_path = tmp_path / "filtrelenmis.xlsx"
+    assert output_path.exists()
+    wb = openpyxl.load_workbook(str(output_path))
+    rows = list(wb.active.iter_rows(values_only=True))
+    assert rows == [("Ad", "Puan"), ("Ali", 90), ("Can", 90)]
+    # Kaynak dosya asla degismemeli.
+    assert (tmp_path / "kaynak.xlsx").read_bytes() == original_bytes
+    assert transaction.status == "committed"
+    assert len(transaction.operations) == 1
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_excel_filter_prefers_header_text_over_bare_letter_interpretation(session, tmp_path):
+    # Saga #325 P0 senaryosu: "Ad" gibi kisa/alfabetik bir baslik sutun
+    # harfi ("AD") ile karistirilmamali - header eslesmesi HER ZAMAN
+    # bare-letter yorumundan ONCE denenir.
+    import openpyxl
+
+    _write_excel(
+        tmp_path,
+        "kaynak.xlsx",
+        [
+            ["Ad", "Puan"],
+            ["Ali", 90],
+            ["Veli", 80],
+        ],
+    )
+    pdf_files = [PdfFileMetadata(filename="kaynak.xlsx", createdAt="2026-08-01")]
+    plan = _plan([_excel_filter_step(0, "kaynak.xlsx", "Ad", "Ali", "filtrelenmis.xlsx")])
+
+    apply_plan(session, plan, pdf_files, tmp_path)
+
+    wb = openpyxl.load_workbook(str(tmp_path / "filtrelenmis.xlsx"))
+    rows = list(wb.active.iter_rows(values_only=True))
+    assert rows == [("Ad", "Puan"), ("Ali", 90)]
+
+
+def test_apply_plan_excel_filter_resolves_bare_letter_column_when_no_header_matches(session, tmp_path):
+    import openpyxl
+
+    _write_excel(
+        tmp_path,
+        "kaynak.xlsx",
+        [
+            ["Ad", "Puan"],
+            ["Ali", 90],
+            ["Veli", 80],
+        ],
+    )
+    pdf_files = [PdfFileMetadata(filename="kaynak.xlsx", createdAt="2026-08-01")]
+    plan = _plan([_excel_filter_step(0, "kaynak.xlsx", "B", 90, "filtrelenmis.xlsx")])
+
+    apply_plan(session, plan, pdf_files, tmp_path)
+
+    wb = openpyxl.load_workbook(str(tmp_path / "filtrelenmis.xlsx"))
+    rows = list(wb.active.iter_rows(values_only=True))
+    assert rows == [("Ad", "Puan"), ("Ali", 90)]
+
+
+def test_apply_plan_rejects_excel_filter_with_unknown_column(session, tmp_path):
+    _write_excel(
+        tmp_path,
+        "kaynak.xlsx",
+        [
+            ["Ad", "Puan"],
+            ["Veli", 80],
+        ],
+    )
+    pdf_files = [PdfFileMetadata(filename="kaynak.xlsx", createdAt="2026-08-01")]
+    plan = _plan([_excel_filter_step(0, "kaynak.xlsx", "BilinmeyenSutun", 80, "filtrelenmis.xlsx")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "filtrelenmis.xlsx").exists()
+
+
+def test_apply_plan_excel_filter_writes_header_only_file_when_no_row_matches(session, tmp_path):
+    # ATDD AC-4 / Davranış Sözleşmesi #8: 0 satır eşleşmesi SESSİZ BAŞARI
+    # değil, ama hata da değil - header-only dosya yazılır.
+    import openpyxl
+
+    _write_excel(
+        tmp_path,
+        "kaynak.xlsx",
+        [
+            ["Ad", "Puan"],
+            ["Ali", 90],
+            ["Veli", 80],
+        ],
+    )
+    pdf_files = [PdfFileMetadata(filename="kaynak.xlsx", createdAt="2026-08-01")]
+    plan = _plan([_excel_filter_step(0, "kaynak.xlsx", "Puan", 999, "filtrelenmis.xlsx")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    wb = openpyxl.load_workbook(str(tmp_path / "filtrelenmis.xlsx"))
+    rows = list(wb.active.iter_rows(values_only=True))
+    assert rows == [("Ad", "Puan")]
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_rejects_excel_filter_of_a_path_outside_allowed_root(session, tmp_path, monkeypatch):
+    # EXCEL_SORT'un ".." teknigiyle AYNI desen (Saga #307/#324).
+    pdf_files = [PdfFileMetadata(filename="..", createdAt="2026-08-01")]
+    plan = _plan([_excel_filter_step(0, "..", "Puan", 90, "filtrelenmis.xlsx")])
+
+    calls: list = []
+    monkeypatch.setattr(
+        "backend.orchestrator.excel_sort.filter_excel_sheet",
+        lambda *args, **kwargs: calls.append(args),
+    )
+
+    with pytest.raises(PathWhitelistError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert calls == []
+    assert not (tmp_path / "filtrelenmis.xlsx").exists()
+
+
 def test_retry_on_transient_io_error_retries_on_winerror_32(session, tmp_path):
     from backend.orchestrator import _retry_on_transient_io_error
 

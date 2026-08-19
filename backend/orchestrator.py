@@ -55,6 +55,7 @@ _SUPPORTED_OPERATION_TYPES = {
     OperationType.OCR,
     OperationType.REDACT,
     OperationType.EXCEL_SORT,
+    OperationType.EXCEL_FILTER,
     OperationType.APPEND,
 }
 
@@ -339,6 +340,9 @@ _ROLLBACK_OPERATIONS = {
     # Saga #324: EXCEL_SORT rollback'i de COPY ile AYNI - kaynak hic
     # degismedi, rollback SADECE hedefteki siralanmis dosyayi siler.
     OperationType.EXCEL_SORT: _rollback_copy,
+    # Saga #325: EXCEL_FILTER rollback'i de COPY ile AYNI - kaynak hic
+    # degismedi, rollback SADECE hedefteki filtrelenmis dosyayi siler.
+    OperationType.EXCEL_FILTER: _rollback_copy,
     # Saga #323: APPEND rollback'i - bkz. `_rollback_append` docstring'i.
     OperationType.APPEND: _rollback_append,
 }
@@ -705,6 +709,33 @@ def apply_plan(
                 session.commit()
                 applied.append(operation)
                 continue
+            if step.operationType == OperationType.EXCEL_FILTER:
+                source_path = allowed_root / files[0].filename
+                destination_path = allowed_root / step.filteredFileName
+                operation = record_file_operation(
+                    session,
+                    transaction,
+                    operation_type=step.operationType.value,
+                    source_path=str(source_path),
+                    destination_path=str(destination_path),
+                    backup_path=str(destination_path),
+                )
+                try:
+                    excel_sort.filter_excel_sheet(
+                        source_path, step.filterColumn, step.filterValue, destination_path
+                    )
+                except excel_sort.ExcelFilterFormulaGuardError as exc:
+                    raise PlanApplicationError(
+                        f"Excel filtresi reddedildi, veri aralığında formül bulundu: '{source_path.name}' ({exc})"
+                    ) from exc
+                except ValueError as exc:
+                    raise PlanApplicationError(
+                        f"Excel filtre sütunu çözülemedi: '{source_path.name}' ({exc})"
+                    ) from exc
+                operation.status = "completed"
+                session.commit()
+                applied.append(operation)
+                continue
             if step.operationType == OperationType.APPEND:
                 # Saga #323: APPEND YERINDE gunceller - destination_path ==
                 # source_path (MERGE/REDACT/EXCEL_SORT'un aksine, kaynak
@@ -749,6 +780,7 @@ def apply_plan(
                 OperationType.SPLIT,
                 OperationType.REDACT,
                 OperationType.EXCEL_SORT,
+                OperationType.EXCEL_FILTER,
             ):
                 target_dir = allowed_root / step.targetFolder
                 target_dir.mkdir(parents=True, exist_ok=True)

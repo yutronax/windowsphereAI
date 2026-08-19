@@ -1,5 +1,39 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Excel satır filtreleme (Saga #325, epic #29) — sütun harfi/başlık karışıklığı
+
+**Kapsam görüşme sırasında genişletildi.** Saga #325'in orijinal talebi
+("başlık eşleşmesi önce denenmeli") kod incelemesiyle zaten çözülmüş
+çıktı — `resolve_sort_column` (Saga #324, EXCEL_SORT) bunu zaten
+uyguluyordu. Ama projede satır FİLTRELEME operasyonu hiç yoktu; kullanıcı
+onayıyla kapsam "aynı sütun-çözümlemesini kullanan yeni bir EXCEL_FILTER
+operasyonu ekle"ye genişletildi. `filter_excel_sheet`, `sort_excel_sheet`
+ile birebir aynı iskeleti (tempfile+atomik-replace, formula-guard,
+0-veri-satırı no-op) izliyor.
+
+**Bilinçli kapsam sınırı.** `plan_generation.py`/LLM prompt tarafı
+(doğal dilden `filterColumn`/`filterValue` çıkarma) bu görevin DIŞINDA
+bırakıldı — EXCEL_FILTER şu an API/orchestrator seviyesinde çalışıyor
+ama doğal dil komutuyla henüz TETİKLENEMİYOR, ayrı bir Saga task
+gerekiyor.
+
+**Yazım motoru istisnası.** Codex kotası 2026-09-15'e kadar dolu
+olduğundan (bkz. proje hafızası), bu görevde test+kod Claude tarafından
+doğrudan yazıldı — kullanıcı onayıyla ve MUTLAKA bağımsız bir red-team
+subagent turu şartıyla. İnceleme "Ready to Commit" verdi, engelleyici
+bulgu çıkmadı.
+
+**Red-team'in bulduğu ama bloklamayan bulgular:** `filterValue`
+karşılaştırması `str(hücre)==str(değer)` — sayısal tip normalizasyonu
+yok (90 vs 90.0 gibi durumlar sessizce eşleşmeyebilir), atdd.md'de
+zaten "kullanıcı onaylamadı" varsayımı olarak işaretliydi. Ayrıca
+`sort_excel_sheet`/`filter_excel_sheet` arasındaki tempfile/atomik-write/
+formula-guard iskelet tekrarı, üçüncü bir EXCEL_* operasyonu gelmeden
+önce ortak bir yardımcıya çıkarılması önerildi (bu commit'i
+engellemiyor, ayrı takip görevi).
+
+393/393 backend test yeşil (5 skip, Windows-only).
+
 ## PDF'e metin sayfası ekleme — veri kaybı güvenli tasarım (Saga #323, epic #29)
 
 **Bug-fix değil, sıfırdan özellik.** Eski projede (`core/agents/pdf_agent.py`)

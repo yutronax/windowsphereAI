@@ -52,6 +52,10 @@ class OperationType(str, Enum):
     # kaynak asla degismez" deseni, ama Excel (.xlsx) sayfasi uzerinde
     # satir sirasi degistirir (formul-guvenlik-agi ile korunur).
     EXCEL_SORT = "Excel Sırala"
+    # Saga #325: EXCEL_FILTER - EXCEL_SORT ile AYNI "1 kaynak -> 1 hedef,
+    # kaynak asla degismez" deseni, satir sirasi degil satir ALT KUMESI
+    # (bir sutun degerine esit satirlar) uretir.
+    EXCEL_FILTER = "Excel Filtrele"
     # Saga #323: APPEND - 1 kaynak PDF'in SONUNA appendText'ten render
     # edilmis yeni bir sayfa eklenir, kaynak dosya YERINDE guncellenir
     # (gecici-dosya+atomik-replace deseniyle, bkz. orchestrator._forward_append).
@@ -131,6 +135,13 @@ class PlanStep(BaseModel):
     sortColumn: str | None = None
     sortAscending: bool | None = None
     sortedFileName: str | None = None
+    # Saga #325: EXCEL_FILTER icin - filtrelenecek sutun + esitlenecek deger
+    # + cikti dosya adi, sortColumn/sortedFileName ile AYNI desende (SADECE
+    # operationType==EXCEL_FILTER olduğunda dolu olmalı, diğer
+    # operationType'larda None kalmalı).
+    filterColumn: str | None = None
+    filterValue: str | int | float | None = None
+    filteredFileName: str | None = None
     # Saga #323: APPEND icin - kaynagin sonuna eklenecek metin, mergedFileName
     # ile AYNI desende (SADECE operationType==APPEND olduğunda dolu olmalı,
     # diğer operationType'larda None kalmalı). max_length=5000 (Threat-Model
@@ -156,6 +167,13 @@ class PlanStep(BaseModel):
     def sorted_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
         if value is not None and ("/" in value or "\\" in value):
             raise ValueError("sortedFileName must not contain path separators")
+        return value
+
+    @field_validator("filteredFileName")
+    @classmethod
+    def filtered_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
+        if value is not None and ("/" in value or "\\" in value):
+            raise ValueError("filteredFileName must not contain path separators")
         return value
 
     @field_validator("appendText")
@@ -352,6 +370,37 @@ class PlanStep(BaseModel):
                 raise ValueError("sortAscending must be omitted unless operationType is EXCEL_SORT")
             if self.sortedFileName is not None:
                 raise ValueError("sortedFileName must be omitted unless operationType is EXCEL_SORT")
+        return self
+
+    @model_validator(mode="after")
+    def excel_filter_fields_only_for_excel_filter(self) -> "PlanStep":
+        # Saga #325: excel_sort_fields_only_for_excel_sort ile AYNI desen -
+        # filterColumn/filterValue/filteredFileName SADECE EXCEL_FILTER icin
+        # zorunlu, diger operationType'larda tamamen yasak.
+        if self.operationType == OperationType.EXCEL_FILTER:
+            if self.filterColumn is None or self.filterColumn.strip() == "":
+                raise ValueError("filterColumn is required when operationType is EXCEL_FILTER")
+            if self.filterValue is None:
+                raise ValueError("filterValue is required when operationType is EXCEL_FILTER")
+            if self.filteredFileName is None or self.filteredFileName.strip() == "":
+                raise ValueError("filteredFileName is required when operationType is EXCEL_FILTER")
+            if len(self.fileNames) != 1:
+                raise ValueError("fileNames must contain exactly 1 entry when operationType is EXCEL_FILTER")
+            normalized_filtered = os.path.normcase(self.filteredFileName)
+            normalized_sources = [os.path.normcase(name) for name in self.fileNames]
+            if normalized_filtered in normalized_sources:
+                raise ValueError(
+                    f"filteredFileName ('{self.filteredFileName}') collides with one of this "
+                    "step's fileNames (case-insensitive) — filter output must not overwrite "
+                    "a source file"
+                )
+        else:
+            if self.filterColumn is not None:
+                raise ValueError("filterColumn must be omitted unless operationType is EXCEL_FILTER")
+            if self.filterValue is not None:
+                raise ValueError("filterValue must be omitted unless operationType is EXCEL_FILTER")
+            if self.filteredFileName is not None:
+                raise ValueError("filteredFileName must be omitted unless operationType is EXCEL_FILTER")
         return self
 
     @model_validator(mode="after")
