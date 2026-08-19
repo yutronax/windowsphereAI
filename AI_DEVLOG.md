@@ -1,5 +1,29 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Fuzzy dosya adı + regex desen arama (Saga #316, epic #27) — epic'in son task'ı
+
+**Bağımsız red-team turu iki gerçek, ucuz bulgu buldu.** İlk implementasyon,
+`fuzzy_name`/`name_pattern` verildiğinde bile `search_files()`'ın TÜM alt
+ağacı (derinlik 3'e kadar, Saga #336'nın recursive gezinmesiyle) tarayıp
+SONRADAN kök-dizin dışındaki sonuçları atıyordu — atdd.md'nin kendi
+gerekçesine ("sığ tarama, performans riski düşük") aykırı bir israf.
+Ayrıca `fuzzyName`/`namePattern` alanlarının (content_contains'in aksine)
+hiç uzunluk sınırı yoktu — ucuz bir ReDoS mitigasyonu atlanmıştı. İkisi de
+düzeltildi: fuzzy/regex modunda recursive gezinme hiç çağrılmıyor artık
+(doğrudan `folder.iterdir()`), iki alana da `Field(max_length=...)` eklendi.
+
+**Kapsam dışı bırakılan bir boşluk, ayrı görev olarak flag'lendi.** Asenkron
+`/api/search/scan` (#337) endpoint'i fuzzyName/namePattern'i hiç forward
+etmiyor — senkron/asenkron akış arasında sessiz bir yetenek farkı. Bu task'ın
+kapsamı dışı olduğu için düzeltilmedi, ayrı bir arka plan görevi (task_c5e4c577)
+olarak kullanıcıya sunuldu.
+
+**Epic #27 tamamlandı.** Saga #313 (MVP)→#314 (içerik arama)→#335 (tz bug)→
+#334 (frontend)→#336 (recursive)→#337 (asenkron ilerleme)→#316 (fuzzy/regex)
+zinciriyle "Dosya Arama" epic'indeki tüm task'lar `done`.
+
+367/367 backend test yeşil (4 skip, Windows-only).
+
 ## Dosya arama için asenkron ilerleme göstergesi (Saga #337, epic #27)
 
 **Geriye dönük uyumluluk bilinçli tercih.** Asenkron/polling modeli

@@ -535,6 +535,14 @@ class SearchRequest(BaseModel):
     # Saga #314: icerik arama (AC-4/AC-9) - bos/whitespace-only reddedilir,
     # 500 karakterle sinirlanir.
     contentContains: str | None = Field(default=None, max_length=500)
+    # Saga #316: fuzzy/regex isim eslesmesi - birbirini disleyen iki mod
+    # (endpoint seviyesinde AC-4 ile birlikte kullanimi 422 ile reddedilir).
+    # Red-team follow-up (Saga #316, medium bulgusu): contentContains ile
+    # AYNI ucuz ReDoS mitigasyonu - ucuncu parti kutuphane gerektirmeden
+    # asiri uzun/karmasik pattern'leri en bastan reddet. namePattern regex
+    # oldugu icin fuzzyName'den biraz daha uzun bir sinir aliyor.
+    fuzzyName: str | None = Field(default=None, max_length=100)
+    namePattern: str | None = Field(default=None, max_length=200)
 
     @field_validator("sessionId")
     @classmethod

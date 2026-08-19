@@ -1,4 +1,5 @@
 import datetime as dt
+import re
 import time
 from pathlib import Path
 
@@ -147,6 +148,35 @@ def _read_file_content_lower(entry: Path) -> str | None:
     return None
 
 
+def _levenshtein_distance(a: str, b: str) -> int:
+    """Klasik dinamik programlama ile Levenshtein (duzenleme) mesafesi.
+    stdlib'de hazir bir fonksiyon olmadigi icin ek bagimlilik olmadan
+    burada uygulanir (Saga #316, atdd.md AC-1/AC-5)."""
+    if a == b:
+        return 0
+    len_a, len_b = len(a), len(b)
+    if len_a == 0:
+        return len_b
+    if len_b == 0:
+        return len_a
+
+    previous_row = list(range(len_b + 1))
+    for i, char_a in enumerate(a, start=1):
+        current_row = [i] + [0] * len_b
+        for j, char_b in enumerate(b, start=1):
+            insert_cost = current_row[j - 1] + 1
+            delete_cost = previous_row[j] + 1
+            substitute_cost = previous_row[j - 1] + (0 if char_a == char_b else 1)
+            current_row[j] = min(insert_cost, delete_cost, substitute_cost)
+        previous_row = current_row
+
+    return previous_row[len_b]
+
+
+# Saga #316: fuzzy_name eslesmesi icin esik (Levenshtein mesafesi <=2).
+_FUZZY_NAME_MAX_DISTANCE = 2
+
+
 def search_files(
     folder: Path,
     *,
@@ -155,6 +185,8 @@ def search_files(
     modified_after: dt.datetime | None = None,
     modified_before: dt.datetime | None = None,
     content_contains: str | None = None,
+    fuzzy_name: str | None = None,
+    name_pattern: str | None = None,
     return_partial: bool = False,
 ) -> list[SearchResultItem] | tuple[list[SearchResultItem], bool]:
     """`folder` altını recursive olarak (derinlik sınırlı `_MAX_RECURSIVE_DEPTH`,
@@ -195,8 +227,37 @@ def search_files(
     # derinlik sınırı ve döngü koruması ile - Saga #336). `discovery_timed_out`
     # gezinmenin (content_contains'ten BAGIMSIZ) kendisinin 10sn'yi asip
     # asmadigini tasir (red-team follow-up, Saga #336 medium bulgusu).
+    # AC-7 (Saga #316): fuzzy_name/name_pattern SADECE kok dizini tarar -
+    # bilincli non-recursive kapsam karari, #336'nin recursive davranisindan
+    # BAGIMSIZ. Red-team follow-up (Saga #316, medium bulgusu): bu durumda
+    # `_iter_files_recursive()` HIC CAGRILMAZ - TUM alt agaci derinlik 3'e
+    # kadar gezip sonra `entry.parent == folder` ile filtrelemek israfti.
+    # Bunun yerine dogrudan `folder.iterdir()` ile SADECE kok dizindeki
+    # (gizli olmayan) dosyalar toplanir - discovery-timeout kavrami bu
+    # dalda anlamsizdir (sadece 1 dizin taranir), `discovery_timed_out`
+    # False kalir.
     discovery_timed_out = [False]
-    files = list(_iter_files_recursive(folder, timed_out=discovery_timed_out))
+    if fuzzy_name is not None or name_pattern is not None:
+        try:
+            files = [
+                entry
+                for entry in folder.iterdir()
+                if not entry.name.startswith(".") and entry.is_file()
+            ]
+        except (PermissionError, OSError):
+            files = []
+    else:
+        files = list(_iter_files_recursive(folder, timed_out=discovery_timed_out))
+
+    # Saga #316 AC-3: gecersiz regex `search_files()` icinde sessizce
+    # atlanir (hicbir dosya name_pattern filtresini gecemez) - erken
+    # validasyon endpoint (main.py) seviyesinde yapilir.
+    compiled_name_pattern: re.Pattern[str] | None = None
+    if name_pattern is not None:
+        try:
+            compiled_name_pattern = re.compile(name_pattern, re.IGNORECASE)
+        except re.error:
+            compiled_name_pattern = None
 
     # Filtreleri uygula
     filtered_files = []
@@ -217,6 +278,22 @@ def search_files(
             file_ext = entry.suffix
             # Compare case-insensitive
             if file_ext.lower() != normalized_filter_ext.lower():
+                continue
+
+        # fuzzy_name filter (AC-1/AC-5): entry.stem ile karsilastirilir
+        # (entry.name DEGIL - plan.md notu), Levenshtein mesafesi <=2.
+        if fuzzy_name is not None:
+            distance = _levenshtein_distance(
+                entry.stem.lower(), fuzzy_name.lower()
+            )
+            if distance > _FUZZY_NAME_MAX_DISTANCE:
+                continue
+
+        # name_pattern filter (AC-2): regex entry.name'e uygulanir.
+        if name_pattern is not None:
+            if compiled_name_pattern is None or not compiled_name_pattern.search(
+                entry.name
+            ):
                 continue
 
         # modified_after filter (inclusive >=)

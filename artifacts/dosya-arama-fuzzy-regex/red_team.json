@@ -1,0 +1,65 @@
+{
+  "task": "dosya-arama-fuzzy-regex",
+  "reviewed_at": "2026-08-19",
+  "round": 2,
+  "summary": "Ikinci red-team turu: 1. turda bulunan 2 medium-severity bulgu dogrulandi ve KAPATILDI. (1) search_files() artik fuzzy_name/name_pattern verildiginde _iter_files_recursive() cagirmiyor, dogrudan folder.iterdir() kullaniyor (file_search.py:240-250) - fuzzy_name/name_pattern YOKKEN Saga #336 recursive davranisi degismeden korunuyor (regresyon yok, dogrulandi). (2) fuzzyName/namePattern alanlarina artik Field(max_length=100)/Field(max_length=200) sinir eklendi (models.py:544-545), contentContains ile ayni ucuz ReDoS mitigasyon desenini takip ediyor. Tam test suite calistirildi: 367 passed, 4 skipped, 0 failed.",
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "performance",
+      "status": "resolved",
+      "file": "backend/file_search.py",
+      "issue": "ONCEKI DURUM: search_files() fuzzy_name/name_pattern verildiginde bile once _iter_files_recursive() ile TUM alt agaci gezip sonra kok-disi dosyalari filtreyle atiyordu (gereksiz I/O).",
+      "resolution": "Dogrulandi: file_search.py satir 240-250'de artik `if fuzzy_name is not None or name_pattern is not None:` dalinda dogrudan `folder.iterdir()` kullaniliyor (gizli-olmayan + is_file() filtresiyle), _iter_files_recursive() bu dalda HIC CAGRILMIYOR. else dalinda (fuzzy_name/name_pattern YOKKEN) `_iter_files_recursive(folder, timed_out=discovery_timed_out)` degismeden calisiyor - Saga #336'nin recursive/derinlik-sinirli/dongu-korumali davranisinda regresyon YOK. discovery_timed_out kavrami bu yeni dalda anlamli olmadigi icin False kaliyor (dogru, cunku sadece 1 dizin taraniyor)."
+    },
+    {
+      "severity": "medium",
+      "category": "security",
+      "status": "resolved",
+      "file": "backend/models.py",
+      "issue": "ONCEKI DURUM: fuzzyName/namePattern alanlarinda max_length siniri yoktu, contentContains'in aksine (500 karakter) ucuz ReDoS mitigasyonu atlanmisti.",
+      "resolution": "Dogrulandi: models.py satir 544-545 - `fuzzyName: str | None = Field(default=None, max_length=100)` ve `namePattern: str | None = Field(default=None, max_length=200)`. namePattern regex oldugu icin fuzzyName'den daha genis bir sinir aliyor (bilincli tasarim, kod yorumunda da belirtilmis). Yeni bagimlilik eklenmedi, salt Pydantic Field kisitidir - atdd.md'nin 'bagimlilik gerektirmeyen' tercihiyle tutarli."
+    },
+    {
+      "severity": "low",
+      "category": "scope",
+      "status": "not_fixed_out_of_scope",
+      "file": "backend/main.py",
+      "issue": "/api/search/scan (start_search_scan) ve arka plan _run_scan cagrisi fuzzyName/namePattern parametrelerini HALA ILETMIYOR - sadece nameContains/extension/modifiedAfter/modifiedBefore/contentContains gonderiliyor. /api/search senkron endpoint'i bu iki alani destekliyor ama /api/search/scan desteklemiyor, iki arama endpoint'i arasinda davranis tutarsizligi devam ediyor.",
+      "note": "Bu gorevin (dosya-arama-fuzzy-regex, Saga #316) atdd.md Etkilenen Dosyalar bolumu start_search_scan()'i acikca listelemiyor - kapsam disi oldugu icin bu turda duzeltilmedi, bilincli karar. Gelecekte scan endpoint'ine fuzzy/regex destegi eklenmesi ayri bir gorev olarak ele alinmali (kullanici karisikligini onlemek icin)."
+    }
+  ],
+  "verification": {
+    "file_search_py_checked": true,
+    "models_py_checked": true,
+    "regression_check_non_fuzzy_path_still_recursive": true,
+    "tests_run_command": ".venv/Scripts/python.exe -m pytest backend/tests/ -v",
+    "tests_result": "367 passed, 4 skipped, 0 failed"
+  },
+  "strengths": [
+    "_levenshtein_distance() (backend/file_search.py:151-173) klasik DP edit-distance algoritmasina birebir uyuyor, 1. turda dogrulanmisti, degismedi.",
+    "fuzzy_name/name_pattern dalindaki yeni kod yorum blogu (file_search.py:230-238) red-team follow-up'i acikca referans veriyor ve neden degistigini belgeliyor - izlenebilirlik iyi.",
+    "Regresyon riski yoktu cunku degisiklik if/else dalinin SADECE bir kolunu (fuzzy_name/name_pattern varken) etkiliyor, mevcut recursive/depth/cycle-guard mantigina dokunulmamis."
+  ],
+  "caveman_review": {
+    "complexity": "low",
+    "unnecessary_files": 0,
+    "unnecessary_helpers": 0,
+    "unnecessary_abstractions": 0
+  },
+  "scope_review": {
+    "matches_atdd": true,
+    "scope_expansion": false
+  },
+  "ready_to_commit": {
+    "atdd_satisfied": true,
+    "tests_passed": true,
+    "no_critical_findings": true,
+    "scope_respected": true,
+    "caveman_satisfied": true,
+    "security_acceptable": true,
+    "maintainability_acceptable": true,
+    "no_blocking_risks": true
+  },
+  "verdict": "approve"
+}

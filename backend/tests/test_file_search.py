@@ -1124,3 +1124,85 @@ class TestSearchFilesHiddenFolderNotDescended:
         assert filenames == {"visible.txt"}
         assert "config" not in filenames
         assert "deep_file.txt" not in filenames
+
+
+# --- Saga #316: dosya-arama-fuzzy-regex (RED STEP) ---
+# `search_files()`'in henuz VAR OLMAYAN `fuzzy_name`/`name_pattern`
+# parametrelerini kullanir. Bu testlerin su an TypeError (beklenmeyen keyword
+# argument) ile KIRMIZI olmasi BEKLENEN ve DOGRU davranistir (atdd.md AC-1,
+# AC-2, AC-5, AC-6, AC-7 / plan.md: fuzzy_name karsilastirmasi entry.stem ile
+# yapilmali, entry.name DEGIL).
+
+
+class TestSearchFilesFuzzyName:
+    """AC-1 [Critical]: Levenshtein mesafesi <=2 olan dosya adlari bulunur.
+    AC-5 [High]: mesafe 3+ olan dosyalar BULUNMAZ (esik disi)."""
+
+    def test_fuzzy_name_finds_file_within_levenshtein_distance_two(
+        self, tmp_path: Path
+    ) -> None:
+        """plan.md notu: karsilastirma entry.stem ("fatura_2024") ile
+        fuzzy_name ("fatuura_2024") arasinda yapilir - aralarindaki mesafe
+        1 karakter ekleme (tek 'u' fazla) oldugu icin <=2 esigini gecer."""
+        (tmp_path / "fatura_2024.pdf").write_bytes(b"a")
+        (tmp_path / "alakasiz.pdf").write_bytes(b"b")
+
+        result = search_files(tmp_path, fuzzy_name="fatuura_2024")
+
+        filenames = {item.filename for item in result}
+        assert filenames == {"fatura_2024.pdf"}
+
+    def test_fuzzy_name_beyond_threshold_returns_empty(self, tmp_path: Path) -> None:
+        """"fatura" ile "invoice" arasinda ortak alt-dizi yok, mesafe kesinlikle
+        2'nin ustunde - dosya sonucta GORUNMEZ (Davranis Sozlesmesi satir 8)."""
+        (tmp_path / "fatura.pdf").write_bytes(b"a")
+
+        result = search_files(tmp_path, fuzzy_name="invoice")
+
+        assert result == []
+
+
+class TestSearchFilesNamePattern:
+    """AC-2 [Critical]: name_pattern regex sadece eslenen dosyalari bulur."""
+
+    def test_name_pattern_matches_only_matching_files(self, tmp_path: Path) -> None:
+        (tmp_path / "2024-01-fatura.pdf").write_bytes(b"a")
+        (tmp_path / "rapor.pdf").write_bytes(b"b")
+
+        result = search_files(tmp_path, name_pattern="2024-.*-fatura")
+
+        filenames = {item.filename for item in result}
+        assert filenames == {"2024-01-fatura.pdf"}
+
+
+class TestSearchFilesFuzzyOrPatternAndOtherFilters:
+    """AC-6 [Medium]: fuzzy_name/name_pattern diger filtrelerle (ornegin
+    extension) AND mantigiyla birlesir."""
+
+    def test_fuzzy_name_and_extension_combine_with_and_logic(
+        self, tmp_path: Path
+    ) -> None:
+        # Ayni "gövde" ile iki farkli uzanti - sadece extension="pdf" olan
+        # sonuca girmeli, .docx olan fuzzy eslesse bile AND ile elenmeli.
+        (tmp_path / "fatura_2024.pdf").write_bytes(b"a")
+        (tmp_path / "fatura_2024.docx").write_bytes(b"b")
+
+        result = search_files(tmp_path, fuzzy_name="fatuura_2024", extension="pdf")
+
+        filenames = {item.filename for item in result}
+        assert filenames == {"fatura_2024.pdf"}
+
+
+class TestSearchFilesFuzzyNonRecursive:
+    """AC-7 [Medium]: fuzzy_name/name_pattern SADECE kok dizini tarar -
+    2. seviye alt klasordeki dosya BULUNMAZ (bilincli, non-recursive kapsam
+    karari - #336'nin recursive davranisindan BAGIMSIZ)."""
+
+    def test_fuzzy_name_does_not_find_file_in_subfolder(self, tmp_path: Path) -> None:
+        nested = tmp_path / "alt"
+        nested.mkdir()
+        (nested / "fatura_2024.pdf").write_bytes(b"a")
+
+        result = search_files(tmp_path, fuzzy_name="fatura_2024")
+
+        assert result == []

@@ -2,6 +2,7 @@ import dataclasses
 import datetime as dt
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -516,6 +517,24 @@ def search_endpoint(
     modified_after = _parse_search_date(payload.modifiedAfter, "modifiedAfter")
     modified_before = _parse_search_date(payload.modifiedBefore, "modifiedBefore")
 
+    # Saga #316 AC-4: fuzzyName ve namePattern birbirini dislar, ikisi
+    # birden verilirse 422.
+    if payload.fuzzyName is not None and payload.namePattern is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="fuzzyName ve namePattern aynı anda kullanılamaz",
+        )
+
+    # Saga #316 AC-3: gecersiz regex erkenden 422 ile reddedilir, 500 degil.
+    if payload.namePattern is not None:
+        try:
+            re.compile(payload.namePattern)
+        except re.error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"namePattern geçersiz regex: '{payload.namePattern}'",
+            )
+
     results, partial = search_files(
         allowed_root,
         name_contains=payload.nameContains,
@@ -523,6 +542,8 @@ def search_endpoint(
         modified_after=modified_after,
         modified_before=modified_before,
         content_contains=payload.contentContains,
+        fuzzy_name=payload.fuzzyName,
+        name_pattern=payload.namePattern,
         return_partial=True,
     )
 

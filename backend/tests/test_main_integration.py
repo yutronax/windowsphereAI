@@ -1389,3 +1389,41 @@ def test_search_endpoint_content_contains_timeout_returns_partial_true(
     assert response.status_code == 200
     body = response.json()
     assert body["partial"] is True
+
+
+# --- Saga #316: dosya-arama-fuzzy-regex (RED STEP) ---
+# `SearchRequest`in henuz VAR OLMAYAN `namePattern`/`fuzzyName` alanlarini
+# kullanir. Pydantic'in varsayilan extra="ignore" davranisi bu alanlari
+# sessizce yok sayacagi icin `search_endpoint` asla 422 dondurmeyecek - bu
+# testler assertion hatasiyla (beklenen 422 yerine baska bir kod) KIRMIZI
+# olmalidir - bu BEKLENEN (red step, atdd.md AC-3, AC-4).
+
+
+def test_search_endpoint_returns_422_for_invalid_name_pattern_regex(tmp_path):
+    """AC-3 [Critical]: gecersiz regex (esletirilmemis parantez) 422 doner,
+    500 degil."""
+    (tmp_path / "dosya.txt").write_text("test")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id, "namePattern": "("},
+    )
+
+    assert response.status_code == 422
+
+
+def test_search_endpoint_returns_422_when_fuzzy_name_and_name_pattern_together(
+    tmp_path,
+):
+    """AC-4 [High]: fuzzyName VE namePattern AYNI istekte birlikte verilirse
+    422 doner (birbirini disleyen iki mod)."""
+    (tmp_path / "dosya.txt").write_text("test")
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/search",
+        json={"sessionId": session_id, "fuzzyName": "x", "namePattern": "y"},
+    )
+
+    assert response.status_code == 422
