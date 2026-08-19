@@ -143,6 +143,11 @@ def validate_plan_paths(
             _validate_single_path(allowed_root / step.redactedFileName, allowed_root, "Karartma hedefi")
         if step.operationType == OperationType.EXCEL_SORT:
             _validate_single_path(allowed_root / step.sortedFileName, allowed_root, "Sıralama hedefi")
+        if step.operationType == OperationType.EXCEL_CREATE:
+            # Saga #326: EXCEL_CREATE kaynaksız (fileNames boş) - genel
+            # pdf_files döngüsü hedefi hiç göremez, bu yüzden
+            # EXCEL_SORT/REDACT ile AYNI desende ayrıca doğrulanır.
+            _validate_single_path(allowed_root / step.createdFileName, allowed_root, "Excel oluşturma hedefi")
 
     validate_rename_destinations(plan, pdf_files, allowed_root)
     validate_merge_destinations(plan, pdf_files, allowed_root)

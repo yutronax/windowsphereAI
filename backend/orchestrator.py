@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from backend import excel_sort, pdf_compress, pdf_pages
+from backend import excel_rows, excel_sort, pdf_compress, pdf_pages
 from backend.db_models import FileOperation, Transaction
 from backend.file_operations import create_transaction, record_file_operation
 from backend.models import OperationType, PdfFileMetadata, PlanSkeleton, PlanStep
@@ -60,6 +60,8 @@ _SUPPORTED_OPERATION_TYPES = {
     OperationType.PDF_DELETE_PAGES,
     OperationType.APPEND,
     OperationType.PDF_COMPRESS,
+    OperationType.EXCEL_CREATE,
+    OperationType.EXCEL_APPEND,
 }
 
 # DELETE'in fiziksel yedeklerinin saklandığı, `allowed_root` altında gizli
@@ -358,6 +360,13 @@ _ROLLBACK_OPERATIONS = {
     # Buyume korumasi tetiklendiginde (compress_pdf False doner) zaten
     # hicbir FileOperation kaydi olusmadigi icin bu haritaya hic bakilmaz.
     OperationType.PDF_COMPRESS: _rollback_copy,
+    # Saga #326: EXCEL_CREATE rollback'i de COPY ile AYNI - kaynak yok,
+    # rollback SADECE hedefteki yeni oluşturulan dosyayı siler.
+    OperationType.EXCEL_CREATE: _rollback_copy,
+    # Saga #326: EXCEL_APPEND rollback'i - PDF APPEND'in `_rollback_append`
+    # ile AYNI fonksiyonu (dosya-tipinden bağımsız, sadece `shutil.copy2`
+    # ile backup_path'i geri kopyalar).
+    OperationType.EXCEL_APPEND: _rollback_append,
 }
 
 
@@ -822,6 +831,56 @@ def apply_plan(
                 session.commit()
                 applied.append(operation)
                 continue
+            if step.operationType == OperationType.EXCEL_CREATE:
+                # Saga #326: EXCEL_FILTER'ın deseni ama KAYNAK YOK -
+                # source_path fiziksel olarak var olmadığı için
+                # record_file_operation'a boş string geçilir (MERGE'in
+                # çoklu-kaynak ";".join(...) deseninden farklı, burada
+                # gerçekten kaynak YOK).
+                destination_path = allowed_root / step.createdFileName
+                operation = record_file_operation(
+                    session,
+                    transaction,
+                    operation_type=step.operationType.value,
+                    source_path="",
+                    destination_path=str(destination_path),
+                    backup_path=str(destination_path),
+                )
+                try:
+                    excel_rows.create_excel_file(step.createRows, destination_path)
+                except Exception as exc:
+                    raise PlanApplicationError(
+                        f"EXCEL_CREATE çıktı dosyası oluşturulamadı: '{destination_path.name}' ({exc})"
+                    ) from exc
+                operation.status = "completed"
+                session.commit()
+                applied.append(operation)
+                continue
+            if step.operationType == OperationType.EXCEL_APPEND:
+                # Saga #326: PDF `OperationType.APPEND` bloğunun BİREBİR
+                # kopyası - EXCEL_APPEND de YERİNDE günceller (destination
+                # == source).
+                source_path = allowed_root / files[0].filename
+                destination_path = source_path
+                backup_path = _append_backup_path(allowed_root, transaction.id, files[0].filename)
+                operation = record_file_operation(
+                    session,
+                    transaction,
+                    operation_type=step.operationType.value,
+                    source_path=str(source_path),
+                    destination_path=str(destination_path),
+                    backup_path=str(backup_path),
+                )
+                try:
+                    excel_rows.append_excel_rows(source_path, step.appendRows, backup_path)
+                except Exception as exc:
+                    raise PlanApplicationError(
+                        f"EXCEL_APPEND kaynağı okunamıyor: '{source_path.name}' ({exc})"
+                    ) from exc
+                operation.status = "completed"
+                session.commit()
+                applied.append(operation)
+                continue
             if step.operationType == OperationType.APPEND:
                 # Saga #323: APPEND YERINDE gunceller - destination_path ==
                 # source_path (MERGE/REDACT/EXCEL_SORT'un aksine, kaynak
@@ -870,6 +929,8 @@ def apply_plan(
                 OperationType.PDF_EXTRACT_PAGES,
                 OperationType.PDF_DELETE_PAGES,
                 OperationType.PDF_COMPRESS,
+                OperationType.EXCEL_CREATE,
+                OperationType.EXCEL_APPEND,
             ):
                 target_dir = allowed_root / step.targetFolder
                 target_dir.mkdir(parents=True, exist_ok=True)

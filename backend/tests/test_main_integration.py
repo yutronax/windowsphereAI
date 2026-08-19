@@ -1534,3 +1534,101 @@ def test_search_endpoint_returns_422_when_fuzzy_name_and_name_pattern_together(
     )
 
     assert response.status_code == 422
+
+
+# --- Saga #326: excel-create-read-append (TEST-FIRST / red step) ---
+# `POST /api/excel/read` henuz VAR DEGIL - bu testler simdilik KIRMIZI
+# kalmali (404 "Not Found" - route hic tanimli degil - beklenen red durumu).
+# Referans: artifacts/excel-create-read-append/atdd.md (AC-4, AC-5),
+# plan.md (search_endpoint'in 410/allowed_root deseninin AYNISI).
+
+
+def _write_excel_for_read(root, filename: str, rows: list[list]) -> None:
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for row in rows:
+        ws.append(row)
+    wb.save(str(root / filename))
+
+
+def test_excel_read_endpoint_returns_404_for_unknown_session_id():
+    response = client.post(
+        "/api/excel/read",
+        json={"sessionId": str(uuid.uuid4()), "filename": "kaynak.xlsx"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_excel_read_endpoint_returns_410_when_selected_folder_no_longer_exists(tmp_path):
+    missing_folder = tmp_path / "silinmis-klasor"
+    session_id = _create_session(selected_folder=str(missing_folder))
+
+    response = client.post(
+        "/api/excel/read",
+        json={"sessionId": session_id, "filename": "kaynak.xlsx"},
+    )
+
+    assert response.status_code == 410
+
+
+def test_excel_read_endpoint_returns_200_with_all_used_area_when_range_not_given(tmp_path):
+    # AC-5: `range` VERİLMEMİŞ -> tüm kullanılan sayfa alanı döner.
+    _write_excel_for_read(tmp_path, "kaynak.xlsx", [["Ad", "Puan"], ["Ali", 90], ["Veli", 80]])
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/excel/read",
+        json={"sessionId": session_id, "filename": "kaynak.xlsx"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["values"] == [["Ad", "Puan"], ["Ali", 90], ["Veli", 80]]
+
+
+def test_excel_read_endpoint_returns_200_with_only_the_given_range(tmp_path):
+    # AC-4: `range="A1:B2"` -> SADECE o hücre aralığındaki değerler döner.
+    _write_excel_for_read(
+        tmp_path,
+        "kaynak.xlsx",
+        [["Ad", "Puan", "Sehir"], ["Ali", 90, "Ankara"], ["Veli", 80, "Izmir"]],
+    )
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/excel/read",
+        json={"sessionId": session_id, "filename": "kaynak.xlsx", "range": "A1:B2"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["values"] == [["Ad", "Puan"], ["Ali", 90]]
+
+
+def test_excel_read_endpoint_returns_422_for_an_invalid_range(tmp_path):
+    _write_excel_for_read(tmp_path, "kaynak.xlsx", [["Ad", "Puan"], ["Ali", 90]])
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/excel/read",
+        json={"sessionId": session_id, "filename": "kaynak.xlsx", "range": "ZZZ9999999"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_excel_read_endpoint_returns_error_status_when_file_does_not_exist(tmp_path):
+    session_id = _create_session(selected_folder=str(tmp_path))
+
+    response = client.post(
+        "/api/excel/read",
+        json={"sessionId": session_id, "filename": "yok.xlsx"},
+    )
+
+    # main.py'de zaten kullanılan hata kodlarıyla tutarlı olmalı (404/410
+    # deseni) - kesin kod code-copilot adımında netleşecek, burada sadece
+    # 2xx OLMADIĞI doğrulanıyor.
+    assert response.status_code >= 400

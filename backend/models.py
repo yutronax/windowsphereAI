@@ -69,6 +69,15 @@ class OperationType(str, Enum):
     # edilmis yeni bir sayfa eklenir, kaynak dosya YERINDE guncellenir
     # (gecici-dosya+atomik-replace deseniyle, bkz. orchestrator._forward_append).
     APPEND = "Ekle"
+    # Saga #326: EXCEL_CREATE - kaynaksız bir operasyon (fileNames tam
+    # olarak 0 eleman - MERGE'in ">=2"/SPLIT/APPEND'in "==1" desenlerinin
+    # yanına yeni bir "==0" varyantı), sıfırdan bir .xlsx dosyası
+    # (createdFileName) yazar.
+    EXCEL_CREATE = "Excel Oluştur"
+    # Saga #326: EXCEL_APPEND - PDF APPEND'in BİREBİR AYNI "kaynağı
+    # YERİNDE güncelle" deseni, ama metin sayfası yerine satır (appendRows)
+    # ekler.
+    EXCEL_APPEND = "Excel Ekle"
 
 
 class RedactionRegion(BaseModel):
@@ -168,6 +177,17 @@ class PlanStep(BaseModel):
     # diğer operationType'larda None kalmalı). max_length=5000 (Threat-Model
     # Notu, atdd.md: DoS mitigasyonu).
     appendText: str | None = Field(default=None, max_length=5000)
+    # Saga #326: EXCEL_CREATE icin - sifirdan yazilacak satirlar + cikti
+    # dosya adi, mergedFileName ile AYNI desende (SADECE
+    # operationType==EXCEL_CREATE olduğunda dolu olmalı, diğer
+    # operationType'larda None kalmalı). "rows" ORTAK bir alan DEGIL -
+    # EXCEL_APPEND kendi appendRows'unu kullanir (plan.md, bilincli tercih).
+    createRows: list | None = None
+    createdFileName: str | None = None
+    # Saga #326: EXCEL_APPEND icin - kaynagin sonuna eklenecek satirlar,
+    # appendText ile AYNI desende (SADECE operationType==EXCEL_APPEND
+    # olduğunda dolu olmalı, diğer operationType'larda None kalmalı).
+    appendRows: list | None = None
 
     @field_validator("mergedFileName")
     @classmethod
@@ -216,6 +236,13 @@ class PlanStep(BaseModel):
     def compressed_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
         if value is not None and ("/" in value or "\\" in value):
             raise ValueError("compressedFileName must not contain path separators")
+        return value
+
+    @field_validator("createdFileName")
+    @classmethod
+    def created_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
+        if value is not None and ("/" in value or "\\" in value):
+            raise ValueError("createdFileName must not contain path separators")
         return value
 
     @field_validator("appendText")
@@ -557,6 +584,42 @@ class PlanStep(BaseModel):
             raise ValueError("appendText must be omitted unless operationType is APPEND")
         return self
 
+    @model_validator(mode="after")
+    def excel_create_fields_only_for_excel_create(self) -> "PlanStep":
+        # Saga #326: excel_filter_fields_only_for_excel_filter ile AYNI
+        # desen - createRows/createdFileName SADECE EXCEL_CREATE icin
+        # zorunlu, diger operationType'larda tamamen yasak. EXCEL_CREATE
+        # kaynaksiz bir operasyon oldugu icin fileNames TAM OLARAK 0 eleman
+        # olmali (MERGE'in ">=2"/SPLIT'in "==1" desenlerinin yanina yeni
+        # bir "==0" varyanti, plan.md ile dogrulandi).
+        if self.operationType == OperationType.EXCEL_CREATE:
+            if self.createRows is None or len(self.createRows) == 0:
+                raise ValueError("createRows is required when operationType is EXCEL_CREATE")
+            if self.createdFileName is None or self.createdFileName.strip() == "":
+                raise ValueError("createdFileName is required when operationType is EXCEL_CREATE")
+            if len(self.fileNames) != 0:
+                raise ValueError("fileNames must contain exactly 0 entries when operationType is EXCEL_CREATE")
+        else:
+            if self.createRows is not None:
+                raise ValueError("createRows must be omitted unless operationType is EXCEL_CREATE")
+            if self.createdFileName is not None:
+                raise ValueError("createdFileName must be omitted unless operationType is EXCEL_CREATE")
+        return self
+
+    @model_validator(mode="after")
+    def excel_append_fields_only_for_excel_append(self) -> "PlanStep":
+        # Saga #326: append_text_only_for_append ile AYNI desen -
+        # appendRows SADECE EXCEL_APPEND icin zorunlu, diger
+        # operationType'larda tamamen yasak.
+        if self.operationType == OperationType.EXCEL_APPEND:
+            if self.appendRows is None or len(self.appendRows) == 0:
+                raise ValueError("appendRows is required when operationType is EXCEL_APPEND")
+            if len(self.fileNames) != 1:
+                raise ValueError("fileNames must contain exactly 1 entry when operationType is EXCEL_APPEND")
+        elif self.appendRows is not None:
+            raise ValueError("appendRows must be omitted unless operationType is EXCEL_APPEND")
+        return self
+
 
 class DateSource(str, Enum):
     """Not: `PlanSkeleton.steps` boşsa (taşınacak PDF yoksa),
@@ -772,6 +835,30 @@ class SearchResponse(BaseModel):
     # Saga #314 (AC-2): global 10sn timeout asilirsa True - o ana kadarki
     # kismi sonuclar dondurulur, hata firlatilmaz.
     partial: bool = False
+
+
+class ExcelReadRequest(BaseModel):
+    """Saga #326: `/api/excel/read` istek şeması - `SearchRequest` ile AYNI
+    session/allowed_root doğrulama deseni (senkron sorgu, plan/transaction
+    kavramı YOK)."""
+
+    sessionId: str
+    filename: str
+    range: str | None = None
+
+    @field_validator("filename")
+    @classmethod
+    def filename_has_no_path_separators(cls, value: str) -> str:
+        if "/" in value or "\\" in value:
+            raise ValueError("filename must not contain path separators")
+        return value
+
+
+class ExcelReadResponse(BaseModel):
+    """Saga #326: `/api/excel/read` yanıt şeması."""
+
+    values: list[list]
+    range: str | None = None
 
 
 class ScanStartResponse(BaseModel):

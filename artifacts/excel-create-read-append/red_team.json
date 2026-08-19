@@ -1,0 +1,26 @@
+{
+  "task_slug": "excel-create-read-append",
+  "reviewer": "obss-red-team subagent (bağımsız — test VE kod da subagent'lar tarafından yazıldı, Codex kotası dolu olduğundan)",
+  "verdict": "Ready to Commit",
+  "security_findings": [
+    {
+      "finding": "security.py'deki EXCEL_CREATE createdFileName whitelist eklemesi DOĞRU ve TEST EDİLMİŞ.",
+      "severity": "low",
+      "scenario": "Pydantic'in ayraç-engelleme validator'ı + _validate_single_path'in resolve()+is_relative_to() kontrolü birlikte, createdFileName='..' gibi tek-segmentli bir kaçış girişimini de kapatıyor. MERGE/REDACT/EXCEL_SORT ile tutarlı, test_orchestrator.py'de PathWhitelistError testiyle doğrulandı.",
+      "status": "CONFIRMED CORRECT — bu commit'in parçası."
+    },
+    {
+      "finding": "GERÇEK ama ÖNCEDEN VAR OLAN boşluk: EXCEL_FILTER/PDF_EXTRACT_PAGES/PDF_DELETE_PAGES/PDF_COMPRESS'in hedef alanları (filteredFileName/extractedFileName/remainingFileName/compressedFileName) validate_plan_paths'te _validate_single_path'ten HİÇ geçmiyor — sadece Pydantic'in '/' ve '\\\\' engelleme validator'ı koruyor.",
+      "severity": "low",
+      "scenario": "Windows'ta sadece '/' ve '\\\\' ayraç olduğu için çok-segmentli bir kaçış (\"../evil.xlsx\") zaten Pydantic seviyesinde imkansız. Tek kalan boşluk: değer TAM OLARAK '..' ise (ayraç yok) allowed_root.parent'a çözülür — bu bir dosya değil dizin olduğu için openpyxl'in save() çağrısı muhtemelen OS hatasıyla başarısız olur (sessizce başarılı olmaz), ama yapılandırılmış PathWhitelistError yerine genel bir exception'a düşer ve bu dört operasyon için AÇIKÇA test edilmemiş.",
+      "status": "NOT FIXED — bu görevin kapsamı DIŞINDA (bu görevden önce vardı, bu görev tarafından yaratılmadı). Ayrı bir Saga takip görevi önerildi: `_validate_single_path` çağrılarını operationType→alan-adı eşlemesi kullanan tek bir döngüye çıkarmak (4 ayrı if-bloğu yerine), böylece yeni bir operasyon eklendiğinde bu kontrolün unutulması yapısal olarak imkansız hale gelir."
+    }
+  ],
+  "approved_points": [
+    "append_excel_rows GERÇEKTEN backup+tempfile+atomik-replace deseni izliyor — openpyxl'in wb.save(source_path) doğrudan-üzerine-yazmasını KULLANMIYOR, kod okunarak doğrulandı.",
+    "create_excel_file, destination_path.exists() kontrolünü Workbook() oluşturulmadan ÖNCE yapıyor — AC-2'nin 'kısmi/sessiz üzerine yazma yok' gereksinimini karşılıyor.",
+    "read_excel_range'in üç dallı normalizasyonu (tek hücre/tek satır/çok satır) openpyxl'in üç farklı dönüş şekliyle DOĞRU eşleşiyor.",
+    "/api/excel/read, search_endpoint'in session/allowed_root desenini birebir izliyor (410/404), Plan/Transaction akışının dışında kalması (salt-okunur sorgu) mimari olarak doğru."
+  ],
+  "overall_assessment": "Ready to Commit. Bu görevin GERÇEK değişikliği (EXCEL_CREATE/APPEND/READ + security.py'deki createdFileName whitelist eklentisi) doğru, test edilmiş ve bloklayıcı bulgu içermiyor. Bulunan ikinci boşluk (4 operasyonun eksik whitelist kontrolü) bu görevden ÖNCE var olan, bu görev tarafından yaratılmamış bir durum — kapsam dışı bırakıldı, ayrı bir Saga takip görevi olarak önerildi."
+}

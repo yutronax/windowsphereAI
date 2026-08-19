@@ -1,5 +1,33 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Excel create/read/append (Saga #326, epic #29) — kaynaksız operasyon + eksik whitelist bulgusu
+
+**Üç mimari olarak farklı operasyon tek görüşmede netleştirildi.**
+EXCEL_CREATE (kaynaksız — `fileNames==0` deseni İLK KEZ eklendi),
+EXCEL_APPEND (PDF APPEND'in yerinde-güncelleme desenini birebir izliyor),
+EXCEL_READ (Plan/Transaction akışı DIŞINDA, `search_endpoint`'in senkron
+sorgu desenini izleyen yeni bir `/api/excel/read`).
+
+**İmplementasyon subagent'ı, plan.md'de öngörülmeyen ama gerekli bir
+güvenlik açığını kendisi buldu ve kapattı.** EXCEL_CREATE kaynaksız
+olduğu için `backend/security.py`'nin genel `pdf_files` döngüsü
+`createdFileName` hedefini hiç göremiyordu — MERGE/REDACT/EXCEL_SORT'un
+zaten kullandığı `_validate_single_path` deseni oraya da eklendi. Bu
+sapma `code_diff.md`'de açıkça belgelendi, gizlenmedi.
+
+**Bağımsız red-team turu, bu görevden ÖNCE var olan, daha geniş bir
+boşluk buldu.** `validate_plan_paths`'te sadece MERGE/REDACT/EXCEL_SORT/
+(şimdi)EXCEL_CREATE'in hedef alanları açıkça whitelist'ten geçiyor —
+EXCEL_FILTER/PDF_EXTRACT_PAGES/PDF_DELETE_PAGES/PDF_COMPRESS'in hedef
+alanları sadece Pydantic'in ayraç-engelleme validator'ına güveniyor.
+Windows'ta bu pratikte yeterli (tek kalan boşluk, "'..'" tam değeri,
+başarısız bir OS hatasına düşer, sessizce başarılı olmaz) ama savunma-
+derinliği eksik ve tutarsız. Bu görevin kapsamı DIŞINDA bırakıldı, ayrı
+bir Saga takip görevi olarak önerildi (operationType→alan-adı eşlemesi
+kullanan tek bir döngüye çıkarma önerisiyle).
+
+452/452 backend test yeşil (5 skip, Windows-only).
+
 ## PDF sıkıştırma (Saga #322, epic #29) — büyüme koruması + yeni status icat etmeden raporlama
 
 **Ortam incelemesi kapsamı belirledi.** Görev açıklaması Ghostscript/QPDF

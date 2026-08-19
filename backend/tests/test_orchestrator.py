@@ -2780,4 +2780,140 @@ def test_apply_plan_rejects_pdf_compress_of_a_path_outside_allowed_root(session,
         apply_plan(session, plan, pdf_files, tmp_path)
 
     assert calls == []
+
+
+# Saga #326: excel-create-read-append (TEST-FIRST / red step) -
+# `OperationType.EXCEL_CREATE`/`OperationType.EXCEL_APPEND`,
+# `PlanStep.createRows`/`createdFileName`/`appendRows` ve orchestrator'daki
+# iki step-uygulama dali henuz YOK. Bu testler simdilik KIRMIZI kalmali
+# (AttributeError / ValidationError / ModuleNotFoundError - EXCEL_FILTER'in
+# red-step testleriyle AYNI desen). Referans:
+# artifacts/excel-create-read-append/atdd.md (AC-1, AC-2, AC-6, AC-7),
+# plan.md (fileNames==0 icin CREATE, ==1 icin APPEND, backup_path deseni
+# APPEND icin PDF APPEND'in AYNISI).
+
+
+def _excel_create_step(order: int, create_rows: list, created_file_name: str) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.EXCEL_CREATE,
+        targetFolder="2026-08",
+        affectedFileCount=0,
+        fileNames=[],
+        createRows=create_rows,
+        createdFileName=created_file_name,
+    )
+
+
+def _excel_append_step(order: int, file_name: str, append_rows: list) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.EXCEL_APPEND,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=[file_name],
+        appendRows=append_rows,
+    )
+
+
+def test_apply_plan_creates_an_excel_file_with_the_given_rows_and_commits(session, tmp_path):
+    # AC-1: verilen satırlarla `createdFileName` tam olarak oluşur.
+    import openpyxl
+
+    pdf_files: list[PdfFileMetadata] = []
+    create_rows = [["Ad", "Puan"], ["Ali", 90]]
+    plan = _plan([_excel_create_step(0, create_rows, "yeni.xlsx")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    output_path = tmp_path / "yeni.xlsx"
+    assert output_path.exists()
+    wb = openpyxl.load_workbook(str(output_path))
+    values = [list(row) for row in wb.active.iter_rows(values_only=True)]
+    assert values == create_rows
+    assert transaction.status == "committed"
+    assert len(transaction.operations) == 1
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_rejects_excel_create_when_target_already_exists(session, tmp_path):
+    # AC-2: hedef zaten VARSA `PlanApplicationError`, mevcut dosyaya
+    # DOKUNULMAZ (üzerine yazılmaz).
+    _write_excel(tmp_path, "yeni.xlsx", [["Eski", "Veri"]])
+    original_bytes = (tmp_path / "yeni.xlsx").read_bytes()
+    pdf_files: list[PdfFileMetadata] = []
+    plan = _plan([_excel_create_step(0, [["Yeni", "Veri"]], "yeni.xlsx")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert (tmp_path / "yeni.xlsx").read_bytes() == original_bytes
+
+
+def test_apply_plan_rejects_excel_create_of_a_path_outside_allowed_root(session, tmp_path, monkeypatch):
+    # EXCEL_FILTER/PDF_COMPRESS'in ".." teknigiyle AYNI desen.
+    pdf_files: list[PdfFileMetadata] = []
+    plan = _plan([_excel_create_step(0, [["Ad"]], "..")])
+
+    calls: list = []
+    monkeypatch.setattr(
+        "backend.orchestrator.excel_rows.create_excel_file",
+        lambda *args, **kwargs: calls.append(args),
+    )
+
+    with pytest.raises(PathWhitelistError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert calls == []
+
+
+def test_apply_plan_appends_excel_rows_to_the_end_in_place_and_commits(session, tmp_path):
+    # AC-6: satırlar dosyanın SONUNA eklenir, önceki içerik korunur (kaynak
+    # YERİNDE güncellenir, PDF APPEND ile aynı desen).
+    import openpyxl
+
+    _write_excel(tmp_path, "kaynak.xlsx", [["Ad", "Puan"], ["Ali", 90]])
+    pdf_files = [PdfFileMetadata(filename="kaynak.xlsx", createdAt="2026-08-01")]
+    plan = _plan([_excel_append_step(0, "kaynak.xlsx", [["Veli", 80]])])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    wb = openpyxl.load_workbook(str(tmp_path / "kaynak.xlsx"))
+    values = [list(row) for row in wb.active.iter_rows(values_only=True)]
+    assert values == [["Ad", "Puan"], ["Ali", 90], ["Veli", 80]]
+    assert transaction.status == "committed"
+
+
+def test_apply_plan_rejects_excel_append_when_source_missing_or_corrupt_and_creates_no_file(
+    session, tmp_path
+):
+    # AC-7: kaynak dosya YOK veya BOZUK -> `PlanApplicationError`, HİÇBİR
+    # yeni/boş dosya oluşturulmaz, kaynak (varsa) değişmez.
+    corrupt_bytes = b"not a real xlsx"
+    (tmp_path / "bozuk.xlsx").write_bytes(corrupt_bytes)
+    pdf_files_corrupt = [PdfFileMetadata(filename="bozuk.xlsx", createdAt="2026-08-01")]
+    plan_corrupt = _plan([_excel_append_step(0, "bozuk.xlsx", [["Veli", 80]])])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan_corrupt, pdf_files_corrupt, tmp_path)
+
+    assert (tmp_path / "bozuk.xlsx").read_bytes() == corrupt_bytes
+
+    pdf_files_missing = [PdfFileMetadata(filename="yok.xlsx", createdAt="2026-08-01")]
+    plan_missing = _plan([_excel_append_step(0, "yok.xlsx", [["Veli", 80]])])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan_missing, pdf_files_missing, tmp_path)
+
+    assert not (tmp_path / "yok.xlsx").exists()
+
+
+def test_apply_plan_rejects_excel_append_of_a_path_outside_allowed_root(session, tmp_path):
+    # APPEND'in ".." teknigiyle AYNI desen (bkz.
+    # test_apply_plan_rejects_append_of_a_path_outside_allowed_root).
+    pdf_files = [PdfFileMetadata(filename="..", createdAt="2026-08-01")]
+    plan = _plan([_excel_append_step(0, "..", [["Veli", 80]])])
+
+    with pytest.raises(PathWhitelistError):
+        apply_plan(session, plan, pdf_files, tmp_path)
     assert not (tmp_path / "sikistirilmis.pdf").exists()
