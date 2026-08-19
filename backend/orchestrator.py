@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from backend import excel_sort, pdf_pages
+from backend import excel_sort, pdf_compress, pdf_pages
 from backend.db_models import FileOperation, Transaction
 from backend.file_operations import create_transaction, record_file_operation
 from backend.models import OperationType, PdfFileMetadata, PlanSkeleton, PlanStep
@@ -59,6 +59,7 @@ _SUPPORTED_OPERATION_TYPES = {
     OperationType.PDF_EXTRACT_PAGES,
     OperationType.PDF_DELETE_PAGES,
     OperationType.APPEND,
+    OperationType.PDF_COMPRESS,
 }
 
 # DELETE'in fiziksel yedeklerinin saklandığı, `allowed_root` altında gizli
@@ -352,6 +353,11 @@ _ROLLBACK_OPERATIONS = {
     OperationType.PDF_DELETE_PAGES: _rollback_copy,
     # Saga #323: APPEND rollback'i - bkz. `_rollback_append` docstring'i.
     OperationType.APPEND: _rollback_append,
+    # Saga #322: PDF_COMPRESS rollback'i de COPY ile AYNI - kaynak hic
+    # degismedi, rollback SADECE hedefteki sikistirilmis dosyayi siler.
+    # Buyume korumasi tetiklendiginde (compress_pdf False doner) zaten
+    # hicbir FileOperation kaydi olusmadigi icin bu haritaya hic bakilmaz.
+    OperationType.PDF_COMPRESS: _rollback_copy,
 }
 
 
@@ -789,6 +795,33 @@ def apply_plan(
                 session.commit()
                 applied.append(operation)
                 continue
+            if step.operationType == OperationType.PDF_COMPRESS:
+                # Saga #322: plan.md deseni - compress_pdf() True donerse
+                # EXCEL_FILTER blogunun (record+completed+append) kopyasi,
+                # False donerse (buyume korumasi) HICBIR FileOperation kaydi
+                # olusturulmadan LIST'in izlediği "kayitsiz continue" deseni.
+                source_path = allowed_root / files[0].filename
+                destination_path = allowed_root / step.compressedFileName
+                try:
+                    compressed = pdf_compress.compress_pdf(source_path, destination_path)
+                except Exception as exc:
+                    raise PlanApplicationError(
+                        f"PDF sıkıştırılamadı, dosya okunamıyor: '{source_path.name}' ({exc})"
+                    ) from exc
+                if not compressed:
+                    continue
+                operation = record_file_operation(
+                    session,
+                    transaction,
+                    operation_type=step.operationType.value,
+                    source_path=str(source_path),
+                    destination_path=str(destination_path),
+                    backup_path=str(destination_path),
+                )
+                operation.status = "completed"
+                session.commit()
+                applied.append(operation)
+                continue
             if step.operationType == OperationType.APPEND:
                 # Saga #323: APPEND YERINDE gunceller - destination_path ==
                 # source_path (MERGE/REDACT/EXCEL_SORT'un aksine, kaynak
@@ -836,6 +869,7 @@ def apply_plan(
                 OperationType.EXCEL_FILTER,
                 OperationType.PDF_EXTRACT_PAGES,
                 OperationType.PDF_DELETE_PAGES,
+                OperationType.PDF_COMPRESS,
             ):
                 target_dir = allowed_root / step.targetFolder
                 target_dir.mkdir(parents=True, exist_ok=True)

@@ -466,6 +466,23 @@ def apply_plan_endpoint(
         if step.operationType == OperationType.REDACT
     ]
 
+    # Saga #322: PDF_COMPRESS icin - "buyume korumasi" (compressedFileName
+    # HIC yazilmadi) durumunda kullaniciya bunun ACIKCA soylenmesi zorunlu
+    # (bkz. atdd.md/plan.md). REDACT'in aksine bu DINAMIK bir kontrol -
+    # `transaction.operations` icinde bu step'in compressedFileName'ine
+    # karsilik gelen `completed` bir kayit var mi bakilir; YOKSA sikistirma
+    # bir kazanc saglamadi demektir.
+    warnings = warnings + [
+        f"'{step.compressedFileName}' oluşturulmadı - kaynak dosya zaten optimal boyutta, "
+        "sıkıştırma bir kazanç sağlamadı."
+        for step in payload.plan.steps
+        if step.operationType == OperationType.PDF_COMPRESS
+        and not any(
+            op.destination_path == str(allowed_root / step.compressedFileName) and op.status == "completed"
+            for op in transaction.operations
+        )
+    ]
+
     return TransactionApplyResponse(
         id=transaction.id,
         status=transaction.status,

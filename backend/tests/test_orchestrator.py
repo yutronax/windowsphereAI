@@ -2668,3 +2668,116 @@ def test_apply_plan_rejects_pdf_delete_pages_of_a_path_outside_allowed_root(sess
 
     assert calls == []
     assert not (tmp_path / "kalan.pdf").exists()
+
+
+# Saga #322: pdf-sikistirma (red step) - `OperationType.PDF_COMPRESS`,
+# `PlanStep.compressedFileName` ve orchestrator'daki step-uygulama dali
+# henuz YOK. Bu testler simdilik KIRMIZI kalmali (AttributeError /
+# ValidationError - EXCEL_FILTER/PDF_EXTRACT_PAGES'in red-step testleriyle
+# AYNI desen).
+#
+# plan.md'nin tasarim karari: `compress_pdf()` `True` donerse EXCEL_FILTER
+# bloğunun (record_file_operation + status="completed" + applied.append)
+# kopyasi uygulanir; `False` donerse (buyume korumasi) HICBIR
+# `FileOperation` kaydi olusturulmadan `continue` (LIST'in izlediği desen)
+# - bu testler tam olarak bu ayrimi dogrular.
+
+
+def _write_compressible_pdf_for_orchestrator(root, filename: str, page_count: int = 5) -> None:
+    # test_pdf_compress.py'deki _write_compressible_pdf ile AYNI teknik:
+    # reportlab, pageCompression=0 ile SIKISTIRILMAMIS, tekrarlanan buyuk
+    # content stream'leri olan sayfalar uretir - pypdf'in
+    # compress_content_streams() (flate encode) bunu belirgin sekilde
+    # kucultmeli.
+    from reportlab.pdfgen import canvas
+
+    c = canvas.Canvas(str(root / filename), pageCompression=0)
+    repeated_line = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "
+    for _ in range(page_count):
+        y = 780
+        for _ in range(60):
+            c.drawString(20, y, repeated_line)
+            y -= 10
+            if y < 20:
+                break
+        c.showPage()
+    c.save()
+
+
+def _pdf_compress_step(order: int, file_name: str, compressed_file_name: str) -> PlanStep:
+    return PlanStep(
+        order=order,
+        operationType=OperationType.PDF_COMPRESS,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=[file_name],
+        compressedFileName=compressed_file_name,
+    )
+
+
+def test_apply_plan_compresses_pdf_happy_path(session, tmp_path):
+    _write_compressible_pdf_for_orchestrator(tmp_path, "kaynak.pdf")
+    original_bytes = (tmp_path / "kaynak.pdf").read_bytes()
+    pdf_files = [PdfFileMetadata(filename="kaynak.pdf", createdAt="2026-08-01")]
+    plan = _plan([_pdf_compress_step(0, "kaynak.pdf", "sikistirilmis.pdf")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    output_path = tmp_path / "sikistirilmis.pdf"
+    assert output_path.exists()
+    assert output_path.stat().st_size < len(original_bytes)
+    # Kaynak dosya asla degismemeli.
+    assert (tmp_path / "kaynak.pdf").read_bytes() == original_bytes
+    assert transaction.status == "committed"
+    assert len(transaction.operations) == 1
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_skips_recording_an_operation_when_pdf_compression_does_not_shrink_the_file(session, tmp_path):
+    # ATDD AC-2/AC-5: buyume korumasi - sikisma saglanamazsa (zaten
+    # minimal PDF) HICBIR FileOperation kaydi olusmaz (LIST deseni),
+    # compressedFileName YAZILMAZ, ama transaction yine de "committed"
+    # (hata DEGIL).
+    _write_real_pdf(tmp_path, "kaynak.pdf", 1)
+    original_bytes = (tmp_path / "kaynak.pdf").read_bytes()
+    pdf_files = [PdfFileMetadata(filename="kaynak.pdf", createdAt="2026-08-01")]
+    plan = _plan([_pdf_compress_step(0, "kaynak.pdf", "sikistirilmis.pdf")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "sikistirilmis.pdf").exists()
+    assert (tmp_path / "kaynak.pdf").read_bytes() == original_bytes
+    assert transaction.status == "committed"
+    assert len(transaction.operations) == 0
+
+
+def test_apply_plan_rejects_pdf_compress_of_a_broken_source(session, tmp_path):
+    # AC-3: kaynak PDF bozuk/pypdf acamiyor -> PlanApplicationError,
+    # hicbir dosya yazilmaz.
+    (tmp_path / "bozuk.pdf").write_bytes(b"this is not a pdf at all")
+    pdf_files = [PdfFileMetadata(filename="bozuk.pdf", createdAt="2026-08-01")]
+    plan = _plan([_pdf_compress_step(0, "bozuk.pdf", "sikistirilmis.pdf")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert not (tmp_path / "sikistirilmis.pdf").exists()
+
+
+def test_apply_plan_rejects_pdf_compress_of_a_path_outside_allowed_root(session, tmp_path, monkeypatch):
+    # EXCEL_FILTER/PDF_EXTRACT_PAGES'in ".." teknigiyle AYNI desen
+    # (Saga #307/#324/#325/#321).
+    pdf_files = [PdfFileMetadata(filename="..", createdAt="2026-08-01")]
+    plan = _plan([_pdf_compress_step(0, "..", "sikistirilmis.pdf")])
+
+    calls: list = []
+    monkeypatch.setattr(
+        "backend.orchestrator.pdf_compress.compress_pdf",
+        lambda *args, **kwargs: calls.append(args),
+    )
+
+    with pytest.raises(PathWhitelistError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert calls == []
+    assert not (tmp_path / "sikistirilmis.pdf").exists()

@@ -1,5 +1,33 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## PDF sıkıştırma (Saga #322, epic #29) — büyüme koruması + yeni status icat etmeden raporlama
+
+**Ortam incelemesi kapsamı belirledi.** Görev açıklaması Ghostscript/QPDF
+veya raster yedeği öneriyordu; `gs`/`qpdf` kurulu olmadığı ve
+requirements.txt'te de yer almadığı görüşme sırasında doğrulandı, kullanıcı
+kararıyla kapsam **pypdf-native** sıkıştırmayla (sayfa-bazlı
+`compress_content_streams`, writer-bazlı `compress_identical_objects`)
+sınırlandı — dış binary bağımlılık yok, raster yedeği yok.
+
+**"Büyüme koruması"nın kullanıcıya iletilme mekanizması plan adımında
+kod incelemesiyle çözüldü.** atdd.md bunu Unknown olarak bırakmıştı:
+sonuç orijinalden küçük değilse çıktı YAZILMAMALI ve bu SESSİZCE
+geçilmemeliydi, ama mevcut `TransactionApplyResponse.warnings` mekanizması
+(REDACT'ta kullanılan) STATİK'ti (plan.steps üzerinden koşulsuz üretiliyor).
+Yeni bir DB status/alan İCAT ETMEK yerine, `OperationType.LIST`'in zaten
+var olan "kayıtsız continue" deseni (hiç `FileOperation` kaydı
+oluşturulmadan step atlanır) yeniden kullanıldı; `main.py`'nin
+warnings-oluşturma bloğu, PDF_COMPRESS için `transaction.operations`'a
+bakıp DİNAMİK bir uyarı ekleyecek şekilde genişletildi. Bağımsız red-team
+turu bu tasarımı (plan.md'nin kendi işaretlediği string-karşılaştırma
+riskini de dahil) kodda doğrulayıp onayladı — mimariye dokunmadan Ready
+to Commit verdi.
+
+**Yazım motoru bu görevde de iki ayrı subagent'tı** (Codex kotası dolu,
+kullanıcı isteğiyle) — biri kırmızı testleri, biri implementasyonu yazdı.
+
+430/430 backend test yeşil (5 skip, Windows-only).
+
 ## PDF sayfa aralığı seçimi (Saga #321, epic #29) — extract/delete + off-by-one güvenlik ağı
 
 **Kapsam görüşme sırasında ikiye ayrıştırıldı.** Görev açıklaması hem

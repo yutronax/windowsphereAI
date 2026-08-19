@@ -849,6 +849,113 @@ def test_apply_plan_endpoint_returns_a_warning_for_a_redact_step(tmp_path):
     assert (tmp_path / "gizli_karartilmis.pdf").exists()
 
 
+# Saga #322: pdf-sikistirma (red step) - `OperationType.PDF_COMPRESS` ve
+# main.py'nin PDF_COMPRESS icin dinamik warnings-branch'i (plan.md:
+# `transaction.operations` icinde bu step'in `compressedFileName`'ine
+# karsilik gelen bir `completed` kayit VAR MI kontrolu) henuz YOK. Bu
+# testler simdilik KIRMIZI kalmali. REDACT'in statik warnings testiyle
+# AYNI TestClient/fixture deseni kullanilir.
+
+
+def _build_compressible_pdf_bytes(tmp_dir) -> bytes:
+    # test_pdf_compress.py/test_orchestrator.py'deki _write_compressible_pdf
+    # ile AYNI teknik: reportlab, pageCompression=0 ile SIKISTIRILMAMIS,
+    # tekrarlanan buyuk content stream'leri olan sayfalar uretir.
+    from reportlab.pdfgen import canvas
+
+    path = tmp_dir / "_compressible_source.pdf"
+    c = canvas.Canvas(str(path), pageCompression=0)
+    repeated_line = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "
+    for _ in range(5):
+        y = 780
+        for _ in range(60):
+            c.drawString(20, y, repeated_line)
+            y -= 10
+            if y < 20:
+                break
+        c.showPage()
+    c.save()
+    data = path.read_bytes()
+    path.unlink()
+    return data
+
+
+def test_apply_plan_endpoint_returns_no_warning_for_a_successfully_compressed_pdf(tmp_path):
+    db_session = _in_memory_db_session()
+    (tmp_path / "buyuk.pdf").write_bytes(_build_compressible_pdf_bytes(tmp_path))
+    session_id = _create_session(selected_folder=str(tmp_path))
+    compress_plan = {
+        "dateSource": "created_at",
+        "sortOrder": "ascending",
+        "steps": [
+            {
+                "order": 0,
+                "operationType": "PDF Sıkıştır",
+                "targetFolder": "2026-08",
+                "affectedFileCount": 1,
+                "fileNames": ["buyuk.pdf"],
+                "compressedFileName": "buyuk_sikistirilmis.pdf",
+            }
+        ],
+    }
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post(
+            "/api/transactions/apply",
+            json={"sessionId": session_id, "plan": compress_plan},
+        )
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "committed"
+    assert body["warnings"] == []
+    assert (tmp_path / "buyuk_sikistirilmis.pdf").exists()
+
+
+def test_apply_plan_endpoint_returns_a_warning_when_pdf_compression_does_not_shrink_the_file(tmp_path):
+    # ATDD AC-2/AC-5: buyume korumasi tetiklendiginde (zaten minimal PDF,
+    # compressedFileName hic yazilmadi) kullanici bunu `warnings`'te
+    # ACIKCA gormeli - sessizce gecistirilmemeli.
+    db_session = _in_memory_db_session()
+    (tmp_path / "kucuk.pdf").write_bytes(_build_minimal_real_pdf_bytes())
+    session_id = _create_session(selected_folder=str(tmp_path))
+    compress_plan = {
+        "dateSource": "created_at",
+        "sortOrder": "ascending",
+        "steps": [
+            {
+                "order": 0,
+                "operationType": "PDF Sıkıştır",
+                "targetFolder": "2026-08",
+                "affectedFileCount": 1,
+                "fileNames": ["kucuk.pdf"],
+                "compressedFileName": "kucuk_sikistirilmis.pdf",
+            }
+        ],
+    }
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post(
+            "/api/transactions/apply",
+            json={"sessionId": session_id, "plan": compress_plan},
+        )
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "committed"
+    assert len(body["warnings"]) == 1
+    assert "kucuk_sikistirilmis.pdf" in body["warnings"][0]
+    assert not (tmp_path / "kucuk_sikistirilmis.pdf").exists()
+
+
 # Saga #313: Dosya arama endpoint'i testleri
 
 

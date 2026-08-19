@@ -61,6 +61,10 @@ class OperationType(str, Enum):
     # aralığı/listesi (`pageSpec`) uzerinde calisir.
     PDF_EXTRACT_PAGES = "PDF Sayfa Çıkar"
     PDF_DELETE_PAGES = "PDF Sayfa Sil"
+    # Saga #322: PDF_COMPRESS - EXCEL_SORT'un "1 kaynak -> 1 hedef, kaynak
+    # asla degismez" deseniyle AYNI, tek bir cikti dosya adi disinda ek
+    # zorunlu alan yok (filterColumn/filterValue gibi bir esleme yok).
+    PDF_COMPRESS = "PDF Sıkıştır"
     # Saga #323: APPEND - 1 kaynak PDF'in SONUNA appendText'ten render
     # edilmis yeni bir sayfa eklenir, kaynak dosya YERINDE guncellenir
     # (gecici-dosya+atomik-replace deseniyle, bkz. orchestrator._forward_append).
@@ -155,6 +159,10 @@ class PlanStep(BaseModel):
     pageSpec: str | None = None
     extractedFileName: str | None = None
     remainingFileName: str | None = None
+    # Saga #322: PDF_COMPRESS icin - sikistirilmis ciktinin dosya adi,
+    # sortedFileName ile AYNI desende (SADECE operationType==PDF_COMPRESS
+    # olduğunda dolu olmalı, diğer operationType'larda None kalmalı).
+    compressedFileName: str | None = None
     # Saga #323: APPEND icin - kaynagin sonuna eklenecek metin, mergedFileName
     # ile AYNI desende (SADECE operationType==APPEND olduğunda dolu olmalı,
     # diğer operationType'larda None kalmalı). max_length=5000 (Threat-Model
@@ -201,6 +209,13 @@ class PlanStep(BaseModel):
     def remaining_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
         if value is not None and ("/" in value or "\\" in value):
             raise ValueError("remainingFileName must not contain path separators")
+        return value
+
+    @field_validator("compressedFileName")
+    @classmethod
+    def compressed_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
+        if value is not None and ("/" in value or "\\" in value):
+            raise ValueError("compressedFileName must not contain path separators")
         return value
 
     @field_validator("appendText")
@@ -485,6 +500,31 @@ class PlanStep(BaseModel):
             raise ValueError(
                 "pageSpec must be omitted unless operationType is PDF_EXTRACT_PAGES or PDF_DELETE_PAGES"
             )
+        return self
+
+    @model_validator(mode="after")
+    def pdf_compress_fields_only_for_pdf_compress(self) -> "PlanStep":
+        # Saga #322: excel_filter_fields_only_for_excel_filter ile AYNI desen
+        # (minimal versiyonu, sortedFileName'e daha yakin) - compressedFileName
+        # SADECE PDF_COMPRESS icin zorunlu, diger operationType'larda tamamen
+        # yasak. Bu operasyonda filterColumn/filterValue gibi ek zorunlu bir
+        # alan YOK.
+        if self.operationType == OperationType.PDF_COMPRESS:
+            if self.compressedFileName is None or self.compressedFileName.strip() == "":
+                raise ValueError("compressedFileName is required when operationType is PDF_COMPRESS")
+            if len(self.fileNames) != 1:
+                raise ValueError("fileNames must contain exactly 1 entry when operationType is PDF_COMPRESS")
+            normalized_compressed = os.path.normcase(self.compressedFileName)
+            normalized_sources = [os.path.normcase(name) for name in self.fileNames]
+            if normalized_compressed in normalized_sources:
+                raise ValueError(
+                    f"compressedFileName ('{self.compressedFileName}') collides with one of this "
+                    "step's fileNames (case-insensitive) — compress output must not overwrite "
+                    "a source file"
+                )
+        else:
+            if self.compressedFileName is not None:
+                raise ValueError("compressedFileName must be omitted unless operationType is PDF_COMPRESS")
         return self
 
     @model_validator(mode="after")

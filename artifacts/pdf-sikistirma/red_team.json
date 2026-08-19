@@ -1,0 +1,27 @@
+{
+  "task_slug": "pdf-sikistirma",
+  "reviewer": "obss-red-team subagent (bağımsız — test VE kod da subagent'lar tarafından yazıldı, Codex kotası dolu olduğundan)",
+  "verdict": "Ready to Commit",
+  "security_findings": [
+    {
+      "finding": "compress_pdf() sıkıştırma sonrası yapısal bütünlük (sayfa sayısı/içerik) kontrolü yapmıyor, sadece byte boyutu karşılaştırıyor.",
+      "severity": "low",
+      "scenario": "Teorik olarak pypdf'in bir hata durumunda küçük ama bozuk bir çıktı üretmesi durumunda bu sessizce 'başarılı' sayılabilirdi. compress_content_streams/compress_identical_objects sayfa yapısına dokunmayan dar/iyi bilinen API'ler olduğu için pratik risk düşük.",
+      "status": "NOT FIXED — bloklayıcı değil, fast-follow test iyileştirmesi olarak not edildi (sayfa sayısı/extract_text() doğrulaması eklenmesi önerildi)."
+    },
+    {
+      "finding": "tempfile.mkstemp ile os.close(fd) arasındaki dar pencerede işlem dıştan zorla sonlandırılırsa (kill) artık .tmp dosyası kalabilir.",
+      "severity": "low",
+      "scenario": "pdf_pages.py ile PAYLAŞILAN, ÖNCEDEN VAR OLAN bir desen — bu görevle gelen yeni bir regresyon değil.",
+      "status": "NOT FIXED — mevcut proje geneli desen, bu görevin kapsamı dışı."
+    }
+  ],
+  "approved_points": [
+    "plan.md'nin endişe ettiği destination_path string-karşılaştırma riski (main.py'nin warnings mantığı) kodda doğrulanamadı — orchestrator.py ve main.py AYNI process'te, AYNI allowed_root ile, AYNI pathlib bölme işlemini kullanıyor; testle de doğrulandı (12/12 PDF_COMPRESS testi geçti, happy-path'te warning YOK testi dahil).",
+      "Hata (exception) ile büyüme-koruması (False dönüşü) yapısal olarak AYRI: PdfReader/writer.append try/except BLOĞUNUN DIŞINDA, bu yüzden okuma hataları hiç 'False' olarak yorumlanamaz; yazma hataları da except'te unlink+re-raise ile PlanApplicationError'a gider.",
+    "Rollback güvenliği test_apply_plan_skips_recording_an_operation_when_pdf_compression_does_not_shrink_the_file ile doğrulandı: len(transaction.operations)==0 AMA transaction.status=='committed' — LIST deseniyle tutarlı, tutarsız bir durum yok.",
+    "compressedFileName validator EXCEL_FILTER/PDF_EXTRACT_PAGES ile birebir aynı desen (path ayracı, fileNames==1, kaynakla çakışma).",
+    "Path whitelist ihlali testi ('..' tekniği) doğru şekilde PathWhitelistError fırlatıyor, compress_pdf hiç çağrılmıyor (monkeypatch ile doğrulandı)."
+  ],
+  "overall_assessment": "Ready to Commit. Plan.md'de önceden işaretlenen tek somut risk (string karşılaştırma) kodda GERÇEKLEŞMİYOR — doğrulandı. Mimari (LIST'in kayıtsız desenini yeniden kullanma kararı) sağlam bulundu, yeni bir DB alanı/status icat edilmedi. Tek düşük öncelikli not (yapısal bütünlük testi eksikliği) bloklayıcı değil, kaydedildi."
+}
