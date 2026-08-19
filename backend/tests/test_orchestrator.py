@@ -2861,14 +2861,15 @@ def test_apply_plan_creates_an_excel_file_with_the_given_rows_and_commits(sessio
 
 
 def test_apply_plan_rejects_excel_create_when_target_already_exists(session, tmp_path):
-    # AC-2: hedef zaten VARSA `PlanApplicationError`, mevcut dosyaya
+    # Saga #338: AC-S2 — hedef zaten VARSA `PathWhitelistError` (planın
+    # bilmediği, zaten var olan dosyayla çakışma), mevcut dosyaya
     # DOKUNULMAZ (üzerine yazılmaz).
     _write_excel(tmp_path, "yeni.xlsx", [["Eski", "Veri"]])
     original_bytes = (tmp_path / "yeni.xlsx").read_bytes()
     pdf_files: list[PdfFileMetadata] = []
     plan = _plan([_excel_create_step(0, [["Yeni", "Veri"]], "yeni.xlsx")])
 
-    with pytest.raises(PlanApplicationError):
+    with pytest.raises(PathWhitelistError):
         apply_plan(session, plan, pdf_files, tmp_path)
 
     assert (tmp_path / "yeni.xlsx").read_bytes() == original_bytes

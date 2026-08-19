@@ -1,5 +1,33 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Güvenlik whitelist genelleştirmesi (Saga #338, epic #29) — atdd.md'nin kendi kapsam-dışı kararı yanlış çıktı, red-team commit öncesi yakaladı
+
+**Saga #326/#328 red-team bulgusu kapatıldı: 7 operasyon (EXCEL_FILTER,
+PDF_EXTRACT_PAGES, PDF_DELETE_PAGES, PDF_COMPRESS, ZIP_CREATE, ZIP_ADD,
+ZIP_MERGE) artık mimari-seviyesi whitelist + zincirleme-hedef-çakışması
+kontrolünden geçiyor**, önceden sadece Pydantic'in ayraç-engelleme
+validator'ına güveniliyordu. `security.py`'deki 4 ayrı if-blok + 4 ayrı
+`validate_*_destinations` fonksiyonu, `OperationType`→hedef-alan-adı
+eşlemesi kullanan TEK dict-driven mekanizmaya (`_DESTINATION_FIELD_BY_OPERATION`
++ `validate_destination_collisions`) çıkarıldı — yeni bir operasyon
+eklendiğinde bu korumanın unutulması artık yapısal olarak imkânsız.
+
+**Kendi yazdığım atdd.md'nin "Kapsam Dışı" kararı yanlış çıktı — red-team
+commit'ten HEMEN önce yakaladı.** ATDD aşamasında IMAGE_CROP/IMAGE_THUMBNAIL'ı
+"hedef dosya adı üretmiyor" diye kapsam dışı bırakmıştım; bağımsız red-team
+turu `models.py`'yi okuyup bunun yanlış olduğunu, bu iki operasyonun
+`croppedFileName`/`thumbnailFileName` ile EXCEL_FILTER'la AYNI desende
+gerçek hedef ürettiğini kanıtladı — yani görevin kapatmaya çalıştığı açık
+sınıfının AYNISI, kapsam dışı bırakılan iki operasyonda hâlâ açık
+kalıyordu. Commit öncesi düzeltildi (dict'e 2 giriş + 4 test).
+
+**Ders:** "hedef dosya adı üretmiyor" gibi bir kapsam-dışı iddiası,
+gerçek model/kod okunmadan (sadece görev başlığından/hafızadan) yazılırsa
+yanlış çıkabilir — ATDD'nin kendi varsayımları da red-team'in denetlediği
+şeylerden biri, sadece implementasyon değil.
+
+44/44 test_security.py, 540/5 tüm backend suite yeşil.
+
 ## Orchestrator field-wiring test helper (Saga #332, epic #29) — Codex kotası dolu, red-team iki gerçek kapsam kaybını yakaladı
 
 **Codex kotası 15 Eylül 2026'ya kadar dolu olduğu için** bu dar kapsamlı

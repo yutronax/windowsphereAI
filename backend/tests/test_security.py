@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.models import DateSource, PdfFileMetadata, PlanSkeleton, PlanStep, OperationType, SortOrder
+from backend.models import DateSource, PdfFileMetadata, PlanSkeleton, PlanStep, OperationType, SortOrder, CropBox
 from backend.security import (
     MAX_PATH_DEPTH,
     PathWhitelistError,
@@ -10,7 +10,7 @@ from backend.security import (
     is_path_too_deep,
     is_system_protected,
     validate_plan_paths,
-    validate_rename_destinations,
+    validate_destination_collisions,
 )
 
 
@@ -188,13 +188,13 @@ def test_validate_rename_destinations_allows_a_target_name_that_is_itself_a_know
         PdfFileMetadata(filename="b.pdf", createdAt="2026-08-02"),
     ]
 
-    validate_rename_destinations(_rename_plan("b.pdf"), pdf_files, tmp_path)
+    validate_destination_collisions(_rename_plan("b.pdf"), pdf_files, tmp_path)
 
 
 def test_validate_rename_destinations_passes_when_target_name_does_not_exist_yet(tmp_path):
     pdf_files = [PdfFileMetadata(filename="kaynak.pdf", createdAt="2026-08-01")]
 
-    validate_rename_destinations(_rename_plan("hic-olmayan.pdf"), pdf_files, tmp_path)
+    validate_destination_collisions(_rename_plan("hic-olmayan.pdf"), pdf_files, tmp_path)
 
 
 def test_validate_rename_destinations_rejects_cross_step_chained_renames(tmp_path):
@@ -358,3 +358,375 @@ def test_validate_plan_paths_rejects_chain_collision_between_merge_and_rename_ta
 
     with pytest.raises(PathWhitelistError):
         validate_plan_paths(plan, pdf_files, tmp_path)
+
+
+# Saga #338: Yeni 7 operasyon testleri (EXCEL_FILTER, PDF_EXTRACT_PAGES,
+# PDF_DELETE_PAGES, PDF_COMPRESS, ZIP_CREATE, ZIP_ADD, ZIP_MERGE)
+# Her biri için: (1) whitelist reddi, (2) çakışma reddi
+
+
+def _excel_filter_plan(filtered_file_name: str) -> PlanSkeleton:
+    step = PlanStep(
+        order=0,
+        operationType=OperationType.EXCEL_FILTER,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["data.xlsx"],
+        filterColumn="Status",
+        filterValue="Active",
+        filteredFileName=filtered_file_name,
+    )
+    return PlanSkeleton(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+
+
+def test_validate_plan_paths_rejects_when_excel_filter_destination_escapes_root(tmp_path):
+    step = PlanStep.model_construct(
+        order=0,
+        operationType=OperationType.EXCEL_FILTER,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["data.xlsx"],
+        filterColumn="Status",
+        filterValue="Active",
+        filteredFileName=r"..\..\evil.xlsx",
+    )
+    plan = PlanSkeleton.model_construct(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+    pdf_files = [PdfFileMetadata(filename="data.xlsx", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(plan, pdf_files, tmp_path)
+
+
+def test_validate_plan_paths_rejects_excel_filter_target_colliding_with_existing_unknown_file(tmp_path):
+    (tmp_path / "data.xlsx").write_bytes(b"fake xlsx")
+    (tmp_path / "onemli.xlsx").write_bytes(b"important data")
+    pdf_files = [PdfFileMetadata(filename="data.xlsx", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(_excel_filter_plan("onemli.xlsx"), pdf_files, tmp_path)
+
+
+def _pdf_extract_pages_plan(extracted_file_name: str) -> PlanSkeleton:
+    step = PlanStep(
+        order=0,
+        operationType=OperationType.PDF_EXTRACT_PAGES,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["source.pdf"],
+        pageSpec="1-5",
+        extractedFileName=extracted_file_name,
+    )
+    return PlanSkeleton(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+
+
+def test_validate_plan_paths_rejects_when_pdf_extract_pages_destination_escapes_root(tmp_path):
+    step = PlanStep.model_construct(
+        order=0,
+        operationType=OperationType.PDF_EXTRACT_PAGES,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["source.pdf"],
+        pageSpec="1-5",
+        extractedFileName=r"..\..\evil.pdf",
+    )
+    plan = PlanSkeleton.model_construct(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+    pdf_files = [PdfFileMetadata(filename="source.pdf", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(plan, pdf_files, tmp_path)
+
+
+def test_validate_plan_paths_rejects_pdf_extract_pages_target_colliding_with_existing_unknown_file(tmp_path):
+    (tmp_path / "source.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "onemli.pdf").write_bytes(b"%PDF-1.4 onemli veri")
+    pdf_files = [PdfFileMetadata(filename="source.pdf", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(_pdf_extract_pages_plan("onemli.pdf"), pdf_files, tmp_path)
+
+
+def _pdf_delete_pages_plan(remaining_file_name: str) -> PlanSkeleton:
+    step = PlanStep(
+        order=0,
+        operationType=OperationType.PDF_DELETE_PAGES,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["source.pdf"],
+        pageSpec="6-10",
+        remainingFileName=remaining_file_name,
+    )
+    return PlanSkeleton(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+
+
+def test_validate_plan_paths_rejects_when_pdf_delete_pages_destination_escapes_root(tmp_path):
+    step = PlanStep.model_construct(
+        order=0,
+        operationType=OperationType.PDF_DELETE_PAGES,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["source.pdf"],
+        pageSpec="6-10",
+        remainingFileName=r"..\..\evil.pdf",
+    )
+    plan = PlanSkeleton.model_construct(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+    pdf_files = [PdfFileMetadata(filename="source.pdf", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(plan, pdf_files, tmp_path)
+
+
+def test_validate_plan_paths_rejects_pdf_delete_pages_target_colliding_with_existing_unknown_file(tmp_path):
+    (tmp_path / "source.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "onemli.pdf").write_bytes(b"%PDF-1.4 onemli veri")
+    pdf_files = [PdfFileMetadata(filename="source.pdf", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(_pdf_delete_pages_plan("onemli.pdf"), pdf_files, tmp_path)
+
+
+def _pdf_compress_plan(compressed_file_name: str) -> PlanSkeleton:
+    step = PlanStep(
+        order=0,
+        operationType=OperationType.PDF_COMPRESS,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["large.pdf"],
+        compressedFileName=compressed_file_name,
+    )
+    return PlanSkeleton(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+
+
+def test_validate_plan_paths_rejects_when_pdf_compress_destination_escapes_root(tmp_path):
+    step = PlanStep.model_construct(
+        order=0,
+        operationType=OperationType.PDF_COMPRESS,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["large.pdf"],
+        compressedFileName=r"..\..\evil.pdf",
+    )
+    plan = PlanSkeleton.model_construct(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+    pdf_files = [PdfFileMetadata(filename="large.pdf", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(plan, pdf_files, tmp_path)
+
+
+def test_validate_plan_paths_rejects_pdf_compress_target_colliding_with_existing_unknown_file(tmp_path):
+    (tmp_path / "large.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "onemli.pdf").write_bytes(b"%PDF-1.4 onemli veri")
+    pdf_files = [PdfFileMetadata(filename="large.pdf", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(_pdf_compress_plan("onemli.pdf"), pdf_files, tmp_path)
+
+
+def _zip_create_plan(zipped_file_name: str) -> PlanSkeleton:
+    step = PlanStep(
+        order=0,
+        operationType=OperationType.ZIP_CREATE,
+        targetFolder="2026-08",
+        affectedFileCount=2,
+        fileNames=["file1.pdf", "file2.pdf"],
+        zippedFileName=zipped_file_name,
+    )
+    return PlanSkeleton(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+
+
+def test_validate_plan_paths_rejects_when_zip_create_destination_escapes_root(tmp_path):
+    step = PlanStep.model_construct(
+        order=0,
+        operationType=OperationType.ZIP_CREATE,
+        targetFolder="2026-08",
+        affectedFileCount=2,
+        fileNames=["file1.pdf", "file2.pdf"],
+        zippedFileName=r"..\..\evil.zip",
+    )
+    plan = PlanSkeleton.model_construct(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+    pdf_files = [
+        PdfFileMetadata(filename="file1.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="file2.pdf", createdAt="2026-08-02"),
+    ]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(plan, pdf_files, tmp_path)
+
+
+def test_validate_plan_paths_rejects_zip_create_target_colliding_with_existing_unknown_file(tmp_path):
+    (tmp_path / "file1.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "file2.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "onemli.zip").write_bytes(b"important zip data")
+    pdf_files = [
+        PdfFileMetadata(filename="file1.pdf", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="file2.pdf", createdAt="2026-08-02"),
+    ]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(_zip_create_plan("onemli.zip"), pdf_files, tmp_path)
+
+
+def _zip_add_plan(added_file_name: str) -> PlanSkeleton:
+    step = PlanStep(
+        order=0,
+        operationType=OperationType.ZIP_ADD,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["existing.zip"],
+        filesToAdd=["file_to_add.pdf"],
+        addedFileName=added_file_name,
+    )
+    return PlanSkeleton(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+
+
+def test_validate_plan_paths_rejects_when_zip_add_destination_escapes_root(tmp_path):
+    step = PlanStep.model_construct(
+        order=0,
+        operationType=OperationType.ZIP_ADD,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["existing.zip"],
+        filesToAdd=["file_to_add.pdf"],
+        addedFileName=r"..\..\evil.zip",
+    )
+    plan = PlanSkeleton.model_construct(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+    pdf_files = [PdfFileMetadata(filename="existing.zip", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(plan, pdf_files, tmp_path)
+
+
+def test_validate_plan_paths_rejects_zip_add_target_colliding_with_existing_unknown_file(tmp_path):
+    (tmp_path / "existing.zip").write_bytes(b"PK fake")
+    (tmp_path / "onemli.zip").write_bytes(b"important zip data")
+    pdf_files = [PdfFileMetadata(filename="existing.zip", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(_zip_add_plan("onemli.zip"), pdf_files, tmp_path)
+
+
+def _zip_merge_plan(merged_zip_file_name: str) -> PlanSkeleton:
+    step = PlanStep(
+        order=0,
+        operationType=OperationType.ZIP_MERGE,
+        targetFolder="2026-08",
+        affectedFileCount=2,
+        fileNames=["archive1.zip", "archive2.zip"],
+        mergedZipFileName=merged_zip_file_name,
+    )
+    return PlanSkeleton(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+
+
+def test_validate_plan_paths_rejects_when_zip_merge_destination_escapes_root(tmp_path):
+    step = PlanStep.model_construct(
+        order=0,
+        operationType=OperationType.ZIP_MERGE,
+        targetFolder="2026-08",
+        affectedFileCount=2,
+        fileNames=["archive1.zip", "archive2.zip"],
+        mergedZipFileName=r"..\..\evil.zip",
+    )
+    plan = PlanSkeleton.model_construct(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+    pdf_files = [
+        PdfFileMetadata(filename="archive1.zip", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="archive2.zip", createdAt="2026-08-02"),
+    ]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(plan, pdf_files, tmp_path)
+
+
+def test_validate_plan_paths_rejects_zip_merge_target_colliding_with_existing_unknown_file(tmp_path):
+    (tmp_path / "archive1.zip").write_bytes(b"PK fake")
+    (tmp_path / "archive2.zip").write_bytes(b"PK fake")
+    (tmp_path / "onemli.zip").write_bytes(b"important zip data")
+    pdf_files = [
+        PdfFileMetadata(filename="archive1.zip", createdAt="2026-08-01"),
+        PdfFileMetadata(filename="archive2.zip", createdAt="2026-08-02"),
+    ]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(_zip_merge_plan("onemli.zip"), pdf_files, tmp_path)
+
+
+# Saga #338 follow-up (red-team bulgusu): IMAGE_CROP ve IMAGE_THUMBNAIL da
+# hedef dosya adı üretiyorlar — kapsama dahil edildi.
+
+
+def _image_crop_plan(cropped_file_name: str) -> PlanSkeleton:
+    step = PlanStep(
+        order=0,
+        operationType=OperationType.IMAGE_CROP,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["photo.jpg"],
+        cropBox=CropBox(x0=0.0, y0=0.0, x1=100.0, y1=100.0),
+        croppedFileName=cropped_file_name,
+    )
+    return PlanSkeleton(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+
+
+def test_validate_plan_paths_rejects_when_image_crop_destination_escapes_root(tmp_path):
+    step = PlanStep.model_construct(
+        order=0,
+        operationType=OperationType.IMAGE_CROP,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["photo.jpg"],
+        cropBox=CropBox(x0=0.0, y0=0.0, x1=100.0, y1=100.0),
+        croppedFileName=r"..\..\evil.jpg",
+    )
+    plan = PlanSkeleton.model_construct(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+    pdf_files = [PdfFileMetadata(filename="photo.jpg", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(plan, pdf_files, tmp_path)
+
+
+def test_validate_plan_paths_rejects_image_crop_target_colliding_with_existing_unknown_file(tmp_path):
+    (tmp_path / "photo.jpg").write_bytes(b"fake jpeg")
+    (tmp_path / "onemli.jpg").write_bytes(b"important image data")
+    pdf_files = [PdfFileMetadata(filename="photo.jpg", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(_image_crop_plan("onemli.jpg"), pdf_files, tmp_path)
+
+
+def _image_thumbnail_plan(thumbnail_file_name: str) -> PlanSkeleton:
+    step = PlanStep(
+        order=0,
+        operationType=OperationType.IMAGE_THUMBNAIL,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["large.jpg"],
+        maxWidth=200,
+        maxHeight=200,
+        thumbnailFileName=thumbnail_file_name,
+    )
+    return PlanSkeleton(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+
+
+def test_validate_plan_paths_rejects_when_image_thumbnail_destination_escapes_root(tmp_path):
+    step = PlanStep.model_construct(
+        order=0,
+        operationType=OperationType.IMAGE_THUMBNAIL,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["large.jpg"],
+        maxWidth=200,
+        maxHeight=200,
+        thumbnailFileName=r"..\..\evil.jpg",
+    )
+    plan = PlanSkeleton.model_construct(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+    pdf_files = [PdfFileMetadata(filename="large.jpg", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(plan, pdf_files, tmp_path)
+
+
+def test_validate_plan_paths_rejects_image_thumbnail_target_colliding_with_existing_unknown_file(tmp_path):
+    (tmp_path / "large.jpg").write_bytes(b"fake jpeg")
+    (tmp_path / "onemli.jpg").write_bytes(b"important image data")
+    pdf_files = [PdfFileMetadata(filename="large.jpg", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(_image_thumbnail_plan("onemli.jpg"), pdf_files, tmp_path)

@@ -1,0 +1,36 @@
+{
+  "task": "security-whitelist-generalization",
+  "reviewed_at": "2026-08-19",
+  "summary": "Genelleştirilmiş whitelist + çakışma mekanizması, ilk red-team turunda bulunan IMAGE_CROP/IMAGE_THUMBNAIL boşluğu (F1) kapatıldıktan sonra artık 13 hedef-üreten operasyonun TÜMÜNÜ kapsıyor (11 orijinal + 2 takip). Dict-enum çapraz kontrolü tam, RENAME özel durumu doğru, normalize tutarlılığı korunmuş, ZIP_EXTRACT scope dışı bırakılmış. Bağımsız olarak kod okunarak + pytest çalıştırılarak (44 security test, 540/5 tüm suite, 0 FAIL) doğrulandı.",
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "file": "backend/security.py",
+      "issue": "[DÜZELTİLDİ] _DESTINATION_FIELD_BY_OPERATION dict'i ilk yazımda IMAGE_CROP (croppedFileName) ve IMAGE_THUMBNAIL (thumbnailFileName) operasyonlarını kapsamıyordu — atdd.md'nin Kapsam Dışı bölümü bu ikisini yanlışlıkla 'hedef dosya adı üretmiyor' diye işaretlemişti, oysa models.py bunların EXCEL_FILTER ile aynı desende gerçek hedef ürettiğini gösteriyordu.",
+      "better_approach": "Uygulandı: dict'e `OperationType.IMAGE_CROP: \"croppedFileName\"` ve `OperationType.IMAGE_THUMBNAIL: \"thumbnailFileName\"` eklendi (satır 187-188), 4 yeni test eklendi (whitelist reddi + çakışma reddi, her ikisi için), atdd.md'nin Kapsam Dışı bölümü düzeltildi.",
+      "reason": "Bağımsız olarak kod okunarak (satır 173-188'de dict'in artık 13 girişli olduğu) ve pytest çalıştırılarak (44 passed, IMAGE_CROP/IMAGE_THUMBNAIL testleri dahil) doğrulandı — görevin kendi threat model'inin (AC-S1/AC-S2, 'hedef dosya adı üreten HER operasyon') tam karşılanması artık gerçek."
+    },
+    {
+      "severity": "low",
+      "category": "performance",
+      "file": "backend/security.py",
+      "issue": "validate_destination_collisions içindeki son nested-loop (satır ~287-299), her (dest_idx, src_idx) çiftini simetrik olarak İKİ KEZ karşılaştırıyor (norm_a==norm_b hem (i,j) hem (j,i) için True olacaktır) — O(n^2) yerine O(n^2/2) yeterli olurdu (itertools.combinations ile).",
+      "better_approach": "itertools.combinations(enumerate(all_destinations), 2) kullanılarak tekil çift karşılaştırması yapılabilir; ama plan başına step sayısı tipik olarak küçük (onlarca), gerçek performans etkisi yok.",
+      "reason": "Fonksiyonel olarak doğru (raise ilk çakışmada tetiklenir, çift kontrol sadece gereksiz döngü turu), ciddi bir sorun değil — caveman açısından not edilmeye değer ama blocking değil, düzeltilmeden bırakıldı (kullanıcı onayı gerekmedi, low severity)."
+    }
+  ],
+  "strengths": [
+    "_DESTINATION_FIELD_BY_OPERATION dict'i models.py'deki OperationType enum'ıyla çapraz kontrol edildi: MERGE/REDACT/EXCEL_SORT/EXCEL_CREATE/EXCEL_FILTER/PDF_EXTRACT_PAGES/PDF_DELETE_PAGES/PDF_COMPRESS/ZIP_CREATE/ZIP_ADD/ZIP_MERGE/IMAGE_CROP/IMAGE_THUMBNAIL (13 operasyon) — hepsi doğru alan adlarıyla eşleşiyor.",
+    "RENAME'in liste-tipi newFileNames alanı hem validate_plan_paths hem validate_destination_collisions içinde doğru şekilde ayrı ele alınmış, zip(fileNames, newFileNames) deseni eski koddaki gibi korunmuş.",
+    "_normalize_filename (case-insensitive, os.path.normcase) TÜM karşılaştırmalarda tutarlı kullanılmış — eski 4 fonksiyonun 'zincirleme rename sadece harf büyüklüğü farkıyla kaçabilir' dersi docstring'de VE kodda korunmuş.",
+    "ZIP_EXTRACT gerçekten dokunulmamış (dict'te yok, ayrı extract_zip fonksiyonu kendi _validate_single_path çağrısını koruyor) — atdd.md AC-6 karşılanmış.",
+    "test_orchestrator.py'deki PathWhitelistError/PlanApplicationError değişikliği makul: genelleştirilmiş kontrol artık apply_plan'dan ÖNCE (validate_plan_paths aşamasında) aynı çakışmayı yakalıyor, dosyaya dokunulmadığı testte hâlâ doğrulanıyor — kullanıcı için sürpriz davranış değişikliği değil.",
+    "İlk turda bulunan F1 (IMAGE_CROP/IMAGE_THUMBNAIL boşluğu) commit'ten önce kapatıldı — görevin kendi amacı (unutulmayı yapısal olarak imkânsız kılmak) gerçekten karşılanıyor, geçici bir yama değil."
+  ],
+  "risks": [],
+  "caveman_review": {"complexity": "medium", "unnecessary_files": 0, "unnecessary_helpers": 0, "unnecessary_abstractions": 0},
+  "scope_review": {"matches_atdd": true, "scope_expansion": false},
+  "ready_to_commit": {"atdd_satisfied": true, "tests_passed": true, "no_critical_findings": true, "scope_respected": true, "caveman_satisfied": true, "security_acceptable": true, "maintainability_acceptable": true, "no_blocking_risks": true},
+  "verdict": "approve"
+}
