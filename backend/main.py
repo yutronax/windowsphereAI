@@ -21,6 +21,8 @@ from backend.file_search import search_files
 from backend.models import (
     AppliedFileOperation,
     ApplyPlanRequest,
+    DetectPiiRequest,
+    DetectPiiResponse,
     ExcelReadRequest,
     ExcelReadResponse,
     OperationType,
@@ -51,7 +53,7 @@ from backend.orchestrator import (
 # apply_plan_endpoint içindeki ön-kontrol yorumu) — bu, incelenmiş/onaylanmış
 # minimal düzeltmedir.
 from backend.orchestrator import _distribute_files_to_steps
-from backend import excel_rows, zip_ops
+from backend import excel_rows, pdf_pii, zip_ops
 from backend.pdf_discovery import discover_pdf_files
 from backend.plan_generation import (
     LLMClient,
@@ -670,6 +672,48 @@ def zip_list_endpoint(
         )
 
     return ZipListResponse(entries=entries)
+
+
+def get_session_for_detect_pii(payload: DetectPiiRequest) -> SessionContext:
+    """`get_session_for_zip_list` ile AYNI mantık, `DetectPiiRequest` şeması
+    için - Saga #333."""
+    session = _sessions.get(payload.sessionId)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Oturum bulunamadı")
+    return session
+
+
+@app.post("/api/pdf/detect-pii")
+def detect_pii_endpoint(
+    payload: DetectPiiRequest,
+    session: SessionContext = Depends(get_session_for_detect_pii),
+) -> DetectPiiResponse:
+    """Saga #333: PDF metin taraması yoluyla PII (TC kimlik no, IBAN) tespiti
+    endpoint'i - salt-okunur senkron sorgu, `zip_list_endpoint`'in (Saga #328)
+    AYNI session/allowed_root doğrulama deseni (410/404/422 hata deseni)."""
+    allowed_root = Path(session.selectedFolder)
+    if not allowed_root.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Seçili klasör artık mevcut değil",
+        )
+
+    source_path = allowed_root / payload.filename
+    if not source_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Dosya bulunamadı: '{payload.filename}'",
+        )
+
+    try:
+        regions = pdf_pii.detect_pii(source_path)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"PDF okunamıyor: '{payload.filename}' ({exc})",
+        )
+
+    return DetectPiiResponse(regions=regions)
 
 
 @app.post("/api/search/scan", status_code=status.HTTP_202_ACCEPTED)

@@ -1210,3 +1210,26 @@ class ScanStatusResponse(BaseModel):
     scannedCount: int
     results: list[SearchResultItem] | None = None
     partial: bool | None = None
+
+
+class DetectPiiRequest(BaseModel):
+    """Saga #333: `/api/pdf/detect-pii` istek şeması - `ExcelReadRequest` ile
+    AYNI session/allowed_root doğrulama deseni (senkron sorgu)."""
+
+    sessionId: str
+    filename: str
+
+    @field_validator("filename")
+    @classmethod
+    def filename_has_no_path_separators(cls, value: str) -> str:
+        if "/" in value or "\\" in value:
+            raise ValueError("filename must not contain path separators")
+        return value
+
+
+class DetectPiiResponse(BaseModel):
+    """Saga #333: `/api/pdf/detect-pii` yanıt şeması — AC-S1 güvenlik
+    kısıtlaması: ham TC kimlik no/IBAN değerleri hiçbir yerde YER ALMAZ,
+    sadece RedactionRegion (page + koordinatlar)."""
+
+    regions: list[RedactionRegion]

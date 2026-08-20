@@ -1,0 +1,64 @@
+{
+  "task": "pdf-pii-tespiti",
+  "reviewed_at": "2026-08-20",
+  "summary": "Ilk turda bulunan medium bulgu (fragment ayrac eksikligi) commit oncesi duzeltildi ve bagimsiz olarak (kod okunarak + pytest calistirilarak, 22/22 pdf_pii testi + 570/5 tum suite) dogrulandi. Fixed-region regression genuinely fixed: _calculate_bounding_box_from_fragments derives x/y from tm[4]/tm[5] real text-fragment positions, not a constant. TC checksum matches official algorithm exactly. AC-S1 verified: no raw PII value reaches response, log, or exception message anywhere in pdf_pii.py or main.py. Scope matches plan.md exactly. Kalan 2 dusuk-onemli bulgu (ayni-sayfa test-gap, kismi-fragment x_max heuristigi) blocking degil.",
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "correctness",
+      "file": "backend/pdf_pii.py",
+      "issue": "[DUZELTILDI] visitor_text callback ilk yazimda tum page text fragment'larini full_text'e HICBIR AYRAC OLMADAN birlestiriyordu (full_text += text) -- iki alakasiz fragment'in sinirinda regex'in yanlislikla 11-haneli/IBAN-sekilli sahte bir eslesme uretmesi riski vardi, IBAN'da checksum olmadigi icin daha savunmasizdi.",
+      "better_approach": "Uygulandi: fragment'lar arasina (ilk fragment haric) tek bir bosluk karakteri ekleniyor (satir ~104-111), offset hesaplamasi ayractan SONRA yapiliyor. Bagimsiz olarak dogrulandi: 22/22 pdf_pii testi + 570/5 tum backend suite, 0 FAIL.",
+      "reason": "Cross-fragment sahte eslesme riski artik kapali; genuine ayni-fragment icindeki rakamlar hala dogru eslesiyor, mevcut testler regresyonsuz gecti."
+    },
+    {
+      "severity": "low",
+      "category": "test-gap",
+      "file": "backend/tests/test_pdf_pii.py",
+      "issue": "verify_report.md and code_diff.md correctly flag that no test proves two PII matches on the SAME page get distinct bounding boxes -- only test_detect_pii_different_locations_returns_different_regions (different pages) exists. Independent trace of _calculate_bounding_box_from_fragments confirms the per-match offset-overlap filtering is logically sound (each match's own [start_offset, end_offset) is used independently, and the two regex patterns cannot self-overlap), so the gap is a coverage gap, not a hidden bug.",
+      "better_approach": "Add one unit test with two TC numbers on the same page at different Td positions (two separate BT...Tj blocks) to close the gap and guard against future refactors, consistent with plan.md's coverage_target: 90.",
+      "reason": "Confirms the coordinator's own risk note was accurate and worth acting on before merge, even though no bug was found."
+    },
+    {
+      "severity": "low",
+      "category": "correctness",
+      "file": "backend/pdf_pii.py",
+      "issue": "x_max estimate uses frag['x'] + len(frag['text']) * frag['size'] * 0.6, a fixed em-width heuristic applied to the WHOLE fragment's character length even when only a sub-range of that fragment overlaps the regex match. For a long fragment (e.g. an entire sentence as one text-showing operator) containing an embedded TC number, this produces an oversized bounding box covering far more than the actual PII substring.",
+      "better_approach": "When a fragment only partially overlaps the match range, scale x_min/x_max by the overlapping character sub-range's position within the fragment rather than using the full fragment length.",
+      "reason": "Not a security issue, but directly affects redaction-region accuracy, which is the entire point of Saga #333 -- an oversized region risks over-redacting adjacent non-PII text."
+    }
+  ],
+  "strengths": [
+    "AC-S1 (no raw PII leakage) independently verified across all 3 changed files: pdf_pii.py never stores match.group() outside the local loop, RedactionRegion only carries page/x0/y0/x1/y1, and main.py's 422 exception path wraps pypdf's own open/parse exception (unrelated to matched PII content), not a PII value.",
+    "_is_valid_tc_kimlik_no checksum matches the official algorithm exactly: 10th digit = (odd_sum*7 - even_sum) % 10, 11th digit = total_sum % 10, first-digit-zero rejection present, non-digit rejection present -- verified line by line against the official formula.",
+    "The fixed-region regression is genuinely fixed: _calculate_bounding_box_from_fragments (backend/pdf_pii.py lines 187-252) derives x/y from real per-fragment tm[4]/tm[5] values collected via visitor_text, with no fallback to any constant -- when no fragment overlaps a match's offset range it correctly returns None (silent skip per AC-5), not a default/placeholder box.",
+    "AC-S2 (ReDoS) correctly satisfied: both regex patterns use fixed-length quantifiers (\\d{11}, TR\\d{24}) with no nested unbounded quantifiers.",
+    "Scope strictly matches plan.md: git diff shows only backend/main.py, backend/models.py, backend/pdf_pii.py (new), backend/tests/test_pdf_pii.py (new) touched, and the excel_read/zip_list 410/404/422 pattern was copied verbatim including field-validator style.",
+    "secrets-gate false-positive assessment is correct: test_pdf_pii.py:57's '1234567890A' is a literal test fixture asserting the letter-rejection branch of _is_valid_tc_kimlik_no, not a credential."
+  ],
+  "risks": [
+    "The whitelist gap noted in plan.md (excel_read/zip_list/detect-pii pattern relies only on filename_has_no_path_separators, not Saga #338's validate_plan_paths whitelist) is inherited, unchanged, and explicitly out of scope per plan.md -- flagged for visibility, not blocking.",
+    "Cross-fragment regex matching (finding above) means real-world accuracy (Word exports, multi-column layouts) is unverified beyond synthetic single-BT-block fixtures; atdd.md's own Risks section flagged this need for real-PDF validation, which has not been done yet."
+  ],
+  "caveman_review": {
+    "complexity": "low",
+    "unnecessary_files": 0,
+    "unnecessary_helpers": 0,
+    "unnecessary_abstractions": 0
+  },
+  "scope_review": {
+    "matches_atdd": true,
+    "scope_expansion": false
+  },
+  "ready_to_commit": {
+    "atdd_satisfied": true,
+    "tests_passed": true,
+    "no_critical_findings": true,
+    "scope_respected": true,
+    "caveman_satisfied": true,
+    "security_acceptable": true,
+    "maintainability_acceptable": true,
+    "no_blocking_risks": true
+  },
+  "verdict": "approve"
+}

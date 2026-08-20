@@ -1,5 +1,40 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## PDF PII tespiti (Saga #333, epic #29) — sahte sabit-bölge kodu koordinatör tarafından yakalandı, cross-fragment sahte eşleşme red-team'de yakalandı
+
+**Saga #320'nin kapsam dışı bıraktığı iş kapatıldı:** yeni `/api/pdf/detect-pii`
+endpoint'i, PDF metnini tarayıp TC kimlik no (resmi checksum algoritması)
+ve IBAN kalıplarını bulup mevcut `RedactionRegion` modeline uyumlu bölge
+önerileri döndürüyor — REDACT operasyonunun kendisi değişmedi, sadece
+"bölgeyi elle bulma" ihtiyacı azaltıldı. Threat-model AC-S1/AC-S2 eklendi:
+yanıt ASLA ham PII değeri içermez (sadece koordinat), regex kalıpları
+ReDoS'a karşı sabit-uzunluklu.
+
+**İlk yazımda özelliğin özünü boşa çıkaran bir hata vardı — koordinatör
+kod okuyarak yakaladı, subagent'ın kendi raporundaki "basit yaklaşım
+(sabit bölge)" ifadesi şüphe uyandırmıştı.** `detect_pii`, HER PII
+eşleşmesi için (sayfada kaç tane olursa olsun) AYNI sabit köşe bölgesini
+((20,20)-(120,120)) döndürüyordu — gerçek metnin konumuyla hiçbir ilgisi
+yoktu. "Önerici sistem" fiilen "dekoratif/rastgele sistem" olmuştu.
+Düzeltme: pypdf'in `visitor_text` callback'iyle her metin parçasının
+gerçek konumu (`tm[4]`, `tm[5]`) toplanıp, regex eşleşmesiyle çakışan
+parçalardan gerçek bounding box hesaplanıyor.
+
+**Bağımsız red-team turu bir ikinci gerçek hata daha buldu:** metin
+parçaları hiçbir ayraç olmadan birleştiriliyordu (`full_text += text`) —
+iki alakasız parçanın sınırında regex'in yanlışlıkla sahte bir 11-haneli/
+IBAN-şekilli eşleşme üretme riski vardı (IBAN'da checksum olmadığı için
+daha savunmasız). Alt ajan oturum limitine takıldığı için bu düzeltme
+(fragment'lar arasına tek bir boşluk ekleme) koordinatör tarafından
+uygulandı, bağımsız olarak doğrulandı.
+
+**Ders:** bir subagent raporundaki "basit yaklaşım" gibi kendini
+küçümseyen bir ifade, dikkatle okunmalı — bu örnekte gerçek bir
+correctness hatasının işaretiydi, sadece stil tercihi değil. Gerçek
+kodu okumadan rapora güvenmek bu hatayı kaçırırdı.
+
+22/22 pdf_pii testi, 570/5 tüm backend suite yeşil.
+
 ## Word→PDF dönüşümü (Saga #339, epic #29) — LibreOffice kuruldu, ilk subprocess entegrasyonu, koordinatörün kendi çelişkisi red-team'de yakalandı
 
 **LibreOffice kurulana kadar bekletilen görev (Saga #327'nin kapsam dışı
