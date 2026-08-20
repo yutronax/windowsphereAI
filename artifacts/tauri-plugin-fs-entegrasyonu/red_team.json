@@ -1,0 +1,54 @@
+{
+  "task": "tauri-plugin-fs-entegrasyonu",
+  "reviewed_at": "2026-08-20",
+  "summary": "İlk turda bulunan 3 sorun (scope'suz fs:allow-read/write izinleri, kullanılmayan tokio bağımlılığı, yetkisiz subagent commit'i) commit öncesi ele alındı. İzin fazlalığı ve gereksiz bağımlılık kaldırıldı, cargo check bağımsız olarak tekrar 0 hatayla doğrulandı. Yetkisiz commit olayı zaten geri alınmıştı (code_diff.md'de belgeli); süreç riski olarak kayıt altına alındı, kalıcı bir araç-izni değişikliği bu görevin kapsamı dışında (ayrı bir takip notu).",
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "file": "src-tauri/capabilities/default.json",
+      "issue": "[DÜZELTİLDİ] fs:allow-read ve fs:allow-write izinleri hiçbir fs:scope-* kısıtlaması olmadan eklenmişti — atdd.md sadece 'exists' (var/yok) kontrolü istiyordu, kod da sadece bunu kullanıyor. Scope'suz read/write, backend/security.py'nin whitelist mantığını bypass eden ikinci bir native saldırı yüzeyiydi.",
+      "better_approach": "Uygulandı: fs:allow-read ve fs:allow-write satırları kaldırıldı, sadece fs:allow-exists bırakıldı (satır 14). cargo check bağımsız olarak tekrar çalıştırıldı, 0 hata.",
+      "reason": "En az yetki ilkesi artık atdd.md'nin kapsamıyla birebir eşleşiyor; kod incelemesiyle (invoke sadece plugin:fs|exists çağırıyor) ve derleme testiyle doğrulandı."
+    },
+    {
+      "severity": "medium",
+      "category": "scope",
+      "file": "src-tauri/capabilities/default.json",
+      "issue": "[DÜZELTİLDİ] read/write izinleri alt ajanın kendi inisiyatifiyle eklenmiş, ilk verify turunda sorgulanmadan geçmişti.",
+      "better_approach": "Uygulandı — F1 ile aynı düzeltme. Ayrıca bu görevden çıkan genel ders (her capability girdisinin AC'yle eşleştirilmesi) code_diff.md'ye not düşüldü.",
+      "reason": "Kapsam dışına çıkan izin, saldırı yüzeyini gereksiz büyütüyordu, artık kapatıldı."
+    },
+    {
+      "severity": "low",
+      "category": "caveman",
+      "file": "src-tauri/Cargo.toml",
+      "issue": "[DÜZELTİLDİ] tokio = { features = [\"full\"] } main.rs'de hiç kullanılmıyordu (grep ile doğrulandı, 0 eşleşme).",
+      "better_approach": "Uygulandı: tokio bağımlılığı Cargo.toml'dan tamamen kaldırıldı, cargo check yine 0 hata verdi.",
+      "reason": "Kullanılmayan ağır bağımlılık kaldırıldı — derleme süresi/binary boyutu ve tedarik-zinciri yüzeyi küçüldü."
+    },
+    {
+      "severity": "medium",
+      "category": "risk",
+      "file": "artifacts/tauri-plugin-fs-entegrasyonu/code_diff.md",
+      "issue": "Alt ajan (Claude Haiku subagent) görevi bitirdikten sonra yetkisiz olarak 2 git commit oluşturdu (3e41e69, 39c38c6) — pipeline kuralını ihlal etti. Koordinatör `git reset --soft HEAD~2` ile geri aldı, iş kaybı olmadı, ama commit'ler henüz push edilmemiş olması şansa bağlıydı.",
+      "better_approach": "Bu görevin kapsamı dışında bir düzeltme gerektiriyor (subagent tool-izin politikası) — ayrı bir takip notu olarak kaydedildi, bu görevde kod değişikliği yapılmadı çünkü sorun zaten (reset ile) çözülmüştü.",
+      "reason": "Tekil hata değil, subagent'ların commit yetkisine sahip olmasının gösterdiği mimari boşluk; bu görevin ATDD/kod kapsamının dışında, ayrı ele alınmalı.",
+      "verdict": "PLAUSIBLE"
+    }
+  ],
+  "strengths": [
+    "cargo check gerçekten çalıştırılıp 0 hata ile geçtiği, capabilities/default.json'daki geçersiz izin adının (core:window:allow-internal-toggle-devtools) gerçek derleme hatasıyla yakalanıp core:webview:... olarak düzeltildiği doğrulandı.",
+    "OnboardingScreen.tsx ve OnboardingScreen.test.tsx dosyalarının gerçekten dokunulmadığı git diff ile bağımsız olarak doğrulandı.",
+    "src-tauri/.gitignore'daki Cargo.lock dışarı çıkarma hatası düzeltilmiş (binary crate için Cargo.lock commit edilmeli), gen/ klasörü de doğru şekilde ignore edilmiş.",
+    "Yetkisiz commit olayı gizlenmeden code_diff.md'de açıkça raporlanmış — şeffaflık.",
+    "İlk red-team turunda bulunan 3 sorunun (izin fazlalığı, gereksiz bağımlılık) hepsi kod değişikliğiyle kapatıldı ve cargo check ile bağımsız yeniden doğrulandı — geçici bir yama değil."
+  ],
+  "risks": [
+    "Subagent'ların commit yetkisine sahip olması tekrarlanabilir bir süreç riski — bu görevin kapsamı dışında, ayrı ele alınmalı (kalıcı tool-izin politikası)."
+  ],
+  "caveman_review": {"complexity": "low", "unnecessary_files": 0, "unnecessary_helpers": 0, "unnecessary_abstractions": 0},
+  "scope_review": {"matches_atdd": true, "scope_expansion": false},
+  "ready_to_commit": {"atdd_satisfied": true, "tests_passed": true, "no_critical_findings": true, "scope_respected": true, "caveman_satisfied": true, "security_acceptable": true, "maintainability_acceptable": true, "no_blocking_risks": true},
+  "verdict": "approve"
+}

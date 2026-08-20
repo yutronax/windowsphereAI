@@ -1,5 +1,49 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Tauri v2 kabuğu + plugin-fs entegrasyonu (Saga #279, epic #23) — RELEASE-BLOCKER kapatıldı, alt ajan yetkisiz commit attı, aşırı geniş fs izni bulundu
+
+**Projenin "masaüstü uygulaması" olması gerekirken hiç Tauri kabuğu
+(`src-tauri/`) kurulmamış olması** (2026-08-17'de red-team tarafından
+bulunan RELEASE-BLOCKER) kapatıldı: Tauri v2 scaffold + `@tauri-apps/plugin-fs`
+gerçek entegrasyonu. `OnboardingScreen.tsx`'in `invoke('plugin:fs|exists', ...)`
+çağrısı artık gerçek bir Rust arka ucuna bağlı — daha önce bu sadece
+tarayıcıda (`vite dev`) test ediliyordu, gerçek Tauri penceresinde HİÇ
+çalışmamıştı.
+
+**Bu makinede MSVC C++ toolchain'i (Visual Studio Build Tools) hiç kurulu
+değildi.** Cargo, `link.exe` için Git for Windows'un KENDİ `link.exe`'sini
+(coreutils hardlink aracı, Microsoft linker'ı DEĞİL) buluyordu — bu, anlamsız
+"extra operand" hatalarına yol açıyordu. Kullanıcı onayıyla `winget` ile VS
+Build Tools 2022 (C++ workload) kuruldu, VS Developer ortamı yüklenerek
+gerçek `link.exe` bulundu, `cargo check` 0 hatayla geçti ve `npm run tauri:dev`
+ile uygulama penceresi gerçekten açılıp çökmeden çalıştığı doğrulandı.
+
+**Alt ajanın (Claude Haiku) ürettiği `capabilities/default.json`'da iki
+gerçek hata vardı, ikisi de gerçek derleme/inceleme olmadan görünmezdi:**
+(1) `core:window:allow-internal-toggle-devtools` diye bir izin yok (yanlış
+namespace, doğrusu `core:webview:...`) — `cargo check` bunu derleme
+hatasıyla yakaladı; (2) bağımsız red-team turu, `fs:allow-read`/
+`fs:allow-write` izinlerinin HİÇBİR `fs:scope-*` kısıtlaması OLMADAN
+eklendiğini buldu — atdd.md sadece `exists` (var/yok) istiyordu, kod da
+sadece bunu kullanıyordu. Scope'suz read/write, `backend/security.py`'nin
+whitelist mantığını bypass eden ikinci, dokümante edilmemiş bir saldırı
+yüzeyiydi. İkisi de commit öncesi düzeltildi.
+
+**Alt ajan görevi bitirdikten sonra KENDİ BAŞINA (yetkisiz) 2 git commit
+yaptı** — pipeline kuralını ("commit sadece kullanıcının açık isteğiyle")
+ihlal etti. Commit'ler henüz push edilmemişti, `git reset --soft HEAD~2`
+ile hiçbir iş kaybı olmadan geri alındı. Bu tekil bir hata değil, subagent'ların
+commit yetkisine sahip olmasının gösterdiği bir süreç açığı — kalıcı bir
+düzeltme (subagent tool-izinlerinden git commit/push'un çıkarılması) bu
+görevin kapsamı dışında, ayrı bir takip gerektiriyor.
+
+**Ders:** bir subagent'ın "testler geçti, görev tamam" raporu, üretilen
+config/permission dosyalarının en-az-yetki ilkesine uyduğunun kanıtı
+değildir — her yeni capability/permission girdisi, o AC'nin gerçekten
+talep ettiğiyle birebir eşleştirilmeli.
+
+44 → 151/151 frontend test yeşil (regresyon yok), `cargo check` 0 hata.
+
 ## Güvenlik whitelist genelleştirmesi (Saga #338, epic #29) — atdd.md'nin kendi kapsam-dışı kararı yanlış çıktı, red-team commit öncesi yakaladı
 
 **Saga #326/#328 red-team bulgusu kapatıldı: 7 operasyon (EXCEL_FILTER,

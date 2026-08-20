@@ -1,0 +1,17 @@
+# Cargo build artifacts
+target/
+gen/
+
+# Cargo.lock COMMIT edilir (binary/uygulama crate'i icin reprodusibl build
+# onerisi - kutuphane crate'lerinin aksine)
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
