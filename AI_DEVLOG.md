@@ -1,5 +1,35 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Purge-lock sertleştirme (Saga #308, epic #28) — sahte-yeşil test, coverage'ı kapatırken bulundu
+
+**Saga #302'nin red-team'inin bıraktığı 2 low-severity bulgu kapatıldı:**
+`_claim_transaction_status`'a SQLAlchemy `OperationalError` (DB kilit
+çakışması) için 3-denemeli exponential backoff retry (`_retry_on_transient_io_error`'ın
+IO-hataları için kullandığı desenin birebir DB-hatası kopyası) eklendi;
+`_purge_one_transaction_backup`'ın `rmtree` başarısızlıkları artık
+`logger.warning` ile transaction id + hata mesajıyla loglanıyor (önceden
+sessizce CAS ile geri dönüyordu, hiçbir iz bırakmıyordu).
+
+**İlk yazımda 2 test-gap vardı (kod doğruydu, sadece kanıtlayan test
+yoktu) — bağımsız red-team turu bulup koordinatöre iletti, koordinatör
+düzeltti.** Bu düzeltmeleri yazarken ÜÇÜNCÜ, gizli bir hata daha ortaya
+çıktı: mevcut `test_purge_one_transaction_backup_returns_false_on_rmtree_failure`
+testi, fonksiyonu çağırmadan ÖNCE transaction'ı elle `"purging"`e
+taşıyordu — bu da fonksiyonun KENDİ İÇ claim'inin (committed→purging)
+hemen başarısız olup `rmtree`'ye HİÇ ulaşmadan `False` dönmesine yol
+açıyordu. Test yeşil geçiyordu ama iddia ettiği senaryoyu (rmtree
+başarısızlığı) hiç tetiklemiyordu — sahte-yeşil bir test.
+
+**Ders:** bir AC'nin "test-gap"ini (eksik kanıt) kapatmak için yeni test
+yazma süreci, mevcut testlerin GERÇEKTEN iddia ettikleri şeyi test edip
+etmediğini de gözden geçirmeye zorluyor — bu örnekte tam olarak öyle
+oldu, yeni test yazılırken eski testin de sahte-yeşil olduğu fark edildi.
+Savunma katmanlarının (verify + bağımsız red-team + coverage kapatma
+süreci) art arda çalışması, tek bir katmanın kaçıracağı bir hatayı
+yakaladı.
+
+576/5 tüm backend suite yeşil, 0 FAIL.
+
 ## PDF PII tespiti (Saga #333, epic #29) — sahte sabit-bölge kodu koordinatör tarafından yakalandı, cross-fragment sahte eşleşme red-team'de yakalandı
 
 **Saga #320'nin kapsam dışı bıraktığı iş kapatıldı:** yeni `/api/pdf/detect-pii`

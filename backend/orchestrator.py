@@ -1,4 +1,5 @@
 import datetime as dt
+import logging
 import os
 import shutil
 import tempfile
@@ -6,6 +7,7 @@ import time
 from pathlib import Path
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from backend import excel_rows, excel_sort, image_ops, pdf_compress, pdf_pages, word_table, word_to_pdf, zip_ops
@@ -15,6 +17,8 @@ from backend.models import OperationType, PdfFileMetadata, PlanSkeleton, PlanSte
 from backend.pdf_ocr import ocr_pdf_file
 from backend.pdf_redact import redact_pdf_page
 from backend.security import PathWhitelistError, is_path_allowed, validate_plan_paths
+
+logger = logging.getLogger(__name__)
 
 
 class PlanApplicationError(Exception):
@@ -102,6 +106,29 @@ def _retry_on_transient_io_error(func, *args, **kwargs):
             if not is_transient or attempt == _TRANSIENT_IO_MAX_ATTEMPTS - 1:
                 raise
             time.sleep(_TRANSIENT_IO_BACKOFF_SECONDS * (2**attempt))
+
+
+_OPERATIONAL_ERROR_MAX_ATTEMPTS = 3
+_OPERATIONAL_ERROR_BACKOFF_SECONDS = (0.05, 0.1, 0.2)  # 50ms, 100ms, 200ms
+
+
+def _retry_on_operational_error(func, *args, **kwargs):
+    """Saga #308: `func`'ı çağırır; SQLAlchemy `OperationalError` (DB kilit
+    çakışması/timeout gibi geçici durumlar) alırsa kısa exponential
+    backoff'lu olarak en fazla `_OPERATIONAL_ERROR_MAX_ATTEMPTS` kez tekrar
+    dener. Son denemede de başarısız olursa `OperationalError` OLDUĞU GİBİ
+    (sarmalanmadan) yukarı fırlatılır — çağıran taraf (ör. gelecekteki bir
+    API endpoint'i/scheduler) bunu ele almalı, bu fonksiyon sadece geçici
+    kilitlenmeleri sessizce aşmaya çalışır. `_retry_on_transient_io_error`
+    ile AYNI desen (for-loop + son denemede raise + backoff), farklı
+    exception türü için."""
+    for attempt in range(_OPERATIONAL_ERROR_MAX_ATTEMPTS):
+        try:
+            return func(*args, **kwargs)
+        except OperationalError:
+            if attempt == _OPERATIONAL_ERROR_MAX_ATTEMPTS - 1:
+                raise
+            time.sleep(_OPERATIONAL_ERROR_BACKOFF_SECONDS[attempt])
 
 
 def _forward_move(source_path: Path, destination_path: Path) -> None:
@@ -491,7 +518,8 @@ def _claim_transaction_status(
     status=from_status`. Dönen `rowcount == 1` ise satırı BU çağıran
     "kazanmış" demektir (aynı anda başka bir işlemin aynı satırı claim
     etmesi imkansızdır, SQLite'ın tek-yazarlık kilidi sayesinde); `0` ise
-    satır artık `from_status` durumunda DEĞİLDİR (yarışı kaybedildi)."""
+    satır artık `from_status` durumunda DEĞİLDİR (yarışı kaybedildi).
+    Saga #308: geçici DB kilit çakışmaları için 3 deneme/50-100-200ms backoff ile retry yapar."""
     # `session.commit()` varsayılan olarak (`expire_on_commit=True`)
     # session'daki TÜM nesneleri expire eder — bu da çağıranın daha önce
     # yüklediği ilişkili nesnelerde (ör. `transaction.operations`) bir
@@ -505,12 +533,15 @@ def _claim_transaction_status(
     previous_expire_on_commit = session.expire_on_commit
     session.expire_on_commit = False
     try:
-        result = session.execute(
-            update(Transaction)
-            .where(Transaction.id == transaction_id, Transaction.status == from_status)
-            .values(status=to_status)
-        )
-        session.commit()
+        def _do_claim():
+            result = session.execute(
+                update(Transaction)
+                .where(Transaction.id == transaction_id, Transaction.status == from_status)
+                .values(status=to_status)
+            )
+            session.commit()
+            return result
+        result = _retry_on_operational_error(_do_claim)
     finally:
         session.expire_on_commit = previous_expire_on_commit
     return result.rowcount == 1
@@ -1327,8 +1358,12 @@ def _purge_one_transaction_backup(
         return False
     try:
         shutil.rmtree(backup_dir)
-    except OSError:
+    except OSError as exc:
         # Fiziksel silme başarısız oldu — telafi edici CAS ile satırı "committed"a geri döndür
+        logger.warning(
+            "Transaction %s icin yedek klasoru silinemedi (%s), CAS ile 'committed'e geri donuluyor.",
+            transaction.id, exc,
+        )
         _claim_transaction_status(
             session, transaction.id, from_status="purging", to_status="committed"
         )

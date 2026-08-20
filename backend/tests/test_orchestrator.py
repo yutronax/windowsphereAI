@@ -1,3 +1,4 @@
+import logging
 import os
 import shutil
 import time
@@ -2129,6 +2130,165 @@ def test_retry_on_transient_io_error_calls_function_once_without_retries(session
         result = _retry_on_transient_io_error(mock_func)
         assert result == "Success"
         assert mock_sleep.call_count == 0
+
+
+# Saga #308: _retry_on_operational_error testleri
+
+
+def test_retry_on_operational_error_retries_and_succeeds(session, tmp_path):
+    from backend.orchestrator import _retry_on_operational_error
+    from sqlalchemy.exc import OperationalError
+
+    call_count = {"n": 0}
+
+    def mock_func():
+        call_count["n"] += 1
+        if call_count["n"] < 3:
+            raise OperationalError("database is locked", None, None)
+        return "ok"
+
+    with patch("time.sleep"):
+        result = _retry_on_operational_error(mock_func)
+        assert result == "ok"
+        assert call_count["n"] == 3
+
+
+def test_retry_on_operational_error_exhausts_and_raises(session, tmp_path):
+    from backend.orchestrator import _retry_on_operational_error
+    from sqlalchemy.exc import OperationalError
+
+    def mock_func():
+        raise OperationalError("database is locked", None, None)
+
+    with patch("time.sleep"):
+        with pytest.raises(OperationalError):
+            _retry_on_operational_error(mock_func)
+
+
+# Saga #308: _claim_transaction_status ve _purge_one_transaction_backup loglama testleri
+
+
+def test_claim_transaction_status_retries_on_operational_error(session, tmp_path):
+    """_claim_transaction_status'in geçici DB kilit çakışmalarına karşı retry yaptığını doğrula."""
+    from backend.orchestrator import _claim_transaction_status, apply_plan, _retry_on_operational_error
+    from backend.models import OperationType
+    from sqlalchemy.exc import OperationalError
+
+    # Gerçek bir transaction oluştur
+    _write_pdf(tmp_path, "a.pdf")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.DELETE)])
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    # _retry_on_operational_error'ın çalışmasını doğrulamak için basit bir test
+    call_count = {"n": 0}
+
+    def failing_then_succeeding():
+        call_count["n"] += 1
+        if call_count["n"] < 2:
+            raise OperationalError("database is locked", None, None)
+        return True
+
+    with patch("time.sleep"):
+        result = _retry_on_operational_error(failing_then_succeeding)
+        assert result is True
+        assert call_count["n"] == 2  # 1 başarısız + 1 başarılı
+
+
+def test_purge_one_transaction_backup_returns_false_on_rmtree_failure(session, tmp_path):
+    """_purge_one_transaction_backup'ın rmtree başarısızlığında False döndüğünü doğrula.
+
+    DÜZELTME (red-team follow-up): önceki hali transaction'ı çağrıdan ÖNCE
+    "purging"e taşıyordu — bu, fonksiyonun KENDİ iç claim'inin (committed->purging)
+    hemen başarısız olup rmtree'ye HİÇ ulaşmadan False dönmesine yol açıyordu,
+    şu anki hal transaction'ı "committed" bırakıp gerçek rmtree-başarısızlığı
+    yolunu tetikliyor."""
+    from backend.orchestrator import _purge_one_transaction_backup, apply_plan
+    from backend.models import OperationType
+
+    # Gerçek bir DELETE transaction oluştur (status == "committed")
+    _write_pdf(tmp_path, "a.pdf")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.DELETE)])
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+    assert transaction.status == "committed"
+
+    backup_dir = tmp_path / ".windows-ai-files-backup" / str(transaction.id)
+    assert backup_dir.exists()
+
+    # rmtree'yi başarısız yap
+    # Saga #308: rmtree başarısızlığında, `_purge_one_transaction_backup` CAS ile
+    # transaction'ı "purging"dan "committed"e geri döndürür ve False döner.
+    with patch("backend.orchestrator.shutil.rmtree", side_effect=OSError("Permission denied")):
+        result = _purge_one_transaction_backup(session, transaction, backup_dir)
+
+    # İşlem başarısız döndü (mevcut davranış korunuyor) VE transaction "committed"e geri döndü
+    assert result is False
+    assert transaction.status == "committed"
+
+
+def test_purge_one_transaction_backup_logs_warning_on_rmtree_failure(session, tmp_path, caplog):
+    """AC-3: rmtree başarısız olduğunda transaction id VE hata mesajı loglanır
+    (red-team bulgusu — önceki test sadece dönüş değerini kontrol ediyordu,
+    loglama davranışını hiç doğrulamıyordu)."""
+    from backend.orchestrator import _purge_one_transaction_backup, apply_plan
+    from backend.models import OperationType
+
+    _write_pdf(tmp_path, "a.pdf")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.DELETE)])
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+    assert transaction.status == "committed"
+
+    backup_dir = tmp_path / ".windows-ai-files-backup" / str(transaction.id)
+
+    with caplog.at_level(logging.WARNING):
+        with patch("backend.orchestrator.shutil.rmtree", side_effect=OSError("Permission denied")):
+            _purge_one_transaction_backup(session, transaction, backup_dir)
+
+    assert str(transaction.id) in caplog.text
+    assert "Permission denied" in caplog.text
+
+
+def test_claim_transaction_status_integration_retries_via_session_execute(session, tmp_path):
+    """AC-1: `_claim_transaction_status`'ın İÇİNDEKİ closure'ın gerçekten
+    `_retry_on_operational_error`'a bağlı olduğunu, `session.execute`'u
+    doğrudan monkeypatch'leyerek kanıtlar — önceki test (retries_on_operational_error)
+    _claim_transaction_status'ı hiç çağırmıyordu, sadece retry sarmalayıcısını
+    tekrar test ediyordu (red-team bulgusu)."""
+    from backend.orchestrator import _claim_transaction_status, apply_plan
+    from backend.models import OperationType
+    from sqlalchemy.exc import OperationalError
+
+    _write_pdf(tmp_path, "a.pdf")
+    pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]
+    plan = _plan([_step(0, "2026-08", ["a.pdf"], operation_type=OperationType.DELETE)])
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    from sqlalchemy.sql.dml import Update
+
+    real_execute = session.execute
+    call_count = {"n": 0}
+
+    def flaky_execute(*args, **kwargs):
+        # Sadece _claim_transaction_status'un kendi UPDATE'ini etkile —
+        # ORM'nin ilişkili nesneleri yeniden yüklemek için yaptığı iç
+        # SELECT çağrılarına dokunma (aksi halde session tutarsız kalır).
+        if args and isinstance(args[0], Update):
+            call_count["n"] += 1
+            if call_count["n"] < 2:
+                raise OperationalError("database is locked", None, None)
+        return real_execute(*args, **kwargs)
+
+    with patch("time.sleep"):
+        with patch.object(session, "execute", side_effect=flaky_execute):
+            result = _claim_transaction_status(
+                session, transaction.id, from_status="committed", to_status="purging"
+            )
+
+    assert result is True
+    assert call_count["n"] == 2
+    assert transaction.status == "purging"
 
 
 # Saga #312: purge_oversized_delete_backups — toplam boyut sınırlaması testleri

@@ -1,0 +1,24 @@
+{
+  "task": "purge-lock-sertlestirme",
+  "reviewed_at": "2026-08-20",
+  "summary": "İlk turda bulunan 2 test-gap (loglama için caplog eksikliği, yanıltıcı isimli entegrasyon testi) commit öncesi koordinatör tarafından kapatıldı. Testleri yazarken üçüncü, gizli bir sahte-yeşil test hatası bulundu: mevcut rmtree-başarısızlığı testi transaction'ı çağrıdan ÖNCE 'purging'e taşıyordu, bu da fonksiyonun kendi iç claim'inin hemen başarısız olup rmtree'ye hiç ulaşmadan False dönmesine yol açıyordu — test PASS oluyordu ama iddia ettiği senaryoyu hiç tetiklemiyordu. Düzeltildi. Kod tarafı (retry deseni, closure entegrasyonu, loglama format-string'i) baştan doğruydu, sadece test coverage eksikti/bir test hatalıydı.",
+  "findings": [
+    {"severity": "medium", "category": "test-gap", "file": "backend/tests/test_orchestrator.py", "issue": "[DÜZELTİLDİ] AC-3 (rmtree hatası loglanır) için caplog tabanlı doğrudan bir test yoktu.", "better_approach": "Uygulandı: test_purge_one_transaction_backup_logs_warning_on_rmtree_failure eklendi, caplog ile transaction id + hata mesajının gerçekten loglandığı doğrulandı.", "reason": "Bağımsız olarak pytest ile doğrulandı (6/6 PASS)."},
+    {"severity": "medium", "category": "test-gap", "file": "backend/tests/test_orchestrator.py", "issue": "[DÜZELTİLDİ] test_claim_transaction_status_retries_on_operational_error ismi yanıltıcıydı, _claim_transaction_status'ı hiç çağırmıyordu.", "better_approach": "Uygulandı: test_claim_transaction_status_integration_retries_via_session_execute eklendi — session.execute'u (sadece Update sorgularını hedefleyerek) monkeypatch'leyip _claim_transaction_status'ın kendisinin retry mekanizmasına gerçekten bağlı olduğu kanıtlandı.", "reason": "Bağımsız olarak pytest ile doğrulandı."},
+    {"severity": "medium", "category": "test-gap", "file": "backend/tests/test_orchestrator.py", "issue": "[YENİ BULGU, DÜZELTİLDİ] Yukarıdaki testler yazılırken keşfedildi: test_purge_one_transaction_backup_returns_false_on_rmtree_failure, _purge_one_transaction_backup'ı çağırmadan ÖNCE transaction'ı elle 'purging'e taşıyordu — fonksiyonun KENDİ İÇ claim'i (committed→purging) bu yüzden hemen başarısız oluyor, rmtree hiç çağrılmadan False dönüyordu. Test PASS oluyordu ama rmtree-başarısızlığı senaryosunu hiç tetiklemiyordu (sahte-yeşil test).", "better_approach": "Uygulandı: transaction artık 'committed' bırakılıyor, gerçek rmtree-başarısızlığı yolu tetikleniyor, transaction.status=='committed' (CAS geri-dönüşü) ek olarak assert ediliyor.", "reason": "Bu, AC-3'ün loglama testini yazma sürecinin kendisinin ortaya çıkardığı bağımsız bir bulgu — kod her zaman doğruydu (verify/red-team'in ilk turda okuyarak doğruladığı gibi), sadece bu testin kendisi yanlış senaryoyu doğruluyordu."},
+    {"severity": "low", "category": "reliability", "file": "backend/orchestrator.py", "issue": "_retry_on_operational_error sadece SQLAlchemy OperationalError yakalıyor; bu atdd.md'nin açıkça sınırladığı kapsamla (sadece OperationalError) tutarlı.", "better_approach": "Mevcut haliyle kabul edilebilir, kapsam genişletme bu görevin dışında.", "reason": "Bilgilendirme amaçlı, blocking değil."}
+  ],
+  "strengths": [
+    "_retry_on_operational_error, _retry_on_transient_io_error ile aynı for-loop+attempt==MAX-1'de raise+backoff desenini birebir taklit ediyor.",
+    "_claim_transaction_status'taki _do_claim closure'i hem session.execute hem session.commit()'i TEK bir deneme birimi olarak sarıyor — plan.md'nin özellikle işaret ettiği yarım-yamalak durum riski doğru kapatılmış.",
+    "logger.warning çağrısı doğru format-string/argüman eşleşmesine sahip, mevcut CAS geri-dönüş davranışı değişmemiş.",
+    "Scope tam plan.md'ye uygun: sadece backend/orchestrator.py ve backend/tests/test_orchestrator.py değişmiş.",
+    "Mevcut _retry_on_transient_io_error ve testleri regresyonsuz kaldı.",
+    "Test coverage kapatılırken keşfedilen üçüncü (sahte-yeşil test) bulgusu da aynı oturumda düzeltildi — savunma katmanlarının (verify + red-team + test yazımı) birlikte çalışması gerçek bir ek hata yakaladı."
+  ],
+  "risks": [],
+  "caveman_review": {"complexity": "low", "unnecessary_files": 0, "unnecessary_helpers": 0, "unnecessary_abstractions": 0},
+  "scope_review": {"matches_atdd": true, "scope_expansion": false},
+  "ready_to_commit": {"atdd_satisfied": true, "tests_passed": true, "no_critical_findings": true, "scope_respected": true, "caveman_satisfied": true, "security_acceptable": true, "maintainability_acceptable": true, "no_blocking_risks": true},
+  "verdict": "approve"
+}
