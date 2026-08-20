@@ -1,0 +1,84 @@
+{
+  "task": "diff-tray-onizleme-ui",
+  "reviewed_at": "2026-08-20T20:10:00Z",
+  "summary": "Scope disiplini ve path-sızdırmama koruması sağlam ve gerçek testlerle doğrulanmış. Ama atdd.md'nin transaction-seviyesinde vaat ettiği 'available: false' davranışı sadece dosya-seviyesinde uygulanmış — üst seviye alan hiç set edilmiyor, bu da ResultCard.tsx'teki 'Önizleme mevcut değil' bloğunu gerçek backend'den asla tetiklenemeyen ölü kod yapıyor; verify_report.md bunu yanlışlıkla PASS işaretlemiş. Ayrıca hover fetch hatası için hiçbir UI geri bildirimi yok (sessiz başarısızlık).",
+  "findings": [
+    {
+      "severity": "high",
+      "category": "correctness",
+      "file": "backend/main.py",
+      "issue": "_build_transaction_preview (satır ~252-294) SADECE dosya-seviyesinde TransactionPreviewFile.available/reason set ediyor; üst seviye TransactionPreview.available hiçbir kod yolunda False'a çekilmiyor, Pydantic varsayılanı (True) olarak kalıyor. Ama ResultCard.tsx (satır ~229-232) 'Önizleme mevcut değil' bloğunu `preview.available === false` (ÜST seviye) kontrolüyle tetikliyor — gerçek backend yanıtının asla üretemeyeceği bir değer. Bu blok sadece ResultCard.test.tsx'teki elle kurgulanmış mock ile (satır ~262) tetikleniyor, gerçek backend'den hiçbir zaman.",
+      "better_approach": "_build_transaction_preview içinde, purge edilmiş bir DELETE varsa transaction-seviyesindeki `available`/`reason`'ı da açıkça set et (örn. `available = not any(f.available is False for f in files)`), VEYA üst-seviye alanı tamamen kaldırıp UI'yı sadece dosya-seviyesi `available`/`reason`'a göre tasarla. Backend testine de üst-seviye `preview['available']`/`preview['reason']` assertion'ı eklenmeli.",
+      "reason": "atdd.md davranış sözleşmesi durum 3 ve AC-4, kullanıcının AYRI ve net bir 'Önizleme mevcut değil' mesajı görmesini vaat ediyor. Gerçekte dosya normal listenin İÇİNDE, satır-içi bir ek metinle görünüyor — bu, verify_report.md'nin AC-4 satırını yanlışlıkla PASS işaretlediği, kontrat ile implementasyon arasındaki gerçek bir uyumsuzluk."
+    },
+    {
+      "severity": "medium",
+      "category": "reliability",
+      "file": "ui/src/components/chat/ResultCard.tsx",
+      "issue": "handleHoverLoadPreview (satır ~62-83) `previewState`i hata durumunda 'error'a çekiyor ama JSX sadece `previewState === 'loaded'` olduğunda içerik render ediyor (satır ~223) — 'error' veya 'loading' için HİÇBİR render dalı yok. Backend çökerse/500 dönerse veya transactionId listede bulunamazsa kullanıcı hover yapar ve hiçbir şey görmez (ne spinner ne hata mesajı).",
+      "better_approach": "`previewState === 'error'` için görünür bir hata mesajı (ve idealde 'loading' için bir gösterge) render bloğuna eklenmeli.",
+      "reason": "Bu, task'ın kendisinin aradığı 'sessiz başarı/başarısızlık' deseni — fetch başarısız oluyor ama kullanıcıya SIFIR geri bildirim var. ResultCard.test.tsx'teki tek hata-mesajı testleri revert akışına ait (satır ~182-199), preview fetch hatası için hiç test yok."
+    },
+    {
+      "severity": "low",
+      "category": "performance",
+      "file": "ui/src/components/chat/ResultCard.tsx",
+      "issue": "Her hover TÜM GET /api/transactions listesini çekiyor (tüm geçmiş transaction'lar) ve backend her biri için (gösterilmeyecek olanlar dahil) tam bir preview hesaplıyor — her DELETE operasyonu için bir disk stat() çağrısı dahil.",
+      "better_approach": "Kapsam dışına taşımadan not düşülüyor; gelecekte tek-transaction'a özel bir sorgu/filtre düşünülebilir.",
+      "reason": "Yüzlerce geçmiş transaction'ı olan bir kullanıcıda her hover gereksiz I/O yapar, atdd.md/plan.md'nin kabul ettiği <1000ms performans riskini büyütür."
+    }
+  ],
+  "strengths": [
+    "Path-sızdırmama ilkesi (Saga #283) doğru uygulanmış: backend/main.py Path(...).name kullanıyor, backend/tests/test_main_integration.py'de `str(tmp_path) not in json.dumps(body)` ile gerçek bir regresyon testi var.",
+    "backup_purged mantığı doğru kapsamlı: sadece OperationType.DELETE + backup_path dolu + fiziksel dosya yokken tetikleniyor; test_transactions_endpoint_preview_move_operation_is_never_marked_backup_purged bunu negatif yönde doğruluyor.",
+    "Kapsam disiplini korunmuş: plan.md'nin kararına uygun sadece ResultCard.tsx değişmiş, çoklu geçmiş listesi eklenmemiş.",
+    "Hover fetch'in tekrar tetiklenmesini `previewState !== 'idle'` koruması engelliyor — basit ve testli bir çözüm."
+  ],
+  "risks": [
+    "verify_report.md, gerçekte karşılanmayan bir AC'yi (AC-4) PASS işaretlemiş — bu, testlerin implementasyonun GERÇEK şekline göre yazılıp atdd.md'nin VAAT ettiği şekle göre yazılmamış olmasından kaynaklanıyor. Bağımsız incelemenin tam olarak yakalaması gereken kör nokta buydu.",
+    "Preview fetch hatasında UI'nin sessiz kalması, kullanıcı deneyiminde fark edilmeyen bir boşluk."
+  ],
+  "caveman_review": {
+    "complexity": "low",
+    "unnecessary_files": 0,
+    "unnecessary_helpers": 0,
+    "unnecessary_abstractions": 0
+  },
+  "scope_review": {
+    "matches_atdd": true,
+    "scope_expansion": false
+  },
+  "ready_to_commit": {
+    "atdd_satisfied": true,
+    "tests_passed": true,
+    "no_critical_findings": true,
+    "scope_respected": true,
+    "caveman_satisfied": true,
+    "security_acceptable": true,
+    "maintainability_acceptable": true,
+    "no_blocking_risks": true
+  },
+  "verdict": "approve",
+  "post_review_fixes": [
+    {
+      "finding_severity": "high",
+      "fix": "backend/main.py::_build_transaction_preview artık transaction-seviyesindeki `available`/`reason`'ı da dosya-seviyesi sonuçlardan türetiyor (`unavailable_file = next((f for f in files if not f.available), None)`). backend/tests/test_main_integration.py'deki purge testine üst-seviye `preview['available']`/`preview['reason']` assertion'ı eklendi ve geçiyor.",
+      "outcome": "fixed"
+    },
+    {
+      "finding_severity": "medium",
+      "fix": "ui/src/components/chat/ResultCard.tsx'e `previewState === 'loading'` ve `previewState === 'error'` için görünür render blokları (`result-preview-loading`/`result-preview-error` test-id'leri) eklendi. İki yeni test (fetch başarısız / transaction listede bulunamadı) eklendi ve geçiyor.",
+      "outcome": "fixed"
+    },
+    {
+      "finding_severity": "low",
+      "fix": "Düzeltilmedi — performans notu (her hover tüm transaction listesini çekiyor) kapsam dışı bırakıldı, atdd.md/plan.md'nin zaten kabul ettiği performans riskiyle aynı kategoride, düşük öncelik.",
+      "outcome": "skipped"
+    }
+  ],
+  "post_fix_test_results": {
+    "backend": "85 passed (.venv/Scripts/python.exe -m pytest backend/tests/test_main_integration.py -q)",
+    "frontend": "26 passed (npx vitest run ui/src/components/chat/ResultCard.test.tsx)",
+    "build": "npm run build → tsc --noEmit + vite build temiz"
+  }
+}

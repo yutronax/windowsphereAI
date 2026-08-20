@@ -210,3 +210,150 @@ describe('ResultCard "Geri al" (Saga #295)', () => {
     );
   });
 });
+
+// --- Saga #317: diff-tray-onizleme-ui (RED STEP) ---
+// Kullanici transaction'in uzerine hover yaptiginda, GET /api/transactions'in
+// dondurdugu `preview` alanindan (kendi transactionId'sine karsilik gelen
+// transaction'i bularak) etkilenen dosyalarin kisa bir onizlemesini gorur.
+// Henuz implementasyon YOK (ResultCard'da hover handler'i/preview render'i
+// yok) - bu testler simdi KIRMIZI olmali.
+describe('ResultCard hover onizleme (Saga #317)', () => {
+  const baseResult = { fileCount: 1, destinationFolders: ['2026-08'], status: 'completed' as const, transactionId: 7 };
+
+  function mockTransactionsResponse(preview: unknown) {
+    return vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [{ id: 7, createdAt: '2026-08-20T10:00:00Z', status: 'committed', fileCount: 1, targetFolders: ['2026-08'], preview }],
+    });
+  }
+
+  it('fetches and shows the file name preview list on hover (AC-1/AC-2)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockTransactionsResponse({
+        empty: false,
+        available: true,
+        truncated: false,
+        total_count: 1,
+        files: [{ name: 'a.pdf', before: 'a.pdf', after: 'a.pdf', status: 'ok', available: true }],
+      }),
+    );
+    render(<ResultCard result={baseResult} />);
+
+    fireEvent.mouseEnter(screen.getByTestId('result-card'));
+
+    const preview = await screen.findByTestId('result-preview');
+    expect(preview).toHaveTextContent('a.pdf');
+  });
+
+  it('shows a "no changes" message when the preview is empty, distinct from unavailable (AC-3)', async () => {
+    vi.stubGlobal('fetch', mockTransactionsResponse({ empty: true, available: true, truncated: false, total_count: 0, files: [] }));
+    render(<ResultCard result={baseResult} />);
+
+    fireEvent.mouseEnter(screen.getByTestId('result-card'));
+
+    expect(await screen.findByTestId('result-preview-empty')).toHaveTextContent('Değişiklik yok');
+    expect(screen.queryByTestId('result-preview-unavailable')).not.toBeInTheDocument();
+  });
+
+  it('shows an "unavailable" message distinguishable from the empty state when preview.available is false (AC-4)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockTransactionsResponse({ empty: false, available: false, reason: 'backup_purged', truncated: false, total_count: 0, files: [] }),
+    );
+    render(<ResultCard result={baseResult} />);
+
+    fireEvent.mouseEnter(screen.getByTestId('result-card'));
+
+    expect(await screen.findByTestId('result-preview-unavailable')).toHaveTextContent('Önizleme mevcut değil');
+    expect(screen.queryByTestId('result-preview-empty')).not.toBeInTheDocument();
+  });
+
+  it('shows a "+N daha" summary when the preview was truncated (AC-5)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockTransactionsResponse({
+        empty: false,
+        available: true,
+        truncated: true,
+        total_count: 15,
+        files: Array.from({ length: 10 }, (_, i) => ({ name: `dosya${i}.pdf`, before: `dosya${i}.pdf`, after: `dosya${i}.pdf`, status: 'ok', available: true })),
+      }),
+    );
+    render(<ResultCard result={baseResult} />);
+
+    fireEvent.mouseEnter(screen.getByTestId('result-card'));
+
+    expect(await screen.findByTestId('result-preview-truncated')).toHaveTextContent('+5 daha');
+  });
+
+  it('marks a file whose before/after state could not be computed with a distinguishable "?" marker (AC-6)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockTransactionsResponse({
+        empty: false,
+        available: true,
+        truncated: false,
+        total_count: 2,
+        files: [
+          { name: 'iyi.pdf', before: 'iyi.pdf', after: 'iyi.pdf', status: 'ok', available: true },
+          { name: 'bilinmeyen.pdf', before: null, after: null, status: 'unknown', available: true },
+        ],
+      }),
+    );
+    render(<ResultCard result={baseResult} />);
+
+    fireEvent.mouseEnter(screen.getByTestId('result-card'));
+
+    const preview = await screen.findByTestId('result-preview');
+    expect(preview).toHaveTextContent('iyi.pdf');
+    expect(preview).toHaveTextContent('bilinmeyen.pdf');
+    expect(screen.getByTestId('result-preview-unknown-bilinmeyen.pdf')).toHaveTextContent('?');
+  });
+
+  it('does not show any preview when transactionId is missing', () => {
+    render(<ResultCard result={{ fileCount: 1, destinationFolders: ['2026-08'], status: 'completed' }} />);
+
+    fireEvent.mouseEnter(screen.getByTestId('result-card'));
+
+    expect(screen.queryByTestId('result-preview')).not.toBeInTheDocument();
+  });
+
+  it('shows a visible error message when the preview fetch fails, instead of silently showing nothing (red-team bulgusu)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }));
+    render(<ResultCard result={baseResult} />);
+
+    fireEvent.mouseEnter(screen.getByTestId('result-card'));
+
+    expect(await screen.findByTestId('result-preview-error')).toHaveTextContent('Önizleme yüklenemedi.');
+    expect(screen.queryByTestId('result-preview')).not.toBeInTheDocument();
+  });
+
+  it('shows a visible error message when the transactions list does not contain this transaction id', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
+    render(<ResultCard result={baseResult} />);
+
+    fireEvent.mouseEnter(screen.getByTestId('result-card'));
+
+    expect(await screen.findByTestId('result-preview-error')).toBeInTheDocument();
+  });
+
+  it('the top-level preview.available=false (not just the per-file one) drives the "unavailable" message (red-team bulgusu)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockTransactionsResponse({
+        empty: false,
+        available: false,
+        reason: 'backup_purged',
+        truncated: false,
+        total_count: 1,
+        files: [{ name: 'silinen.pdf', before: 'silinen.pdf', after: 'silinen.pdf', status: 'ok', available: false, reason: 'backup_purged' }],
+      }),
+    );
+    render(<ResultCard result={baseResult} />);
+
+    fireEvent.mouseEnter(screen.getByTestId('result-card'));
+
+    expect(await screen.findByTestId('result-preview-unavailable')).toHaveTextContent('Önizleme mevcut değil');
+  });
+});

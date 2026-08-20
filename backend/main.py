@@ -37,6 +37,8 @@ from backend.models import (
     SessionContext,
     SessionRequest,
     TransactionApplyResponse,
+    TransactionPreview,
+    TransactionPreviewFile,
     TransactionSummary,
     ZipListRequest,
     ZipListResponse,
@@ -244,6 +246,64 @@ def get_db_session() -> Generator[DbSession, None, None]:
         db.close()
 
 
+PREVIEW_FILE_LIMIT = 10
+
+
+def _build_transaction_preview(transaction: Transaction) -> TransactionPreview:
+    """Saga #317: hover'da gösterilen hafif diff-tray önizlemesi. SADECE
+    dosya adı (`.name`) taşır — tam path Saga #283 ilkesiyle tutarlı
+    şekilde asla döndürülmez. `empty` ("değişiklik yok") ile dosya
+    seviyesindeki `available=False` ("bu dosyanın önizlemesi mevcut
+    değil") KASITLI olarak ayrı sinyaller — atdd.md davranış sözleşmesi,
+    boş sonuç ↔ hata ayrımı."""
+    operations = transaction.operations
+    total_count = len(operations)
+    files: list[TransactionPreviewFile] = []
+    for op in operations[:PREVIEW_FILE_LIMIT]:
+        before = Path(op.source_path).name if op.source_path else None
+        after = Path(op.destination_path).name if op.destination_path else None
+        if not before and not after:
+            # Önce/sonra hesaplanamıyor (kaynak/hedef path boş/geçersiz) —
+            # kısmi başarı: bu satır "unknown" ile işaretlenir, diğer
+            # dosyalar etkilenmez, tüm önizleme İPTAL EDİLMEZ.
+            files.append(TransactionPreviewFile(name="", before=None, after=None, status="unknown"))
+            continue
+
+        name = after or before or ""
+        available = True
+        reason: str | None = None
+        # SADECE DELETE operasyonlarında, fiziksel yedek retention süresi
+        # dolup `purge_expired_delete_backups` tarafından silinmişse
+        # (backup_path DB'de kayıtlı ama dosya artık diskte yok)
+        # "önizleme mevcut değil" tetiklenir. MOVE/RENAME/COPY'de
+        # backup_path'in var/yok olması bu anlama gelmez, hiç tetiklenmez.
+        if op.operation_type == OperationType.DELETE.value and op.backup_path:
+            if not Path(op.backup_path).exists():
+                available = False
+                reason = "backup_purged"
+
+        files.append(
+            TransactionPreviewFile(name=name, before=before, after=after, status="ok", available=available, reason=reason)
+        )
+
+    # Saga #317 red-team bulgusu: transaction-seviyesindeki `available`/
+    # `reason` önceden HİÇBİR kod yolunda set edilmiyordu (Pydantic
+    # varsayılanı True'da kalıyordu) — atdd.md AC-4'ün vaat ettiği AYRI
+    # "Önizleme mevcut değil" mesajı bu yüzden gerçek backend'den asla
+    # tetiklenemiyordu. En az bir dosya purge edilmişse transaction'ın
+    # kendisi de mevcut-değil işaretlenir.
+    unavailable_file = next((f for f in files if not f.available), None)
+
+    return TransactionPreview(
+        files=files,
+        truncated=total_count > PREVIEW_FILE_LIMIT,
+        total_count=total_count,
+        empty=total_count == 0,
+        available=unavailable_file is None,
+        reason=unavailable_file.reason if unavailable_file else None,
+    )
+
+
 def _transaction_to_summary(transaction: Transaction) -> TransactionSummary:
     # Saga #283 ilkesiyle tutarlı: tam mutlak path İSTEMCİYE SIZDIRILMAZ,
     # sadece hedef klasörün ADI (`.name`) döner.
@@ -254,6 +314,7 @@ def _transaction_to_summary(transaction: Transaction) -> TransactionSummary:
         status=transaction.status,
         fileCount=len(transaction.operations),
         targetFolders=target_folders,
+        preview=_build_transaction_preview(transaction),
     )
 
 

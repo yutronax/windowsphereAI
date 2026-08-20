@@ -1020,17 +1020,55 @@ class SearchResultItem(BaseModel):
         return value
 
 
+class TransactionPreviewFile(BaseModel):
+    """Saga #317: diff-tray önizlemesindeki TEK bir dosya satırı. `name`
+    (ve `before`/`after`) SADECE dosya adı (`Path.name`) — tam path
+    Saga #283 ilkesiyle tutarlı şekilde asla taşınmaz."""
+
+    name: str
+    before: str | None
+    after: str | None
+    # "ok": önce/sonra hesaplanabildi. "unknown": hesaplanamadı (kısmi
+    # başarı, davranış sözleşmesi durum 7) — satır atlanmaz, işaretlenir.
+    status: str
+    # Bu TEK dosya için "geri getirilemez" durumu (ör. DELETE yedeği
+    # purge edilmiş) — transaction-seviyesindeki `available`den FARKLI,
+    # dosya-seviyesinde.
+    available: bool = True
+    reason: str | None = None
+
+
+class TransactionPreview(BaseModel):
+    """Saga #317: `TransactionSummary.preview` alanının şekli. `empty`
+    ("değişiklik yok") ile `available=False` ("önizleme mevcut değil")
+    KASITLI olarak ayrı alanlar — aynı boş görünüm arkasındaki farklı kök
+    nedenler UI'da farklı mesajla gösterilmeli (atdd.md davranış
+    sözleşmesi, "boş sonuç ↔ hata ayrımı")."""
+
+    files: list[TransactionPreviewFile]
+    truncated: bool
+    total_count: int
+    empty: bool
+    # Transaction-seviyesinde önizleme hiç mevcut değilse (ör. TÜM
+    # operasyonlar purge edilmiş DELETE'ler) False olur.
+    available: bool = True
+    reason: str | None = None
+
+
 class TransactionSummary(BaseModel):
     """Saga #294: `GET /api/transactions`'ın döndürdüğü, geçmiş bir
     işlemin ÖZETİ — tam `FileOperation` satırları (kaynak/hedef tam
     path'ler) İÇERMEZ, sadece `targetFolders` klasör ADLARINI taşır
-    (Saga #283'teki "tam path istemciye sızdırılmaz" ilkesiyle tutarlı)."""
+    (Saga #283'teki "tam path istemciye sızdırılmaz" ilkesiyle tutarlı).
+    Saga #317: `preview` alanı, hover'da gösterilen hafif dosya-adı
+    önizlemesini taşır — aynı path-sızdırmama ilkesine tabidir."""
 
     id: int
     createdAt: dt.datetime
     status: str
     fileCount: int
     targetFolders: list[str]
+    preview: TransactionPreview
 
 
 class RevertTransactionRequest(BaseModel):

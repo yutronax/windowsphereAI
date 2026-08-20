@@ -419,6 +419,210 @@ def test_transactions_endpoint_never_leaks_absolute_paths_only_folder_names(tmp_
     assert str(tmp_path) not in json.dumps(body)
 
 
+# --- Saga #317: diff-tray-onizleme-ui (RED STEP) ---
+# GET /api/transactions'in dondurdugu her transaction'a bir `preview` alani
+# eklenecek (backend/models.py TransactionSummary + backend/main.py
+# _transaction_to_summary) - henuz implementasyon YOK, bu testler simdi
+# KIRMIZI olmali (preview alani response'ta bulunmadigi icin KeyError/None).
+
+
+def test_transactions_endpoint_preview_lists_file_names_only_not_full_paths(tmp_path):
+    # AC-1/AC-2: preview.files, sadece dosya ADI tasir - Saga #283 ilkesi
+    # (tam path istemciye SIZDIRILMAZ) preview icin de gecerli.
+    db_session = _in_memory_db_session()
+    transaction = create_transaction(db_session)
+    record_file_operation(
+        db_session,
+        transaction,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "a.pdf"),
+        destination_path=str(tmp_path / "2026-08" / "a.pdf"),
+        backup_path=str(tmp_path / "a.pdf"),
+    )
+    transaction.status = "committed"
+    db_session.commit()
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.get("/api/transactions")
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 200
+    body = response.json()
+    preview = body[0]["preview"]
+    assert preview["empty"] is False
+    assert preview["available"] is True
+    file_entry = preview["files"][0]
+    assert file_entry["name"] == "a.pdf"
+    assert file_entry["before"] == "a.pdf"
+    assert file_entry["after"] == "a.pdf"
+    # Tam mutlak path yanitin HICBIR yerinde gecmemeli.
+    assert str(tmp_path) not in json.dumps(body)
+
+
+def test_transactions_endpoint_preview_is_empty_when_transaction_has_no_operations():
+    # AC-3 / davranis sozlesmesi durum 8: hicbir dosya degismemisse
+    # "empty: true" + bos files - hata degil, sessiz bos yanit da degil.
+    db_session = _in_memory_db_session()
+    transaction = create_transaction(db_session)
+    transaction.status = "committed"
+    db_session.commit()
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.get("/api/transactions")
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 200
+    preview = response.json()[0]["preview"]
+    assert preview["empty"] is True
+    assert preview["files"] == []
+    assert preview["available"] is True
+
+
+def test_transactions_endpoint_preview_truncates_after_ten_files_and_reports_total_count(tmp_path):
+    # AC-5: 10'dan fazla dosya iceren transaction'da sadece ilk 10 gosterilir,
+    # truncated=true ve total_count gercek toplami tasir.
+    db_session = _in_memory_db_session()
+    transaction = create_transaction(db_session)
+    for i in range(15):
+        record_file_operation(
+            db_session,
+            transaction,
+            operation_type="Taşı",
+            source_path=str(tmp_path / f"dosya{i}.pdf"),
+            destination_path=str(tmp_path / "2026-08" / f"dosya{i}.pdf"),
+            backup_path=str(tmp_path / f"dosya{i}.pdf"),
+        )
+    transaction.status = "committed"
+    db_session.commit()
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.get("/api/transactions")
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    preview = response.json()[0]["preview"]
+    assert len(preview["files"]) == 10
+    assert preview["truncated"] is True
+    assert preview["total_count"] == 15
+
+
+def test_transactions_endpoint_preview_marks_delete_as_unavailable_when_backup_is_physically_purged(tmp_path):
+    # AC-4 / davranis sozlesmesi durum 3: SADECE purge edilmis DELETE
+    # yedekleri icin available=false + reason="backup_purged". backup_path
+    # kaydi DB'de dursa da fiziksel dosya artik diskte yoksa (purge sonrasi)
+    # bu tetiklenir.
+    db_session = _in_memory_db_session()
+    transaction = create_transaction(db_session)
+    missing_backup = tmp_path / "yedek-klasoru" / "silinen.pdf"
+    record_file_operation(
+        db_session,
+        transaction,
+        operation_type="Sil",
+        source_path=str(tmp_path / "silinen.pdf"),
+        destination_path=str(tmp_path / "silinen.pdf"),
+        backup_path=str(missing_backup),
+    )
+    transaction.status = "committed"
+    db_session.commit()
+    # `missing_backup` diskte hic olusturulmadi - purge_expired_delete_backups
+    # sonrasi durumu simule eder (backup_path DB'de kayitli ama fiziksel dosya yok).
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.get("/api/transactions")
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    preview = response.json()[0]["preview"]
+    file_entry = preview["files"][0]
+    assert file_entry["available"] is False
+    assert file_entry["reason"] == "backup_purged"
+    # Red-team bulgusu (2026-08-20): transaction-seviyesindeki available/reason
+    # da ayni sinyali tasimali - AC-4'un vaat ettigi AYRI "Onizleme mevcut
+    # degil" mesaji, sadece dosya-seviyesi degil ust seviyede de dogrulanir.
+    assert preview["available"] is False
+    assert preview["reason"] == "backup_purged"
+
+
+def test_transactions_endpoint_preview_move_operation_is_never_marked_backup_purged(tmp_path):
+    # AC-4: MOVE/RENAME/COPY operasyonlarinda backup_purged durumu HIC
+    # tetiklenmemeli - bu operasyonlarda backup_path kavrami DELETE'teki
+    # gibi "geri getirilemez oldu" anlamina gelmez.
+    db_session = _in_memory_db_session()
+    transaction = create_transaction(db_session)
+    record_file_operation(
+        db_session,
+        transaction,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "a.pdf"),
+        destination_path=str(tmp_path / "2026-08" / "a.pdf"),
+        backup_path=str(tmp_path / "olmayan-yedek.pdf"),
+    )
+    transaction.status = "committed"
+    db_session.commit()
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.get("/api/transactions")
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    file_entry = response.json()[0]["preview"]["files"][0]
+    assert file_entry["available"] is True
+    assert "reason" not in file_entry or file_entry["reason"] is None
+
+
+def test_transactions_endpoint_preview_marks_unreadable_file_as_unknown_without_failing_the_whole_preview(tmp_path):
+    # AC-6 / davranis sozlesmesi durum 7 (kismi basari): bir dosyanin
+    # once/sonra durumu hesaplanamiyorsa (kaynak/hedef path bos/gecersiz),
+    # o satir status="unknown" ile isaretlenir, DIGER dosyalar etkilenmez -
+    # tum onizleme iptal edilmez.
+    db_session = _in_memory_db_session()
+    transaction = create_transaction(db_session)
+    record_file_operation(
+        db_session,
+        transaction,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "iyi.pdf"),
+        destination_path=str(tmp_path / "2026-08" / "iyi.pdf"),
+        backup_path=str(tmp_path / "iyi.pdf"),
+    )
+    record_file_operation(
+        db_session,
+        transaction,
+        operation_type="Taşı",
+        source_path="",
+        destination_path="",
+        backup_path=None,
+    )
+    transaction.status = "committed"
+    db_session.commit()
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.get("/api/transactions")
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    files = response.json()[0]["preview"]["files"]
+    assert len(files) == 2
+    good_entry = next(f for f in files if f["name"] == "iyi.pdf")
+    assert good_entry["status"] != "unknown"
+    unknown_entry = next(f for f in files if f["name"] != "iyi.pdf")
+    assert unknown_entry["status"] == "unknown"
+
+
 def _apply_a_move_plan(db_session, tmp_path):
     (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4 fake")
     pdf_files = [PdfFileMetadata(filename="a.pdf", createdAt="2026-08-01")]

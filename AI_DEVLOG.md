@@ -2377,3 +2377,41 @@ adımları ayrı genel-amaçlı subagent'lara delegasyon disipliniyle yazdırıl
 ana akış sonucu bağımsız olarak kendi pytest çalıştırmasıyla doğruladı.
 
 6 yeni test, 6/6 yeşil (`backend/tests/test_pdf_ocr.py`).
+
+## diff-tray-onizleme-ui (Saga #317, epic #28)
+
+**Kapsam kararı — çoklu geçmiş listesi yok, sadece ResultCard.** Kod
+taramasında ortaya çıktı: `GET /api/transactions` (Saga #294) frontend'de
+hiç tüketilmiyordu, `ResultCard.tsx` sadece en son tamamlanan TEK
+transaction'ı gösteriyordu. atdd.md'nin "geçmiş panelinde göster" ifadesi
+bu iki farklı şeyi (var olan tekil kart / var olmayan çoklu liste) birlikte
+anıyordu — kullanıcı onayıyla hover önizlemesi SADECE `ResultCard`'a
+uygulandı, çoklu geçmiş listesi UI'ı ayrı bir Saga task'ına bırakıldı.
+
+**Path-sızdırmama ilkesi (Saga #283) önizlemeye de taşındı.**
+`TransactionSummary.preview` alanı SADECE dosya adı (`Path.name`) taşır,
+tam path hiçbir zaman döndürülmez — bu, `models.py`'deki mevcut
+`TransactionSummary` docstring'inin açıkça belirttiği ilkenin doğal bir
+uzantısı, ayrı bir regresyon testiyle (`str(tmp_path) not in
+json.dumps(body)`) doğrulandı.
+
+**Red-team bulgusu — davranış sözleşmesi ile implementasyon uyumsuzluğu.**
+`_build_transaction_preview` ilk yazımda transaction-seviyesindeki
+`available`/`reason` alanını HİÇ set etmiyordu (Pydantic varsayılanı
+`True`'da kalıyordu) — atdd.md AC-4'ün vaat ettiği ayrı "Önizleme mevcut
+değil" mesajı bu yüzden gerçek backend'den asla tetiklenemiyordu, sadece
+testteki elle kurgulanmış mock'ta çalışıyordu. `verify_report.md` bu
+kriteri yanlışlıkla PASS işaretlemişti — bağımsız `red-team` incelemesinin
+tam olarak yakalaması gereken kör noktaydı. Düzeltme: üst-seviye
+`available`/`reason` artık dosya-seviyesi sonuçlardan türetiliyor, backend
+testine üst-seviye assertion eklendi. İkinci bulgu (medium): hover fetch
+hatasında UI hiçbir geri bildirim göstermiyordu (sessiz başarısızlık) —
+`result-preview-error`/`result-preview-loading` render blokları eklendi.
+
+Codex kotası 15 Eylül 2026'ya kadar dolu olduğu için (bkz. proje hafızası)
+hem testler hem implementasyon kullanıcı onayıyla doğrudan Claude
+tarafından yazıldı, bağımsız `red-team` incelemesi (obss-red-team subagent)
+bu yüzden normalden kritik önemdeydi ve gerçek bir bulgu buldu/düzelttirdi.
+
+Backend: 6 yeni test (`backend/tests/test_main_integration.py`), 85/85
+yeşil. Frontend: 9 yeni test (`ResultCard.test.tsx`), 26/26 yeşil.

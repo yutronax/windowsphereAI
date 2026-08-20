@@ -17,6 +17,29 @@ type Props = {
   result: TransactionResult;
 };
 
+// Saga #317: GET /api/transactions'in dondurdugu preview sekli - backend'in
+// backend/models.py::TransactionPreview/TransactionPreviewFile'iyla AYNI
+// alanlar. SADECE dosya adi tasir (Saga #283 ilkesi), tam path YOK.
+type PreviewFile = {
+  name: string;
+  before: string | null;
+  after: string | null;
+  status: string;
+  available?: boolean;
+  reason?: string | null;
+};
+
+type Preview = {
+  files: PreviewFile[];
+  truncated: boolean;
+  total_count: number;
+  empty: boolean;
+  available?: boolean;
+  reason?: string | null;
+};
+
+type PreviewLoadState = 'idle' | 'loading' | 'loaded' | 'error';
+
 const STATUS_TEXT: Record<TransactionResult['status'], string> = {
   completed: 'İşlem tamamlandı.',
   partial: 'İşlem kısmen tamamlandı.',
@@ -27,7 +50,37 @@ type RevertState = 'idle' | 'confirming' | 'reverting' | 'reverted' | 'revert_fa
 
 export default function ResultCard({ result }: Props) {
   const [revertState, setRevertState] = useState<RevertState>('idle');
+  const [previewState, setPreviewState] = useState<PreviewLoadState>('idle');
+  const [preview, setPreview] = useState<Preview | null>(null);
   const hasFolders = result.destinationFolders.length > 0;
+
+  // Saga #317: hover'da önizleme YALNIZCA bir kez, lazy olarak yüklenir —
+  // ayrı/yeni bir endpoint YOK, mevcut GET /api/transactions listesi
+  // içinden kendi transactionId'sine karşılık gelen `preview` alanı
+  // bulunur (AC-2: "ayrı bir endpoint çağrısı gerekmez" — yeni bir
+  // endpoint eklenmedi, mevcut liste endpoint'i yeniden kullanıldı).
+  async function handleHoverLoadPreview() {
+    if (result.transactionId === undefined) return;
+    if (previewState !== 'idle') return;
+    setPreviewState('loading');
+    try {
+      const response = await fetch(`${BACKEND_ORIGIN}/api/transactions`);
+      if (!response.ok) {
+        setPreviewState('error');
+        return;
+      }
+      const body: Array<{ id: number; preview: Preview }> = await response.json();
+      const own = body.find((entry) => entry.id === result.transactionId);
+      if (own === undefined) {
+        setPreviewState('error');
+        return;
+      }
+      setPreview(own.preview);
+      setPreviewState('loaded');
+    } catch {
+      setPreviewState('error');
+    }
+  }
   // Saga #301: `transactionId` eksikse istemci geri alma isteği
   // OLUŞTURAMAZ — buton hiç gösterilmez. Asıl güvenlik sınırı backend'in
   // kendisinde (server tarafında kaydedilen allowed_root + committed-only
@@ -62,7 +115,12 @@ export default function ResultCard({ result }: Props) {
   }
 
   return (
-    <section className="result-card" data-testid="result-card" aria-label="İşlem sonucu">
+    <section
+      className="result-card"
+      data-testid="result-card"
+      aria-label="İşlem sonucu"
+      onMouseEnter={handleHoverLoadPreview}
+    >
       <style>{`
         .result-card {
           border: 1px solid #E5E7EB;
@@ -162,6 +220,48 @@ export default function ResultCard({ result }: Props) {
           {STATUS_TEXT[result.status]}
         </p>
       </div>
+      {previewState === 'loading' && (
+        <p className="result-card-status-text" data-testid="result-preview-loading">
+          Önizleme yükleniyor…
+        </p>
+      )}
+      {previewState === 'error' && (
+        <p className="result-card-status-text is-failed" data-testid="result-preview-error">
+          Önizleme yüklenemedi.
+        </p>
+      )}
+      {previewState === 'loaded' && preview && (
+        <>
+          {preview.empty ? (
+            <p className="result-card-status-text" data-testid="result-preview-empty">
+              Değişiklik yok
+            </p>
+          ) : preview.available === false ? (
+            <p className="result-card-status-text" data-testid="result-preview-unavailable">
+              Önizleme mevcut değil
+            </p>
+          ) : (
+            <ul className="result-card-folders" data-testid="result-preview">
+              {preview.files.map((file, index) => (
+                <li key={`${file.name}-${index}`}>
+                  {file.status === 'unknown' ? (
+                    <span data-testid={`result-preview-unknown-${file.name}`}>{file.name || '?'} (?)</span>
+                  ) : file.available === false ? (
+                    <span>
+                      {file.name} — Önizleme mevcut değil{file.reason ? ` (${file.reason})` : ''}
+                    </span>
+                  ) : (
+                    <span>{file.name}</span>
+                  )}
+                </li>
+              ))}
+              {preview.truncated && (
+                <li data-testid="result-preview-truncated">+{preview.total_count - preview.files.length} daha</li>
+              )}
+            </ul>
+          )}
+        </>
+      )}
       {canShowRevert && revertState !== 'reverted' && revertState !== 'revert_failed' && (
         <>
           {revertState === 'confirming' ? (
