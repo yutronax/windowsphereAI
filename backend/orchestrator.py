@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from backend import excel_rows, excel_sort, image_ops, pdf_compress, pdf_pages, word_table, zip_ops
+from backend import excel_rows, excel_sort, image_ops, pdf_compress, pdf_pages, word_table, word_to_pdf, zip_ops
 from backend.db_models import FileOperation, Transaction
 from backend.file_operations import create_transaction, record_file_operation
 from backend.models import OperationType, PdfFileMetadata, PlanSkeleton, PlanStep
@@ -60,6 +60,7 @@ _SUPPORTED_OPERATION_TYPES = {
     OperationType.PDF_DELETE_PAGES,
     OperationType.APPEND,
     OperationType.PDF_COMPRESS,
+    OperationType.WORD_TO_PDF,
     OperationType.EXCEL_CREATE,
     OperationType.EXCEL_APPEND,
     OperationType.WORD_APPEND_TABLE,
@@ -390,6 +391,9 @@ _ROLLBACK_OPERATIONS = {
     # Buyume korumasi tetiklendiginde (compress_pdf False doner) zaten
     # hicbir FileOperation kaydi olusmadigi icin bu haritaya hic bakilmaz.
     OperationType.PDF_COMPRESS: _rollback_copy,
+    # Saga #339: WORD_TO_PDF rollback'i de COPY ile AYNI - kaynak hic
+    # degismedi, rollback SADECE hedefteki donusturulen PDF dosyasini siler.
+    OperationType.WORD_TO_PDF: _rollback_copy,
     # Saga #326: EXCEL_CREATE rollback'i de COPY ile AYNI - kaynak yok,
     # rollback SADECE hedefteki yeni oluşturulan dosyayı siler.
     OperationType.EXCEL_CREATE: _rollback_copy,
@@ -865,6 +869,29 @@ def apply_plan(
                     ) from exc
                 if not compressed:
                     continue
+                operation = record_file_operation(
+                    session,
+                    transaction,
+                    operation_type=step.operationType.value,
+                    source_path=str(source_path),
+                    destination_path=str(destination_path),
+                    backup_path=str(destination_path),
+                )
+                operation.status = "completed"
+                session.commit()
+                applied.append(operation)
+                continue
+            if step.operationType == OperationType.WORD_TO_PDF:
+                # Saga #339: PDF_COMPRESS blogunun BİREBİR kopyası - kaynak
+                # (docx) asla degismez, hedef (pdf) yeni dosya olur.
+                source_path = allowed_root / files[0].filename
+                destination_path = allowed_root / step.pdfFileName
+                try:
+                    word_to_pdf.convert_word_to_pdf(source_path, destination_path)
+                except Exception as exc:
+                    raise PlanApplicationError(
+                        f"Word belgesi PDF'e dönüştürülemedi: '{source_path.name}' ({exc})"
+                    ) from exc
                 operation = record_file_operation(
                     session,
                     transaction,

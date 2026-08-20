@@ -1,0 +1,61 @@
+{
+  "task": "word-to-pdf-donusumu",
+  "reviewed_at": "2026-08-20",
+  "summary": "Ilk turda bulunan 2 orta seviyeli sorun (spesifikasyon-disi sabit yol fallback'i, Critical AC-2/AC-3 icin test-gap) commit oncesi duzeltildi ve bagimsiz olarak (kod okunarak + pytest calistirilarak, 8/8 word_to_pdf testi + 548/5 tum suite) dogrulandi. Subprocess cagrisi liste-tabanli argumanlarla guvenli, scope plan.md ile birebir ortusuyor. Kalan 3 dusuk-onemli bulgu (mtime dead-code, stderr loglanmiyor, cift katmanli silent-fail) blocking degil.",
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "scope",
+      "file": "backend/word_to_pdf.py",
+      "issue": "[DUZELTILDI] atdd.md Assumptions bolumu acikca implementasyon PATH'te soffice aranmali, bulunamazsa hata donmeli, sabit Windows yoluna hardcode edilmemeli diyordu, ama ilk yazimda satir 44'te sabit yola fallback vardi.",
+      "better_approach": "Uygulandi: fallback kaldirildi, sadece shutil.which(\"soffice\") kullaniliyor, None donerse dogrudan WordToPdfConversionError firlatiliyor (satir 41-43). Kod okunarak dogrulandi.",
+      "reason": "ATDD'nin acik onayiyla artik tam uyumlu; platform-bagimsizlik niyeti korunuyor."
+    },
+    {
+      "severity": "low",
+      "category": "correctness",
+      "file": "backend/word_to_pdf.py",
+      "issue": "mtime karsilastirma mantigi (satir 92-96) her cagri taze bir tempfile.mkdtemp() dizini kullandigi icin pratikte HER ZAMAN gecer -- koordinatorun olu kod tespiti bagimsiz olarak DOGRULANDI. Asil korumayi yapan kisimlar sadece dosya var mi (satir 79) ve boyut > 0 (satir 85) kontrolleridir.",
+      "better_approach": "mtime karsilastirmasini kaldir (olu kod, yaniltici) ya da yorumu duzelt; mevcut tasarim (gecici dizine yaz, sonra replace) zaten yapisal olarak eski PDF sessizce uzerine yazilir riskini onledigi icin pratik risk dusuk.",
+      "reason": "AC-3 metninde mtime AYNI kalirsa hata senaryosu tarif ediliyor ama bu senaryo su anki mimaride asla tetiklenemez; ileride biri bu satirlari calisan bir tazelik testi sanip uzerine guvenebilir."
+    },
+    {
+      "severity": "low",
+      "category": "reliability",
+      "file": "backend/word_to_pdf.py",
+      "issue": "subprocess.run sonucu result degiskenine ataniyor ama result.returncode ve result.stderr HIC kontrol edilmiyor/loglanmiyor. soffice non-zero exit koduyla cikarsa (bozuk .docx, font/lisans hatasi) bu bilgi kaybolur, sadece jenerik LibreOffice mesgul olabilir mesaji gosterilir.",
+      "better_approach": "WordToPdfConversionError mesajina result.returncode ve result.stderr'in kisaltilmis bir ozetini ekle, en azindan debug/log seviyesinde.",
+      "reason": "atdd.md AC-4 bilerek bozuk kaynagi ayri bir dal yapmiyor ama kullaniciya/gelistiriciye teshis icin hicbir stderr bilgisi ulasmiyor."
+    },
+    {
+      "severity": "medium",
+      "category": "test-gap",
+      "file": "backend/tests/test_orchestrator.py",
+      "issue": "[DUZELTILDI] AC-2 (60sn timeout) ve AC-3 (tazelik basarisiz) -- ikisi de atdd.md'de Critical oncelikte -- ilk yazimda gercek/monkeypatch'li bir testle dogrudan dogrulanmamisti.",
+      "better_approach": "Uygulandi: test_apply_plan_word_to_pdf_timeout_raises_error_and_leaves_source_untouched ve test_apply_plan_word_to_pdf_freshness_check_fails_raises_error_and_leaves_source_untouched testleri eklendi (subprocess.run monkeypatch'lenerek, saniyeler icinde calisiyor, flaky risk yok). Bagimsiz olarak calistirildi: 8/8 word_to_pdf testi PASS.",
+      "reason": "Critical oncelikli iki AC'nin davranis sozlesmesi artik otomatik testle korunuyor."
+    },
+    {
+      "severity": "low",
+      "category": "reliability",
+      "file": "backend/word_to_pdf.py",
+      "issue": "finally blogundaki shutil.rmtree ignore_errors=True zaten hatalari yutuyor, disarida bir try/except Exception: pass daha var (cift katmanli silent-fail) -- rmtree basarisiz olursa gecici dizin ve icindeki donusturulmus PDF diskte kalir, hicbir uyari/log yok.",
+      "better_approach": "En azindan logging.warning ile temizlik basarisizligini logla; disaridaki except blogu gereksiz cift guvenlik, kaldirilabilir ya da loglanmali.",
+      "reason": "Kullanicinin Word belgesi hassas icerik barindirabilir; donusturulen PDF'in gecici dizinde sessizce kalmasi kucuk bir veri-hijyeni riski."
+    }
+  ],
+  "strengths": [
+    "Subprocess cagrisi liste-tabanli argumanlarla yapiliyor (shell=True yok, string-concatenation yok) -- shell injection riski yok, security-scan skill'i de bunu PASS olarak dogrulamis.",
+    "source_path/destination_path orchestrator.py'de allowed_root uzerinden insa ediliyor -- bunlar validate_plan_paths ve security.py'nin _DESTINATION_FIELD_BY_OPERATION dict'i uzerinden zaten whitelist+cakisma kontrolunden gecmis oluyor.",
+    "_SUPPORTED_OPERATION_TYPES, rollback mapping (_ROLLBACK_OPERATIONS) ve _DESTINATION_FIELD_BY_OPERATION dict'lerinin ucune de WORD_TO_PDF dogru eklenmis -- models.py'deki enum ile birebir eslesiyor, git diff ile dogrulandi.",
+    "Gecici dizin+rename deseni, LibreOffice'in her zaman source.stem+.pdf uretir kisitini dogru cozuyor ve eski/bayat PDF uzerine yazma riskini yapisal olarak onluyor.",
+    "Kapsam tam olarak plan.md'nin izin verdigi 5 dosya + 1 yeni dosyayla sinirli, scope creep yok."
+  ],
+  "risks": [
+    "Iki eszamanli soffice cagrisi LibreOffice'in tekil-profil kilidi nedeniyle ikinci cagrinin basarisiz/timeout olmasina yol acabilir -- bu senaryo AC-2 timeout'a duser ve hata olarak yuzeye cikar, ama stderr loglanmadigi icin kullanici deneyimi acisindan neden basarisiz oldu belirsiz kalabilir (dusuk-onemli F3 bulgusuyla ayni kok neden, duzeltilmeden birakildi)."
+  ],
+  "caveman_review": {"complexity": "low", "unnecessary_files": 0, "unnecessary_helpers": 0, "unnecessary_abstractions": 0},
+  "scope_review": {"matches_atdd": true, "scope_expansion": false},
+  "ready_to_commit": {"atdd_satisfied": true, "tests_passed": true, "no_critical_findings": true, "scope_respected": true, "caveman_satisfied": true, "security_acceptable": true, "maintainability_acceptable": true, "no_blocking_risks": true},
+  "verdict": "approve"
+}

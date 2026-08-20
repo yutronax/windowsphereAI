@@ -82,6 +82,10 @@ class OperationType(str, Enum):
     # güncelle" deseni, ama satır (appendRows) yerine bir Word tablosu
     # (tableHeaders opsiyonel + tableRows zorunlu) ekler.
     WORD_APPEND_TABLE = "Word Tablo Ekle"
+    # Saga #339: WORD_TO_PDF - EXCEL_FILTER ile AYNI "1 kaynak -> 1 hedef,
+    # kaynak asla degismez" deseni, .docx dosyasini LibreOffice --convert-to
+    # pdf ile .pdf'e donusturur.
+    WORD_TO_PDF = "Word'u PDF Yap"
     # Saga #328: ZIP_CREATE/ZIP_ADD/ZIP_EXTRACT/ZIP_MERGE - zipfile stdlib
     # üzerinden dört temel zip operasyonu (bkz. artifacts/zip-temel-
     # operasyonlar/atdd.md).
@@ -204,6 +208,10 @@ class PlanStep(BaseModel):
     # sortedFileName ile AYNI desende (SADECE operationType==PDF_COMPRESS
     # olduğunda dolu olmalı, diğer operationType'larda None kalmalı).
     compressedFileName: str | None = None
+    # Saga #339: WORD_TO_PDF icin - donusturulen PDF ciktinin dosya adi,
+    # compressedFileName ile AYNI desende (SADECE operationType==WORD_TO_PDF
+    # olduğunda dolu olmalı, diğer operationType'larda None kalmalı).
+    pdfFileName: str | None = None
     # Saga #323: APPEND icin - kaynagin sonuna eklenecek metin, mergedFileName
     # ile AYNI desende (SADECE operationType==APPEND olduğunda dolu olmalı,
     # diğer operationType'larda None kalmalı). max_length=5000 (Threat-Model
@@ -303,6 +311,13 @@ class PlanStep(BaseModel):
     def compressed_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
         if value is not None and ("/" in value or "\\" in value):
             raise ValueError("compressedFileName must not contain path separators")
+        return value
+
+    @field_validator("pdfFileName")
+    @classmethod
+    def pdf_file_name_has_no_path_separators(cls, value: str | None) -> str | None:
+        if value is not None and ("/" in value or "\\" in value):
+            raise ValueError("pdfFileName must not contain path separators")
         return value
 
     @field_validator("createdFileName")
@@ -668,6 +683,29 @@ class PlanStep(BaseModel):
         else:
             if self.compressedFileName is not None:
                 raise ValueError("compressedFileName must be omitted unless operationType is PDF_COMPRESS")
+        return self
+
+    @model_validator(mode="after")
+    def word_to_pdf_fields_only_for_word_to_pdf(self) -> "PlanStep":
+        # Saga #339: pdf_compress_fields_only_for_pdf_compress ile AYNI desen
+        # - pdfFileName SADECE WORD_TO_PDF icin zorunlu, diger
+        # operationType'larda tamamen yasak. Bu operasyonda ek zorunlu bir alan YOK.
+        if self.operationType == OperationType.WORD_TO_PDF:
+            if self.pdfFileName is None or self.pdfFileName.strip() == "":
+                raise ValueError("pdfFileName is required when operationType is WORD_TO_PDF")
+            if len(self.fileNames) != 1:
+                raise ValueError("fileNames must contain exactly 1 entry when operationType is WORD_TO_PDF")
+            normalized_pdf = os.path.normcase(self.pdfFileName)
+            normalized_sources = [os.path.normcase(name) for name in self.fileNames]
+            if normalized_pdf in normalized_sources:
+                raise ValueError(
+                    f"pdfFileName ('{self.pdfFileName}') collides with one of this "
+                    "step's fileNames (case-insensitive) — word-to-pdf output must not overwrite "
+                    "a source file"
+                )
+        else:
+            if self.pdfFileName is not None:
+                raise ValueError("pdfFileName must be omitted unless operationType is WORD_TO_PDF")
         return self
 
     @model_validator(mode="after")

@@ -81,6 +81,17 @@ def _write_real_pdf(root, filename: str, page_count: int) -> None:
     writer.close()
 
 
+def _write_real_docx(root, filename: str, text: str) -> None:
+    # Saga #339: WORD_TO_PDF testleri gercek python-docx ile olusturulmus
+    # gercek .docx dosyalari gerektiriyor - libreoffice'in --convert-to pdf
+    # ile dönüştürebilmesi için.
+    from docx import Document
+
+    doc = Document()
+    doc.add_paragraph(text)
+    doc.save(root / filename)
+
+
 def test_apply_plan_moves_files_into_target_folder_and_records_completed_operations(session, tmp_path):
     _write_pdf(tmp_path, "a.pdf")
     _write_pdf(tmp_path, "b.pdf")
@@ -2804,6 +2815,161 @@ def test_apply_plan_rejects_pdf_compress_of_a_path_outside_allowed_root(session,
         apply_plan(session, plan, pdf_files, tmp_path)
 
     assert calls == []
+
+
+def _word_to_pdf_step(order: int, source_filename: str, pdf_file_name: str) -> PlanStep:
+    # Saga #339: WORD_TO_PDF step helper - PDF_COMPRESS'in desenine benzer.
+    return PlanStep(
+        order=order,
+        operationType=OperationType.WORD_TO_PDF,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=[source_filename],
+        pdfFileName=pdf_file_name,
+    )
+
+
+def test_apply_plan_converts_word_to_pdf_successfully(session, tmp_path, monkeypatch):
+    # Saga #339: AC-1 - WORD_TO_PDF happy path - gercek soffice ile gercek
+    # .docx donusturulmesi. LibreOffice bu sistemde kurulu oldugu varsayilir.
+    # LibreOffice'ın program klasörünü PATH'e ekle (bulunmasını sağla).
+    lib_office_path = Path("C:\\Program Files\\LibreOffice\\program")
+    if lib_office_path.exists():
+        os.environ["PATH"] = str(lib_office_path) + ";" + os.environ.get("PATH", "")
+
+    _write_real_docx(tmp_path, "belgem.docx", "Test belge icerigi")
+    pdf_files = [PdfFileMetadata(filename="belgem.docx", createdAt="2026-08-01")]
+    plan = _plan([_word_to_pdf_step(0, "belgem.docx", "donusturulmus.pdf")])
+
+    transaction = apply_plan(session, plan, pdf_files, tmp_path)
+
+    # Hedef PDF olusturulmali.
+    assert (tmp_path / "donusturulmus.pdf").exists()
+    # PDF okunabilir olmali.
+    from pypdf import PdfReader
+    reader = PdfReader(tmp_path / "donusturulmus.pdf")
+    assert len(reader.pages) >= 1
+    # Kaynak .docx dokunulmamali.
+    assert (tmp_path / "belgem.docx").exists()
+    # Transaction committed olmali.
+    assert transaction.status == "committed"
+    assert len(transaction.operations) == 1
+    assert transaction.operations[0].status == "completed"
+
+
+def test_apply_plan_does_not_modify_source_when_converting_word_to_pdf(session, tmp_path, monkeypatch):
+    # Saga #339: AC-1 - kaynak .docx dosyasi degismemeli.
+    # LibreOffice'ın program klasörünü PATH'e ekle (bulunmasını sağla).
+    lib_office_path = Path("C:\\Program Files\\LibreOffice\\program")
+    if lib_office_path.exists():
+        os.environ["PATH"] = str(lib_office_path) + ";" + os.environ.get("PATH", "")
+
+    _write_real_docx(tmp_path, "belgem.docx", "Test icerigi")
+    original_content = (tmp_path / "belgem.docx").read_bytes()
+    original_mtime = (tmp_path / "belgem.docx").stat().st_mtime
+
+    pdf_files = [PdfFileMetadata(filename="belgem.docx", createdAt="2026-08-01")]
+    plan = _plan([_word_to_pdf_step(0, "belgem.docx", "cikti.pdf")])
+
+    import time
+    time.sleep(0.01)  # mtime kaymasini garantile
+
+    apply_plan(session, plan, pdf_files, tmp_path)
+
+    # Kaynak yine var olmali ve degismemeli (mtime degisebilir ama iceriği aynı).
+    assert (tmp_path / "belgem.docx").exists()
+    assert (tmp_path / "belgem.docx").read_bytes() == original_content
+
+
+def test_apply_plan_rejects_word_to_pdf_when_source_does_not_exist(session, tmp_path):
+    # Saga #339: AC-3 - kaynak yoksa PlanApplicationError.
+    pdf_files = [PdfFileMetadata(filename="yok.docx", createdAt="2026-08-01")]
+    plan = _plan([_word_to_pdf_step(0, "yok.docx", "cikti.pdf")])
+
+    with pytest.raises(PlanApplicationError):
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+
+def test_apply_plan_word_to_pdf_produces_valid_pdf(session, tmp_path, monkeypatch):
+    # Saga #339: AC-1 - Uretilen PDF'in geçerli bir PDF olup olmadığini test et.
+    # LibreOffice'ın program klasörünü PATH'e ekle (bulunmasını sağla).
+    lib_office_path = Path("C:\\Program Files\\LibreOffice\\program")
+    if lib_office_path.exists():
+        os.environ["PATH"] = str(lib_office_path) + ";" + os.environ.get("PATH", "")
+
+    _write_real_docx(tmp_path, "belgem.docx", "Geçerli bir PDF sonucu")
+    pdf_files = [PdfFileMetadata(filename="belgem.docx", createdAt="2026-08-01")]
+    plan = _plan([_word_to_pdf_step(0, "belgem.docx", "sonuc.pdf")])
+
+    apply_plan(session, plan, pdf_files, tmp_path)
+
+    # PDF'i aç ve geçerli olduğunu kontrol et.
+    from pypdf import PdfReader
+    result_pdf = PdfReader(tmp_path / "sonuc.pdf")
+    # En az bir sayfa olmalı.
+    assert len(result_pdf.pages) >= 1
+    # İçeriği oku.
+    content = result_pdf.pages[0].extract_text()
+    # Orijinal metni içermeli (yapılandırmaya bağlı olarak).
+    assert "PDF" in content or len(result_pdf.pages[0].extract_text()) > 0
+
+
+def test_apply_plan_word_to_pdf_timeout_raises_error_and_leaves_source_untouched(session, tmp_path, monkeypatch):
+    # Saga #339: AC-2 - timeout sırasında subprocess sonlanır,
+    # PlanApplicationError fırlatılır, kaynak .docx dokunulmaz.
+    _write_real_docx(tmp_path, "belgem.docx", "Timeout test")
+    original_content = (tmp_path / "belgem.docx").read_bytes()
+    pdf_files = [PdfFileMetadata(filename="belgem.docx", createdAt="2026-08-01")]
+    plan = _plan([_word_to_pdf_step(0, "belgem.docx", "sonuc.pdf")])
+
+    # shutil.which'i mock'la - soffice bulunur.
+    monkeypatch.setattr("backend.word_to_pdf.shutil.which", lambda name: "soffice" if name == "soffice" else None)
+
+    # subprocess.run'ı monkeypatch ile TimeoutExpired fırlatacak şekilde değiştir.
+    import subprocess
+    def mock_run_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="soffice", timeout=60)
+
+    monkeypatch.setattr("backend.word_to_pdf.subprocess.run", mock_run_timeout)
+
+    with pytest.raises(PlanApplicationError) as exc_info:
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert "zaman aşımına uğradı" in str(exc_info.value).lower() or "timeout" in str(exc_info.value).lower()
+    # Kaynak dokunulmamış olmalı.
+    assert (tmp_path / "belgem.docx").read_bytes() == original_content
+    # Hedef oluşturulmamış olmalı.
+    assert not (tmp_path / "sonuc.pdf").exists()
+
+
+def test_apply_plan_word_to_pdf_freshness_check_fails_raises_error_and_leaves_source_untouched(session, tmp_path, monkeypatch):
+    # Saga #339: AC-3 - LibreOffice çalıştı ama geçici çıktı yaratmadı
+    # (profil kilidi vb.), tazelik kontrolü başarısız olur,
+    # PlanApplicationError fırlatılır, kaynak .docx dokunulmaz.
+    _write_real_docx(tmp_path, "belgem.docx", "Freshness fail test")
+    original_content = (tmp_path / "belgem.docx").read_bytes()
+    pdf_files = [PdfFileMetadata(filename="belgem.docx", createdAt="2026-08-01")]
+    plan = _plan([_word_to_pdf_step(0, "belgem.docx", "sonuc.pdf")])
+
+    # shutil.which'i mock'la - soffice bulunur.
+    monkeypatch.setattr("backend.word_to_pdf.shutil.which", lambda name: "soffice" if name == "soffice" else None)
+
+    # subprocess.run'ı monkeypatch ile hiçbir dosya üretmeyen bir mock ile değiştir.
+    import subprocess
+    def mock_run_no_output(*args, **kwargs):
+        # returncode=1 (başarısızlık) döner ama exception fırlatmaz.
+        return subprocess.CompletedProcess(args=args[0], returncode=1, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr("backend.word_to_pdf.subprocess.run", mock_run_no_output)
+
+    with pytest.raises(PlanApplicationError) as exc_info:
+        apply_plan(session, plan, pdf_files, tmp_path)
+
+    assert "meşgul" in str(exc_info.value).lower() or "tekrar" in str(exc_info.value).lower()
+    # Kaynak dokunulmamış olmalı.
+    assert (tmp_path / "belgem.docx").read_bytes() == original_content
+    # Hedef oluşturulmamış olmalı.
+    assert not (tmp_path / "sonuc.pdf").exists()
 
 
 # Saga #326: excel-create-read-append (TEST-FIRST / red step) -

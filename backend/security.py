@@ -181,6 +181,7 @@ _DESTINATION_FIELD_BY_OPERATION: dict[OperationType, str] = {
     OperationType.PDF_EXTRACT_PAGES: "extractedFileName",
     OperationType.PDF_DELETE_PAGES: "remainingFileName",
     OperationType.PDF_COMPRESS: "compressedFileName",
+    OperationType.WORD_TO_PDF: "pdfFileName",
     OperationType.ZIP_CREATE: "zippedFileName",
     OperationType.ZIP_ADD: "addedFileName",
     OperationType.ZIP_MERGE: "mergedZipFileName",

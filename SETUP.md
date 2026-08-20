@@ -38,6 +38,18 @@ Proje kendi `.venv`'ini henüz içermiyor — `../.venv` (Yazılım_müh kökü)
 ```
 Gerekli paketler: `fastapi`. Proje kendi `requirements.txt`/`pyproject.toml`'unu henüz tanımlamıyor (ayrı bir task).
 
+`WORD_TO_PDF` operasyonu (Saga #339) için LibreOffice gerekir, `soffice`
+PATH'te bulunabilir olmalı:
+```bash
+winget install --id TheDocumentFoundation.LibreOffice --silent \
+  --accept-package-agreements --accept-source-agreements
+```
+LibreOffice'in `program\` klasörünü (varsayılan
+`C:\Program Files\LibreOffice\program`) PATH'e ekle — `backend/word_to_pdf.py`
+sabit bir yola hardcode ETMEZ, sadece `shutil.which("soffice")` ile arar.
+İlk `soffice` çalıştırması profil oluşturma nedeniyle ~30sn sürebilir;
+sonraki çağrılar hızlıdır.
+
 ## Ortam Değişkenleri
 - `APPDATA` (Windows, otomatik) — ilk-kurulum config dosyası (`%APPDATA%/windows-ai-files/config.json`) için zorunlu, `backend/config.py` bunsuz `RuntimeError` fırlatır.
 - Backend sabit olarak `127.0.0.1:8000`'de çalışacak şekilde varsayılıyor (bkz. `docs/DESIGN_DECISIONS.md` D3); henüz yapılandırılabilir değil.

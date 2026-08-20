@@ -521,6 +521,47 @@ def test_validate_plan_paths_rejects_pdf_compress_target_colliding_with_existing
         validate_plan_paths(_pdf_compress_plan("onemli.pdf"), pdf_files, tmp_path)
 
 
+def test_validate_plan_paths_rejects_when_word_to_pdf_destination_escapes_root(tmp_path):
+    # Saga #339: PDF_COMPRESS testinin AYNI deseni - WORD_TO_PDF icin de
+    # whitelist kontrolu aynisini yapmalı.
+    step = PlanStep.model_construct(
+        order=0,
+        operationType=OperationType.WORD_TO_PDF,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["belgem.docx"],
+        pdfFileName=r"..\..\evil.pdf",
+    )
+    plan = PlanSkeleton.model_construct(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+    pdf_files = [PdfFileMetadata(filename="belgem.docx", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(plan, pdf_files, tmp_path)
+
+
+def test_validate_plan_paths_rejects_word_to_pdf_target_colliding_with_existing_unknown_file(tmp_path):
+    # Saga #339: PDF_COMPRESS testinin AYNI deseni - WORD_TO_PDF icin de
+    # çakışma kontrolu aynisini yapmalı.
+    (tmp_path / "belgem.docx").write_bytes(b"docx fake")
+    (tmp_path / "onemli.pdf").write_bytes(b"%PDF-1.4 onemli veri")
+    pdf_files = [PdfFileMetadata(filename="belgem.docx", createdAt="2026-08-01")]
+
+    with pytest.raises(PathWhitelistError):
+        validate_plan_paths(_word_to_pdf_plan("onemli.pdf"), pdf_files, tmp_path)
+
+
+def _word_to_pdf_plan(pdf_file_name: str) -> PlanSkeleton:
+    step = PlanStep(
+        order=0,
+        operationType=OperationType.WORD_TO_PDF,
+        targetFolder="2026-08",
+        affectedFileCount=1,
+        fileNames=["belgem.docx"],
+        pdfFileName=pdf_file_name,
+    )
+    return PlanSkeleton(steps=[step], dateSource=DateSource.CREATED_AT, sortOrder=SortOrder.ASCENDING)
+
+
 def _zip_create_plan(zipped_file_name: str) -> PlanSkeleton:
     step = PlanStep(
         order=0,

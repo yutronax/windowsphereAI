@@ -1,5 +1,42 @@
 # AI_DEVLOG.md — windows-ai-files
 
+## Word→PDF dönüşümü (Saga #339, epic #29) — LibreOffice kuruldu, ilk subprocess entegrasyonu, koordinatörün kendi çelişkisi red-team'de yakalandı
+
+**LibreOffice kurulana kadar bekletilen görev (Saga #327'nin kapsam dışı
+bıraktığı yarısı) aktif hale getirildi.** 2026-08-20'de `winget` ile
+LibreOffice kuruldu, gerçek bir `--headless --convert-to pdf` dönüşümü
+doğrulandı (ilk `soffice --version` denemesi ~30sn takıldı, muhtemelen
+ilk-çalıştırma profil oluşturma gecikmesi — `--headless --norestore`
+bayraklarıyla ikinci deneme sorunsuz çalıştı).
+
+**Bu, projenin backend'inde İLK subprocess/dış-ikili çağrısı** —
+taklit edilecek mevcut bir modül yoktu (grep ile doğrulandı). LibreOffice'in
+çıktı dosya adını komut satırından değiştirilemeyecek şekilde HER ZAMAN
+`source.stem+".pdf"` üretmesi, geçici-dizin+atomik-rename deseniyle
+çözüldü — bu tasarım aynı zamanda Saga #329'un "her zaman yeni dosyaya
+yaz" ilkesiyle yapısal olarak "eski/bayat PDF sessizce üzerine yazılır"
+riskini de ortadan kaldırdı.
+
+**Koordinatörün kendi ATDD'siyle kendi plan/uygulama talimatı çelişti —
+red-team commit öncesi yakaladı.** ATDD aşamasında Assumptions bölümüne
+açıkça "sabit Windows yoluna hardcode edilmemeli" yazılmıştı, ama plan/
+implementasyon talimatında (subagent'a verilen prompt'ta) yanlışlıkla
+`shutil.which` bulamazsa sabit bir Windows yoluna (`C:\Program
+Files\LibreOffice\program\soffice.exe`) fallback yapılması istenmişti.
+Bağımsız red-team turu bu çelişkiyi buldu, fallback kaldırıldı. Ayrıca
+Critical öncelikli iki AC'nin (60sn timeout, tazelik-doğrulama başarısız)
+hiçbir doğrudan test coverage'ı olmadığı (sadece kod okunarak "PASS"
+denmişti) bulundu — `subprocess.run` monkeypatch'lenerek 2 yeni test
+eklendi, saniyeler içinde çalışıyor, flaky risk yok.
+
+**Ders:** ATDD'yi yazan ile plan/implementasyon talimatını veren aynı
+kişi (koordinatör) olsa bile, bu ikisinin birbiriyle tutarlı kalması
+garanti değil — bağımsız red-team turu, sadece subagent'ın kodunu değil,
+koordinatörün KENDİ talimatlarının önceki kararlarla tutarlılığını da
+denetleyen bir katman olarak işlev gördü.
+
+8/8 WORD_TO_PDF testi (gerçek soffice ile), 548/5 tüm backend suite yeşil.
+
 ## Tauri v2 kabuğu + plugin-fs entegrasyonu (Saga #279, epic #23) — RELEASE-BLOCKER kapatıldı, alt ajan yetkisiz commit attı, aşırı geniş fs izni bulundu
 
 **Projenin "masaüstü uygulaması" olması gerekirken hiç Tauri kabuğu
