@@ -596,3 +596,32 @@ describe('ChatScreen — Geçmişi Temizle (Clear History)', () => {
     }
   });
 });
+
+describe('ChatScreen "Geçmiş" toggle (gecmis-transaction-listesi-ui)', () => {
+  it('shows the history toggle button next to the search/clear-history buttons when a sessionId is given (AC1)', () => {
+    render(<ChatScreen sessionId="s1" />);
+
+    expect(screen.getByTestId('chat-history-toggle-button')).toHaveTextContent('Geçmiş');
+  });
+
+  it('opens the HistoryPanel on click and toggles its label (AC1)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
+    try {
+      render(<ChatScreen sessionId="s1" />);
+
+      expect(screen.queryByTestId('history-panel')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('chat-history-toggle-button'));
+
+      expect(screen.getByTestId('history-panel')).toBeInTheDocument();
+      expect(screen.getByTestId('chat-history-toggle-button')).toHaveTextContent('Geçmişi kapat');
+
+      fireEvent.click(screen.getByTestId('chat-history-toggle-button'));
+
+      expect(screen.queryByTestId('history-panel')).not.toBeInTheDocument();
+      expect(screen.getByTestId('chat-history-toggle-button')).toHaveTextContent('Geçmiş');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

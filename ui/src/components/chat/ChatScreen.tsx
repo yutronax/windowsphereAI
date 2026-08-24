@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type UIEvent } from 'r
 import PlanCard, { type Plan } from './PlanCard';
 import ResultCard, { type TransactionResult } from './ResultCard';
 import SearchPanel from '../search/SearchPanel';
+import HistoryPanel from './HistoryPanel';
 import { BACKEND_ORIGIN } from '../../lib/backendHealth';
 
 export type ChatMessage = {
@@ -73,6 +74,10 @@ export default function ChatScreen({
   const [staleMessageIds, setStaleMessageIds] = useState<Set<string>>(new Set());
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [isSearchPanelOpen, setIsSearchPanelOpen] = useState(false);
+  // gecmis-transaction-listesi-ui (epic #28): isSearchPanelOpen ile AYNI
+  // desen - HistoryPanel'in kendisi sessionId'den bagimsiz, bu yuzden
+  // toggle butonu SearchPanel'inkiyle ayni satirda ama ayri bir state.
+  const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
   const [clearHistoryStatus, setClearHistoryStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const nextMessageIdRef = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -424,6 +429,14 @@ export default function ChatScreen({
           >
             Geçmişi Temizle
           </button>
+          <button
+            type="button"
+            className="chat-history-toggle-button"
+            data-testid="chat-history-toggle-button"
+            onClick={() => setIsHistoryPanelOpen((current) => !current)}
+          >
+            {isHistoryPanelOpen ? 'Geçmişi kapat' : 'Geçmiş'}
+          </button>
         </div>
       )}
       {clearHistoryStatus === 'success' && (
@@ -447,6 +460,7 @@ export default function ChatScreen({
         </div>
       )}
       {isSearchPanelOpen && sessionId && <SearchPanel sessionId={sessionId} />}
+      {isHistoryPanelOpen && <HistoryPanel />}
       <div className="chat-input-area">
         <textarea
           ref={textareaRef}
