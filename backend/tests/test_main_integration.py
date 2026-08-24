@@ -2257,3 +2257,41 @@ def test_clear_history_returns_500_when_config_write_fails(monkeypatch, tmp_path
 
     # Transaction HİÇBİR şekilde etkilenmemiş olmalı (eşik kaydedilmediği için)
     assert response.status_code == 200
+
+
+def test_db_session_factory_cache_is_reset_before_this_test_runs():
+    """Saga #318 red-team bulgusu regresyonu: `backend.main._db_session_factory`
+    process-global cache'i, `conftest.py`'deki autouse fixture tarafından HER
+    testten önce `None`'a resetlenmeli. Test sırası ne olursa olsun (başka bir
+    test daha önce bir factory oluşturmuş olsa bile), bu test kendi başına
+    çalıştırıldığında cache'in taze/boş başladığını doğrular — fixture
+    olmadan bu invaryant garanti edilmez (başka bir test önce çalışıp cache'i
+    doldurabilir)."""
+    import backend.main as main_module
+
+    assert main_module._db_session_factory is None
+
+
+def test_db_session_factory_cache_does_not_leak_across_tests_with_different_appdata(monkeypatch, tmp_path):
+    """Saga #318 red-team bulgusu regresyonu: `get_db_session`'ı override
+    etmeyen bir test, `_db_session_factory` process-global cache'i başka bir
+    testin (farklı `APPDATA`'lı) engine'ini DEĞİL, KENDİ `APPDATA`'sındaki
+    taze bir engine'i kullanmalı. Bu testin KENDİSİ önceki bir çalıştırmada
+    (bkz. yukarıdaki test) bir engine oluşturmuş olabilir — `conftest.py`'deki
+    autouse reset fixture'ı bu testten önce cache'i sıfırlamamış olsaydı,
+    aşağıdaki `clear-history` çağrısı yanlış (eski) APPDATA'daki dosyaya
+    yazardı."""
+    import backend.main as main_module
+
+    assert main_module._db_session_factory is None
+
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    config_dir = tmp_path / "windows-ai-files"
+    config_dir.mkdir()
+
+    response = client.post("/api/transactions/clear-history", json={})
+
+    assert response.status_code == 200
+    # Bu tmp_path'e ait config.json'a yazıldığını doğrula — taze bir engine
+    # kullanılmasaydı (stale cache), bu dosya YANLIŞ APPDATA'ya yazılırdı.
+    assert (config_dir / "config.json").exists()
