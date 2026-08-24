@@ -32,7 +32,9 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
     const folder = await open({ directory: true, multiple: false });
     if (typeof folder !== 'string') return;
 
-    const normalizedPath = folder.replace(/[\\/]+$/, '');
+    const normalizedPath = /^[A-Za-z]:[\\/]+$/.test(folder)
+      ? `${folder[0]}:\\`
+      : folder.replace(/[\\/]+$/, '');
     latestRequestedPathRef.current = normalizedPath;
     setSelectedFolder(normalizedPath);
     setIsFolderInvalid(false);

@@ -382,6 +382,39 @@ describe('invalid folder rejection (gecersiz-klasor-reddi)', () => {
     expect(invokeTauriCommand).toHaveBeenCalledWith('plugin:fs|exists', { path: 'C:\\Users\\Yusuf\\Belgeler' });
   });
 
+  it('keeps a drive root as C:\\ instead of collapsing it to C: (drive-relative) (klasor-path-kok-surucu-normalize AC-1)', async () => {
+    invokeTauriCommand.mockResolvedValue(true);
+    openFolderDialog.mockResolvedValue('C:\\');
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+
+    expect(await screen.findByTestId('selected-folder-path')).toHaveTextContent('C:\\');
+    expect(invokeTauriCommand).toHaveBeenCalledWith('plugin:fs|exists', { path: 'C:\\' });
+  });
+
+  it('normalizes a forward-slash drive root to the canonical C:\\ form (klasor-path-kok-surucu-normalize AC-2)', async () => {
+    invokeTauriCommand.mockResolvedValue(true);
+    openFolderDialog.mockResolvedValue('C:/');
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+
+    expect(await screen.findByTestId('selected-folder-path')).toHaveTextContent('C:\\');
+    expect(invokeTauriCommand).toHaveBeenCalledWith('plugin:fs|exists', { path: 'C:\\' });
+  });
+
+  it('collapses multiple trailing backslashes on a drive root to a single C:\\ (klasor-path-kok-surucu-normalize AC-4)', async () => {
+    invokeTauriCommand.mockResolvedValue(true);
+    openFolderDialog.mockResolvedValue('C:\\\\\\\\');
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+
+    expect(await screen.findByTestId('selected-folder-path')).toHaveTextContent('C:\\');
+    expect(invokeTauriCommand).toHaveBeenCalledWith('plugin:fs|exists', { path: 'C:\\' });
+  });
+
   it('re-shows the error on each consecutive inaccessible folder selection (AC-5)', async () => {
     invokeTauriCommand.mockResolvedValue(false);
     openFolderDialog.mockResolvedValue('C:\\Geçersiz1');
