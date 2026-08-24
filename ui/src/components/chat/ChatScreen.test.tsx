@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import ChatScreen from './ChatScreen';
@@ -462,5 +462,137 @@ describe('ChatScreen (dikey-mesaj-akisi / Saga #259)', () => {
 
     const bubble = screen.getByTestId('chat-message-bubble-p1');
     expect(bubble).not.toContainElement(screen.getByTestId('plan-card'));
+  });
+});
+
+describe('ChatScreen — Geçmişi Temizle (Clear History)', () => {
+  it('renders the clear history button when sessionId is provided (AC-1)', () => {
+    render(<ChatScreen sessionId="session-123" />);
+
+    expect(screen.getByTestId('chat-clear-history-button')).toBeInTheDocument();
+  });
+
+  it('does not render the clear history button when sessionId is not provided (AC-1)', () => {
+    render(<ChatScreen />);
+
+    expect(screen.queryByTestId('chat-clear-history-button')).not.toBeInTheDocument();
+  });
+
+  it('calls POST /api/transactions/clear-history when the clear history button is clicked (AC-1)', () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ clearedAt: '2026-08-20T12:34:56+00:00' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      render(<ChatScreen sessionId="session-123" />);
+
+      fireEvent.click(screen.getByTestId('chat-clear-history-button'));
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/transactions/clear-history'),
+        expect.objectContaining({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('shows success message when clear history succeeds (AC-1)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ clearedAt: '2026-08-20T12:34:56+00:00' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      render(<ChatScreen sessionId="session-123" />);
+
+      fireEvent.click(screen.getByTestId('chat-clear-history-button'));
+
+      // Success mesajı görünür
+      await waitFor(() => {
+        expect(screen.getByTestId('chat-clear-history-success-message')).toBeInTheDocument();
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('shows error message when clear history fails (AC-2)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ detail: 'Geçmiş temizlenemedi' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      render(<ChatScreen sessionId="session-123" />);
+
+      fireEvent.click(screen.getByTestId('chat-clear-history-button'));
+
+      // Error mesajı görünür ve "Geçmiş temizlenemedi" metnini içerir
+      await waitFor(() => {
+        const errorMsg = screen.getByTestId('chat-clear-history-error-message');
+        expect(errorMsg).toBeInTheDocument();
+        expect(errorMsg.textContent).toContain('Geçmiş temizlenemedi');
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('shows error message when fetch throws an exception (AC-2)', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error('Network error'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      render(<ChatScreen sessionId="session-123" />);
+
+      fireEvent.click(screen.getByTestId('chat-clear-history-button'));
+
+      // Error mesajı gösterilir
+      await waitFor(() => {
+        expect(screen.getByTestId('chat-clear-history-error-message')).toBeInTheDocument();
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('clears the success message when a new message is sent (AC-3)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ clearedAt: '2026-08-20T12:34:56+00:00' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      render(<ChatScreen sessionId="session-123" />);
+
+      // Clear history'yi çağır
+      fireEvent.click(screen.getByTestId('chat-clear-history-button'));
+
+      // Success mesajı gösterilmeli
+      await waitFor(() => {
+        expect(screen.getByTestId('chat-clear-history-success-message')).toBeInTheDocument();
+      });
+
+      // Yeni mesaj gönder
+      const textarea = screen.getByTestId('chat-input-textarea');
+      fireEvent.change(textarea, { target: { value: 'yeni mesaj' } });
+      fireEvent.click(screen.getByText('Gönder'));
+
+      // Success mesajı temizlenmiş olmalı
+      expect(screen.queryByTestId('chat-clear-history-success-message')).not.toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

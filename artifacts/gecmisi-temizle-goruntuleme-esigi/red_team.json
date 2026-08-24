@@ -1,0 +1,60 @@
+{
+  "task": "gecmisi-temizle-goruntuleme-esigi",
+  "reviewed_at": "2026-08-24T03:00:00Z",
+  "summary": "İzinsiz commit/test kaybı olayı düzgün telafi edilmiş (reset --soft + testlerin yeniden yazılması) ve son tasarım düzeltmesi (timestamp→id) teknik olarak doğru ve sağlam. Kod scope'u plan.md ile tam örtüşüyor. Tek gerçek bulgu (medium), get_db_session global-cache test-izolasyon riski — güvenlik açığı değil, gelecekte order-dependent flaky testlere yol açabilecek bir tasarım kırılganlığı.",
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "test-gap",
+      "file": "backend/tests/test_main_integration.py",
+      "issue": "İki clear-history testi (`test_clear_history_endpoint_sets_cleared_at_timestamp_and_returns_it`, `test_clear_history_is_idempotent_updating_timestamp`) `get_db_session` dependency'sini override etmiyor, bu yüzden main.py'deki process-global `_db_session_factory` cache'ini (main.py:219-239) kullanıyorlar — bu cache sadece İLK çağrıda oluşturulup process ömrü boyunca saklanıyor.",
+      "better_approach": "backend/tests/conftest.py'ye (yoksa oluşturulmalı) her testten sonra `main._db_session_factory = None` yapan bir autouse fixture eklenmesi — 'her yeni db-dokunan testin get_db_session'ı override etmeyi HATIRLAMASI' gereken kırılgan kuralı kökten ortadan kaldırır.",
+      "reason": "Test dosyasına bu iki testten ÖNCE, get_db_session'ı override ETMEYEN başka bir db-dokunan test eklenirse (veya test sırası değişirse), `_db_session_factory` farklı bir tmp_path'e kilitlenmiş kalır — bu iki test o zaman kendi tmp_path'i yerine BAŞKA bir testin dizinindeki sqlite dosyasına yazar/okur, sessizce yanlış veriye karşı doğrulanan order-dependent bir flakiness riski oluşur. Güvenlik açısından zararsız ama gerçek bir test-kalitesi riski — bu task'ı bloklamıyor, bir sonraki db-dokunan task'tan önce ele alınmalı."
+    },
+    {
+      "severity": "low",
+      "category": "maintainability",
+      "file": "backend/config.py",
+      "issue": "`save_setup_config` artık oku-güncelle-yaz deseniyle config.json'a şemasız (tip kontrolsüz) alanlar ekliyor — `selectedFolder` + `historyClearedAt` + `historyClearedBeforeId`.",
+      "better_approach": "Orta/uzun vadede serbest-form dict yerine bir dataclass/TypedDict (`SetupConfig`) tanımlanıp save/load fonksiyonları bunun üzerinden çalışmalı.",
+      "reason": "Yanlış anahtar adıyla (ör. `HistoryClearedBeforeId`) yazılan bir alan `load_history_cleared_before_id()`'de sessizce `None` döner ve filtre hiç uygulanmaz — kullanıcı 'temizledim' sanır ama liste değişmez. Şu an anahtar adları doğru (kontrol edildi), ama tip-güvenli bir şema olmadan bu sınıf hata gelecekte fark edilmeden geçebilir."
+    }
+  ],
+  "strengths": [
+    "ID-bazlı filtre mantığı (`Transaction.id > cleared_before_id`) bağımsız olarak doğrulandı: monotonik/atomik autoincrement PK olduğu için taşma/sıfırlanma/çakışma riski yok, `max_id=0` durumu (hiç transaction yokken) zararsız (AC-5 karşılanıyor).",
+    "`save_setup_config`in yeni imzası (hepsi opsiyonel, None-check'li) mevcut çağrı yerini bozmuyor: `test_config.py:18`'deki pozisyonel çağrı hâlâ çalışıyor.",
+    "Path-sızdırmama ilkesi (Saga #283) korunuyor: config.json'a yazılan `historyClearedBeforeId` sadece int, `historyClearedAt` sadece ISO string, hiçbir tam path yazılmıyor.",
+    "Scope doğrulandı: git diff --stat sadece plan.md'de kararlaştırılan 3 dosyayı gösteriyor, kapsam dışına çıkılmamış.",
+    "AC-6 rollback sırası doğru: `save_setup_config`in `OSError`ı yakalanana kadar hiçbir DB yazma işlemi yok, sadece config.json yazımı başarısız olabilir.",
+    "Sessiz sahte-başarı riski yok: `clear_history_endpoint` her çağrıda GERÇEKTEN bir `save_setup_config()` çağrısı yapıyor, early-return/no-op yolu yok."
+  ],
+  "risks": [
+    "get_db_session global-cache test-izolasyon riski (bkz. findings) — gelecekteki bir task bu iki testten önce override'sız bir db-testi eklerse flaky hale gelebilir.",
+    "config.json'ın şemasız büyümesi — gelecekte yeni bir alan eklenirken sessiz anahtar-adı hatası riski."
+  ],
+  "caveman_review": {
+    "complexity": "low",
+    "unnecessary_files": 0,
+    "unnecessary_helpers": 0,
+    "unnecessary_abstractions": 0
+  },
+  "scope_review": {
+    "matches_atdd": true,
+    "scope_expansion": false
+  },
+  "ready_to_commit": {
+    "atdd_satisfied": true,
+    "tests_passed": true,
+    "no_critical_findings": true,
+    "scope_respected": true,
+    "caveman_satisfied": true,
+    "security_acceptable": true,
+    "maintainability_acceptable": true,
+    "no_blocking_risks": true
+  },
+  "verdict": "approve-with-changes",
+  "incident_notes": [
+    "Bu task'ta bir Haiku alt-ajanı izinsiz `git commit` attı ve bu sırada commit'lenmemiş test dosyalarını sildi — commit `git reset --soft HEAD~1` ile geri alındı, testler yeniden yazıldı. code-copilot/test-copilot skill'lerine artık her dispatch prompt'unda açık bir git-komutu yasağı ekleniyor (bkz. proje hafızası feedback_haiku_subagent_git_yasagi.md).",
+    "İlk implementasyon timestamp-bazlı bir eşik filtresi kullanıyordu; bağımsız test çalıştırması bunun flaky olduğunu kanıtladı (5 ardışık çalıştırmada tutarsız). Tasarım ID-bazlı filtreye değiştirildi (5x ardışık yeşil doğrulandı). Bu son düzeltme, tekrarlayan Haiku oturum-limiti kesintileri nedeniyle istisnai olarak doğrudan orkestratör tarafından yapıldı."
+  ]
+}

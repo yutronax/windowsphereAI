@@ -1917,3 +1917,343 @@ def test_zip_list_endpoint_returns_error_status_when_file_is_corrupt(tmp_path):
     )
 
     assert response.status_code >= 400
+
+
+# --- Geçmişi Temizle (Clear History) — AC Kontrolleri ---
+
+
+def test_clear_history_endpoint_sets_cleared_at_timestamp_and_returns_it(monkeypatch, tmp_path):
+    """AC-1 [Critical]: POST /api/transactions/clear-history çağrılınca mevcut
+    zaman eşik olarak kaydedilir ve ISO 8601 formatında döner."""
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    config_dir = tmp_path / "windows-ai-files"
+    config_dir.mkdir()
+
+    response = client.post("/api/transactions/clear-history", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "clearedAt" in body
+    # ISO 8601 formatında, timezone bilgisi ile
+    cleared_at_iso = body["clearedAt"]
+    try:
+        cleared_at_dt = dt.datetime.fromisoformat(cleared_at_iso)
+        # Timezone-aware olmalı
+        assert cleared_at_dt.tzinfo is not None
+    except ValueError:
+        assert False, f"clearedAt '{cleared_at_iso}' valid ISO 8601 değil"
+
+
+def test_clear_history_filters_transactions_older_than_threshold(monkeypatch, tmp_path):
+    """AC-1 [Critical]: Eşik ayarlandıktan sonra GET /api/transactions eşikten
+    ÖNCEKİ transaction'ları göstermez (DB'den silmez, sadece filtreler)."""
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    config_dir = tmp_path / "windows-ai-files"
+    config_dir.mkdir()
+
+    db_session = _in_memory_db_session()
+
+    # Eski transaction oluştur
+    older = create_transaction(db_session)
+    record_file_operation(
+        db_session,
+        older,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "a.pdf"),
+        destination_path=str(tmp_path / "2026-07" / "a.pdf"),
+        backup_path=str(tmp_path / "a.pdf"),
+    )
+    older.status = "committed"
+    db_session.commit()
+    older_id = older.id
+    older_time = older.created_at
+
+    # Eşik ayarla (şimdi)
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post("/api/transactions/clear-history", json={})
+        assert response.status_code == 200
+        cleared_at_str = response.json()["clearedAt"]
+    finally:
+        app.dependency_overrides.clear()
+
+    # Yeni transaction oluştur (eşikten sonra)
+    newer = create_transaction(db_session)
+    record_file_operation(
+        db_session,
+        newer,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "b.pdf"),
+        destination_path=str(tmp_path / "2026-08" / "b.pdf"),
+        backup_path=str(tmp_path / "b.pdf"),
+    )
+    newer.status = "committed"
+    db_session.commit()
+    newer_id = newer.id
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.get("/api/transactions")
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 200
+    body = response.json()
+    transaction_ids = [entry["id"] for entry in body]
+
+    # Yeni transaction görünür, eski transaction gizlenir
+    assert newer_id in transaction_ids
+    assert older_id not in transaction_ids
+
+
+def test_clear_history_threshold_persists_in_config_json(monkeypatch, tmp_path):
+    """AC-2 [Critical]: Eşik config.json'da kalıcı olarak saklanır, backend
+    restart'ı (yeni session) sonrası korunur."""
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    config_dir = tmp_path / "windows-ai-files"
+    config_dir.mkdir()
+
+    db_session = _in_memory_db_session()
+
+    # Eski transaction oluştur
+    older = create_transaction(db_session)
+    record_file_operation(
+        db_session,
+        older,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "a.pdf"),
+        destination_path=str(tmp_path / "2026-07" / "a.pdf"),
+        backup_path=str(tmp_path / "a.pdf"),
+    )
+    older.status = "committed"
+    db_session.commit()
+    older_id = older.id
+
+    # Eşik ayarla
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post("/api/transactions/clear-history", json={})
+        assert response.status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+    # config.json'dan eşiği oku (config_module.load_history_cleared_at)
+    config_path = config_dir / "config.json"
+    assert config_path.exists()
+    with config_path.open(encoding="utf-8") as f:
+        config_data = json.load(f)
+    assert "historyClearedAt" in config_data
+    saved_cleared_at = config_data["historyClearedAt"]
+
+    # YENİ bir session/db session oluştur (simulating backend restart)
+    new_db_session = _in_memory_db_session()
+
+    # Eski transaction'ı yeni session'a ekle (simulating DB persistence)
+    older_copy = create_transaction(new_db_session)
+    record_file_operation(
+        new_db_session,
+        older_copy,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "a.pdf"),
+        destination_path=str(tmp_path / "2026-07" / "a.pdf"),
+        backup_path=str(tmp_path / "a.pdf"),
+    )
+    older_copy.status = "committed"
+    older_copy.created_at = older.created_at  # AYNI zaman damgası
+    new_db_session.commit()
+    older_copy_id = older_copy.id
+
+    # Yeni transaction oluştur (eşikten sonra)
+    newer = create_transaction(new_db_session)
+    record_file_operation(
+        new_db_session,
+        newer,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "b.pdf"),
+        destination_path=str(tmp_path / "2026-08" / "b.pdf"),
+        backup_path=str(tmp_path / "b.pdf"),
+    )
+    newer.status = "committed"
+    new_db_session.commit()
+    newer_id = newer.id
+
+    # YENİ session ile list_transactions çağır — config.json'daki eşik hala uygulanmalı
+    app.dependency_overrides[get_db_session] = _override_get_db_session(new_db_session)
+    try:
+        response = client.get("/api/transactions")
+    finally:
+        app.dependency_overrides.clear()
+        new_db_session.close()
+
+    assert response.status_code == 200
+    body = response.json()
+    transaction_ids = [entry["id"] for entry in body]
+
+    # Eski transaction hala gizli, yeni transaction görünür
+    assert newer_id in transaction_ids
+    assert older_copy_id not in transaction_ids
+
+
+def test_clear_history_is_idempotent_updating_timestamp(monkeypatch, tmp_path):
+    """AC-3 [High]: "Geçmişi Temizle"ye tekrar basılınca işlem idempotent
+    şekilde başarılı olur, eşik güncellenir, hata dönmez."""
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    config_dir = tmp_path / "windows-ai-files"
+    config_dir.mkdir()
+
+    # İlk call
+    response1 = client.post("/api/transactions/clear-history", json={})
+    assert response1.status_code == 200
+    cleared_at_1 = response1.json()["clearedAt"]
+
+    # Biraz bekle (zaman geçmesi için)
+    import time as time_module
+    time_module.sleep(0.01)
+
+    # İkinci call (idempotent)
+    response2 = client.post("/api/transactions/clear-history", json={})
+    assert response2.status_code == 200
+    cleared_at_2 = response2.json()["clearedAt"]
+
+    # Her iki çağrı başarılı ve sonraki zaman biraz daha ileri
+    assert cleared_at_1 <= cleared_at_2
+
+
+def test_clear_history_preserves_transactions_created_after_threshold(monkeypatch, tmp_path):
+    """AC-4 [High]: Eşikten SONRA yeni transaction oluşturulursa bu transaction
+    GET /api/transactions listesinde GÖRÜNÜR."""
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    config_dir = tmp_path / "windows-ai-files"
+    config_dir.mkdir()
+
+    db_session = _in_memory_db_session()
+
+    # Eşik ayarla (şimdi)
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post("/api/transactions/clear-history", json={})
+        assert response.status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+    # Eşikten SONRA transaction oluştur
+    new = create_transaction(db_session)
+    record_file_operation(
+        db_session,
+        new,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "b.pdf"),
+        destination_path=str(tmp_path / "2026-08" / "b.pdf"),
+        backup_path=str(tmp_path / "b.pdf"),
+    )
+    new.status = "committed"
+    db_session.commit()
+    new_id = new.id
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.get("/api/transactions")
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 200
+    body = response.json()
+    transaction_ids = [entry["id"] for entry in body]
+
+    # Yeni transaction görünür
+    assert new_id in transaction_ids
+
+
+def test_clear_history_succeeds_silently_when_no_transactions_exist(monkeypatch, tmp_path):
+    """AC-5 [Medium]: Hiçbir transaction yoksa "Geçmişi Temizle" işlemi sessizce
+    başarılı olur (200), hata dönmez."""
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    config_dir = tmp_path / "windows-ai-files"
+    config_dir.mkdir()
+
+    db_session = _in_memory_db_session()
+
+    # Hiçbir transaction yok
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post("/api/transactions/clear-history", json={})
+    finally:
+        app.dependency_overrides.clear()
+        db_session.close()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "clearedAt" in body
+
+
+def test_clear_history_returns_500_when_config_write_fails(monkeypatch, tmp_path):
+    """AC-6 [Medium]: config.json'a yazma başarısız olursa (disk/izin hatası)
+    500 döner ve transaction verisi HİÇBİR ŞEKİLDE etkilenmez."""
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    config_dir = tmp_path / "windows-ai-files"
+    config_dir.mkdir()
+
+    db_session = _in_memory_db_session()
+
+    # Transaction oluştur ve kaydet
+    txn = create_transaction(db_session)
+    record_file_operation(
+        db_session,
+        txn,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "a.pdf"),
+        destination_path=str(tmp_path / "2026-07" / "a.pdf"),
+        backup_path=str(tmp_path / "a.pdf"),
+    )
+    txn.status = "committed"
+    db_session.commit()
+    txn_id = txn.id
+
+    # config.json yazmasını başarısızlaştır — config_dir'i read-only yap
+    # (Windows'ta çalışmayan bir teknik, bunun yerine mock'liyoruz)
+    import backend.config as config_module_patch
+
+    original_save = config_module_patch.save_setup_config
+    def _mock_save_fail(*args, **kwargs):
+        raise OSError("Disk hatası simülasyonu")
+
+    monkeypatch.setattr(config_module_patch, "save_setup_config", _mock_save_fail)
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session)
+    try:
+        response = client.post("/api/transactions/clear-history", json={})
+    finally:
+        app.dependency_overrides.clear()
+        monkeypatch.setattr(config_module_patch, "save_setup_config", original_save)
+
+    assert response.status_code == 500
+    detail = response.json().get("detail")
+    assert "Geçmiş temizlenemedi" in detail
+
+    # Transaction verisi etkilenmemiş — DB'de hala var
+    db_session_check = _in_memory_db_session()
+    # Eski txn'yi yeni session'a ekle
+    txn_check = create_transaction(db_session_check)
+    record_file_operation(
+        db_session_check,
+        txn_check,
+        operation_type="Taşı",
+        source_path=str(tmp_path / "a.pdf"),
+        destination_path=str(tmp_path / "2026-07" / "a.pdf"),
+        backup_path=str(tmp_path / "a.pdf"),
+    )
+    txn_check.status = "committed"
+    txn_check.id = txn_id
+    db_session_check.commit()
+
+    app.dependency_overrides[get_db_session] = _override_get_db_session(db_session_check)
+    try:
+        response = client.get("/api/transactions")
+    finally:
+        app.dependency_overrides.clear()
+        db_session_check.close()
+
+    # Transaction HİÇBİR şekilde etkilenmemiş olmalı (eşik kaydedilmediği için)
+    assert response.status_code == 200

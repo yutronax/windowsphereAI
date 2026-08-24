@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type UIEvent } from 'r
 import PlanCard, { type Plan } from './PlanCard';
 import ResultCard, { type TransactionResult } from './ResultCard';
 import SearchPanel from '../search/SearchPanel';
+import { BACKEND_ORIGIN } from '../../lib/backendHealth';
 
 export type ChatMessage = {
   id: string;
@@ -72,6 +73,7 @@ export default function ChatScreen({
   const [staleMessageIds, setStaleMessageIds] = useState<Set<string>>(new Set());
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [isSearchPanelOpen, setIsSearchPanelOpen] = useState(false);
+  const [clearHistoryStatus, setClearHistoryStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const nextMessageIdRef = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
@@ -115,12 +117,31 @@ export default function ChatScreen({
     textareaRef.current?.focus();
   }
 
+  async function handleClearHistory() {
+    setClearHistoryStatus('loading');
+    try {
+      const response = await fetch(`${BACKEND_ORIGIN}/api/transactions/clear-history`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      if (response.ok) {
+        setClearHistoryStatus('success');
+      } else {
+        setClearHistoryStatus('error');
+      }
+    } catch (error) {
+      setClearHistoryStatus('error');
+    }
+  }
+
   function sendDraft() {
     const trimmed = draft.trim();
     if (trimmed === '') return;
     const message: ChatMessage = { id: `msg-${nextMessageIdRef.current++}`, role: 'user', text: trimmed };
     updateMessages((current) => [...current, message]);
     setDraft('');
+    setClearHistoryStatus('idle');  // Yeni mesaj gönderildiğinde clear history mesajını temizle
     if (editingPlanMessageId !== null) {
       setStaleMessageIds((current) => new Set(current).add(editingPlanMessageId));
       setEditingPlanMessageId(null);
@@ -279,6 +300,39 @@ export default function ChatScreen({
           font-size: 13px;
           cursor: pointer;
         }
+        .chat-clear-history-button {
+          align-self: flex-start;
+          margin: 4px 8px 0 0;
+          height: 32px;
+          padding: 0 14px;
+          border-radius: 8px;
+          background-color: #111827;
+          color: #fff;
+          border: none;
+          font-size: 13px;
+          cursor: pointer;
+        }
+        .chat-clear-history-button:disabled {
+          background-color: #6B7280;
+          cursor: not-allowed;
+        }
+        .chat-clear-history-message {
+          align-self: flex-start;
+          margin: 4px 16px 0;
+          padding: 8px 12px;
+          border-radius: 8px;
+          font-size: 13px;
+        }
+        .chat-clear-history-success-message {
+          background-color: #D1FAE5;
+          color: #065F46;
+          border: 1px solid #A7F3D0;
+        }
+        .chat-clear-history-error-message {
+          background-color: #FEE2E2;
+          color: #991B1B;
+          border: 1px solid #FECACA;
+        }
       `}</style>
       <ul
         ref={listRef}
@@ -352,14 +406,45 @@ export default function ChatScreen({
         </div>
       )}
       {sessionId && (
-        <button
-          type="button"
-          className="chat-search-toggle-button"
-          data-testid="chat-search-toggle-button"
-          onClick={() => setIsSearchPanelOpen((current) => !current)}
+        <div style={{ display: 'flex', gap: '0', alignItems: 'flex-start' }}>
+          <button
+            type="button"
+            className="chat-search-toggle-button"
+            data-testid="chat-search-toggle-button"
+            onClick={() => setIsSearchPanelOpen((current) => !current)}
+          >
+            {isSearchPanelOpen ? 'Aramayı kapat' : 'Dosya ara'}
+          </button>
+          <button
+            type="button"
+            className="chat-clear-history-button"
+            data-testid="chat-clear-history-button"
+            onClick={handleClearHistory}
+            disabled={clearHistoryStatus === 'loading'}
+          >
+            Geçmişi Temizle
+          </button>
+        </div>
+      )}
+      {clearHistoryStatus === 'success' && (
+        <div
+          className="chat-clear-history-message chat-clear-history-success-message"
+          data-testid="chat-clear-history-success-message"
+          role="status"
+          aria-live="polite"
         >
-          {isSearchPanelOpen ? 'Aramayı kapat' : 'Dosya ara'}
-        </button>
+          Geçmiş başarıyla temizlendi.
+        </div>
+      )}
+      {clearHistoryStatus === 'error' && (
+        <div
+          className="chat-clear-history-message chat-clear-history-error-message"
+          data-testid="chat-clear-history-error-message"
+          role="alert"
+          aria-live="assertive"
+        >
+          Geçmiş temizlenemedi
+        </div>
       )}
       {isSearchPanelOpen && sessionId && <SearchPanel sessionId={sessionId} />}
       <div className="chat-input-area">

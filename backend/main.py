@@ -11,10 +11,11 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session as DbSession, sessionmaker
 
-from backend.config import load_setup_config
+from backend import config as config_module
+from backend.config import load_setup_config, load_history_cleared_before_id
 from backend.db import create_db_engine, create_session_factory
 from backend.db_models import Transaction
 from backend.file_search import search_files
@@ -325,10 +326,49 @@ def list_transactions(db: DbSession = Depends(get_db_session)) -> list[Transacti
     # çözünürlüğü), bu da eşit zaman damgalarında sıralamayı belirsiz
     # bırakır. `id.desc()` ikincil sıralama anahtarı, eşitlik durumunda bile
     # en son OLUŞTURULANIN (en yüksek id) önce gelmesini GARANTİ eder.
-    transactions = db.scalars(
-        select(Transaction).order_by(Transaction.created_at.desc(), Transaction.id.desc())
-    ).all()
+    query = select(Transaction).order_by(Transaction.created_at.desc(), Transaction.id.desc())
+
+    # "Geçmişi Temizle" eşiğini uygula — eşikten ÖNCEKİ transaction'ları
+    # filtrele. Id-bazlı (created_at DEĞİL) — bkz. config.py::
+    # load_history_cleared_before_id docstring'i: saat çözünürlüğü/tie
+    # sorunlarından tamamen bağımsız, monotonik bir sınır.
+    cleared_before_id = load_history_cleared_before_id()
+    if cleared_before_id is not None:
+        query = query.where(Transaction.id > cleared_before_id)
+
+    transactions = db.scalars(query).all()
     return [_transaction_to_summary(transaction) for transaction in transactions]
+
+
+@app.post("/api/transactions/clear-history")
+def clear_history_endpoint(db: DbSession = Depends(get_db_session)) -> dict[str, str]:
+    """Geçmiş temizle — o ana kadar var olan transaction'ların id'sini eşik
+    olarak kaydet. GET /api/transactions bundan sonraki çağrılarda bu
+    eşikten ÖNCEKİ (id <= eşik) transaction'ları filtreler.
+
+    Id-bazlı filtre (created_at DEĞİL) BİLİNÇLİ bir tercih: canlı testte
+    `created_at` bazlı bir eşiğin (cömert bir epsilon ile bile) art arda
+    hızlı DB işlemlerinde flaky olduğu kanıtlandı (Windows'ta ardışık
+    `dt.datetime.utcnow()` çağrıları aynı mikrosaniyeyi döndürebiliyor).
+    Transaction id'leri flush anında atomik/monotonik arttığı için bu
+    sorunu tamamen ortadan kaldırıyor. `clearedAt` (ISO timestamp) hâlâ
+    döndürülüyor/saklanıyor ama SADECE gösterim amaçlı — filtrenin gerçek
+    kaynağı `historyClearedBeforeId`."""
+    cleared_at_str = dt.datetime.now(dt.timezone.utc).isoformat()
+    max_id = db.scalar(select(func.max(Transaction.id))) or 0
+
+    try:
+        config_module.save_setup_config(
+            history_cleared_at=cleared_at_str,
+            history_cleared_before_id=max_id,
+        )
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Geçmiş temizlenemedi",
+        ) from exc
+
+    return {"clearedAt": cleared_at_str}
 
 
 @app.post("/api/transactions/{transaction_id}/revert")
