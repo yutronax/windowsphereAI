@@ -26,6 +26,7 @@ from backend.models import (
     DetectPiiResponse,
     ExcelReadRequest,
     ExcelReadResponse,
+    HealthCheckResponse,
     OperationType,
     PlanRequest,
     PlanSkeleton,
@@ -64,7 +65,7 @@ from backend.plan_generation import (
     PlanGenerationError,
     generate_plan_skeleton,
 )
-from backend.security import PathWhitelistError, validate_plan_paths
+from backend.security import PathWhitelistError, is_path_allowed, validate_plan_paths
 
 logger = logging.getLogger(__name__)
 
@@ -184,11 +185,6 @@ app.add_middleware(
 )
 
 
-@app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
-
-
 @app.get("/api/config")
 def get_config() -> dict[str, str]:
     config = load_setup_config()
@@ -214,6 +210,47 @@ def get_llm_client() -> LLMClient:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="LLM API anahtarı yapılandırılmamış")
     base_url = os.environ.get("PLAN_LLM_BASE_URL")
     return OpenAICompatibleLLMClient(api_key=api_key, base_url=base_url)
+
+
+def get_llm_client_for_health() -> LLMClient | None:
+    """Health endpoint'i için LLM client — API key yoksa None döner (503 fırlatmaz)."""
+    api_key = os.environ.get("PLAN_LLM_API_KEY")
+    if not api_key:
+        return None
+    base_url = os.environ.get("PLAN_LLM_BASE_URL")
+    return OpenAICompatibleLLMClient(api_key=api_key, base_url=base_url)
+
+
+@app.get("/api/health")
+def health(
+    path: str | None = None,
+    client: LLMClient | None = Depends(get_llm_client_for_health),
+) -> HealthCheckResponse:
+    # LLM erişilebilirlik kontrolü
+    llm_reachable = False
+    if client is not None:
+        try:
+            llm_reachable = client.check_llm_health()
+        except Exception:
+            llm_reachable = False
+
+    # Path whitelist kontrolü (opsiyonel)
+    path_allowed: bool | None = None
+    if path is not None:
+        if path == "":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="path geçersiz")
+
+        try:
+            test_path = Path(path).resolve()
+        except (OSError, ValueError):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="path geçersiz")
+
+        config = load_setup_config()
+        if config is not None:
+            allowed_root = Path(config["selectedFolder"])
+            path_allowed = is_path_allowed(test_path, allowed_root)
+
+    return HealthCheckResponse(status="ok", llm_reachable=llm_reachable, path_allowed=path_allowed)
 
 
 _db_session_factory: sessionmaker[DbSession] | None = None

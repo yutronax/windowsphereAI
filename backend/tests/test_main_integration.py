@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from backend.db_models import Base, Transaction
 from backend.file_operations import create_transaction, record_file_operation
-from backend.main import app, get_db_session, get_llm_client
+from backend.main import app, get_db_session, get_llm_client, get_llm_client_for_health
 from backend.models import DateSource, OperationType, PdfFileMetadata, PlanSkeleton, PlanStep, SortOrder
 from backend.orchestrator import apply_plan
 
@@ -55,10 +55,18 @@ class _StubLLMClient:
 
 
 def test_health_endpoint_returns_ok():
-    response = client.get("/api/health")
+    # AC-1: Happy path — LLM erişilebilir, path verilmedi.
+    app.dependency_overrides[get_llm_client_for_health] = lambda: _HealthCheckLLMClient(is_reachable=True)
+    try:
+        response = client.get("/api/health")
+    finally:
+        app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["llm_reachable"] is True
+    assert body["path_allowed"] is None
 
 
 def test_config_endpoint_returns_404_when_no_config(monkeypatch, tmp_path):
@@ -2257,3 +2265,213 @@ def test_clear_history_returns_500_when_config_write_fails(monkeypatch, tmp_path
 
     # Transaction HİÇBİR şekilde etkilenmemiş olmalı (eşik kaydedilmediği için)
     assert response.status_code == 200
+
+
+# --- Saga #331: api-health-tanilama (AC-1 to AC-7) ---
+# GET /api/health endpoint testleri. Implementasyon henüz YOK, testler RED (başarısız) olmalı.
+# Davranış Sözleşmesi: https://...obss_project/artifacts/api-health-tanilama/atdd.md
+
+
+class _HealthCheckLLMClient(_StubLLMClient):
+    """LLM erişilebilirliği mock etmek için stub. check_llm_health() metodu
+    (henüz implementasyon yok) için hazır."""
+    def __init__(self, is_reachable: bool = True, response: str | None = None, error: bool = False):
+        super().__init__(response=response, error=error)
+        self.is_reachable = is_reachable
+        self.check_llm_health_called = False
+
+    def check_llm_health(self):
+        """Endpoint tarafından çağrılacak health check metodu.
+        Implementasyon: LLM sağlayıcısına hafif ping yapması beklenir."""
+        self.check_llm_health_called = True
+        if not self.is_reachable:
+            raise RuntimeError("LLM sağlayıcısına ulaşılamıyor")
+        return True
+
+
+def test_health_endpoint_ac1_happy_path_llm_reachable_no_path():
+    """AC-1 [Critical]: LLM erişilebilir, path parametresi yok.
+    Response: 200 {"status":"ok","llm_reachable":true,"path_allowed":null}"""
+    llm_client = _HealthCheckLLMClient(is_reachable=True)
+    app.dependency_overrides[get_llm_client_for_health] = lambda: llm_client
+    try:
+        response = client.get("/api/health")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["llm_reachable"] is True
+    assert body["path_allowed"] is None
+
+
+def test_health_endpoint_ac2_llm_network_error():
+    """AC-2 [Critical]: LLM sağlayıcısına ağ hatası/timeout.
+    Response: 200 {"status":"ok","llm_reachable":false,...}"""
+    llm_client = _HealthCheckLLMClient(is_reachable=False)
+    app.dependency_overrides[get_llm_client_for_health] = lambda: llm_client
+    try:
+        response = client.get("/api/health")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["llm_reachable"] is False
+    assert body["path_allowed"] is None
+
+
+def test_health_endpoint_ac3_path_in_whitelist(monkeypatch, tmp_path):
+    """AC-3 [High]: Geçerli path query parametresi allowed_root içinde.
+    Response: 200 {"status":"ok",...,"path_allowed":true}"""
+    # allowed_root'u tmp_path olarak sabitle (config.json deseniyle)
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    config_dir = tmp_path / "windows-ai-files"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(
+        json.dumps({"selectedFolder": str(tmp_path)}), encoding="utf-8"
+    )
+
+    # Test path'i allowed_root içinde kur
+    test_subdir = tmp_path / "subdir"
+    test_subdir.mkdir()
+    test_path = str(test_subdir / "dokuman.pdf")
+
+    llm_client = _HealthCheckLLMClient(is_reachable=True)
+    app.dependency_overrides[get_llm_client_for_health] = lambda: llm_client
+    try:
+        response = client.get(f"/api/health?path={test_path}")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["path_allowed"] is True
+
+
+def test_health_endpoint_ac4_path_outside_whitelist(monkeypatch, tmp_path):
+    """AC-4 [High]: path query parametresi allowed_root DIŞINDA (whitelist ihlali).
+    Response: 200 {"status":"ok",...,"path_allowed":false}"""
+    # allowed_root'u tmp_path olarak sabitle
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    config_dir = tmp_path / "windows-ai-files"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(
+        json.dumps({"selectedFolder": str(tmp_path)}), encoding="utf-8"
+    )
+
+    # Test path'i allowed_root DIŞINDA kur (başka bir klasördeki dosya)
+    outside_dir = tmp_path.parent / "outside_folder"
+    outside_dir.mkdir(exist_ok=True)
+    test_path = str(outside_dir / "yasak.pdf")
+
+    llm_client = _HealthCheckLLMClient(is_reachable=True)
+    app.dependency_overrides[get_llm_client_for_health] = lambda: llm_client
+    try:
+        response = client.get(f"/api/health?path={test_path}")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["path_allowed"] is False
+
+
+def test_health_endpoint_ac5_no_path_parameter():
+    """AC-5 [Medium]: path parametresi hiç verilmedi.
+    Response: 200 {"status":"ok",...,"path_allowed":null}"""
+    llm_client = _HealthCheckLLMClient(is_reachable=True)
+    app.dependency_overrides[get_llm_client_for_health] = lambda: llm_client
+    try:
+        response = client.get("/api/health")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["llm_reachable"] is True
+    assert body["path_allowed"] is None
+
+
+def test_health_endpoint_ac6_no_config_setup():
+    """AC-6 [Medium]: config hiç yapılmamış (setup tamamlanmamış).
+    Response: 200 {"status":"ok","llm_reachable":false,"path_allowed":null} — 500 patlamaz."""
+    # Varsayım: load_setup_config() hiç çağrılmadığında api_key yok.
+    # LLM client initialize edilmeyecek → llm_reachable=false
+    llm_client = _HealthCheckLLMClient(is_reachable=False)  # Config yok → LLM unreachable
+    app.dependency_overrides[get_llm_client_for_health] = lambda: llm_client
+    try:
+        response = client.get("/api/health")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["llm_reachable"] is False
+    assert body["path_allowed"] is None
+
+
+def test_health_endpoint_ac7_path_malformed():
+    """AC-7 [Medium]: path query parametresi malformed (ör. boş string, path-traversal).
+    Response: 400 {"detail":"path geçersiz"}"""
+    llm_client = _HealthCheckLLMClient(is_reachable=True)
+    app.dependency_overrides[get_llm_client_for_health] = lambda: llm_client
+    try:
+        # Malformed path: boş string
+        response = client.get("/api/health?path=")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "detail" in response.json()
+
+
+def test_health_endpoint_llm_timeout_returns_unreachable():
+    """AC-2 variant: LLM ping 2-2.5sn timeout'a takılırsa llm_reachable:false döner."""
+    # Varsayım: endpoint içindeki LLM ping timeout ~2-2.5sn ile sınırlanmış.
+    llm_client = _HealthCheckLLMClient(is_reachable=False)
+    app.dependency_overrides[get_llm_client_for_health] = lambda: llm_client
+    try:
+        response = client.get("/api/health")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["llm_reachable"] is False
+
+
+def test_health_endpoint_partial_success_llm_up_path_down(monkeypatch, tmp_path):
+    """Davranış sözleşmesi satır 6: Kısmi başarı (LLM up, path whitelist dışında).
+    Response: 200 {"status":"ok","llm_reachable":true,"path_allowed":false}"""
+    # allowed_root'u tmp_path olarak sabitle
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    config_dir = tmp_path / "windows-ai-files"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(
+        json.dumps({"selectedFolder": str(tmp_path)}), encoding="utf-8"
+    )
+
+    # Test path'i allowed_root DIŞINDA kur
+    outside_dir = tmp_path.parent / "outside_folder"
+    outside_dir.mkdir(exist_ok=True)
+    test_path = str(outside_dir / "yasak.pdf")
+
+    llm_client = _HealthCheckLLMClient(is_reachable=True)
+    app.dependency_overrides[get_llm_client_for_health] = lambda: llm_client
+    try:
+        response = client.get(f"/api/health?path={test_path}")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["llm_reachable"] is True
+    assert body["path_allowed"] is False

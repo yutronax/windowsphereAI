@@ -134,3 +134,12 @@ class OpenAICompatibleLLMClient:
             response_format={"type": "json_object"},
         )
         return response.choices[0].message.content or ""
+
+    def check_llm_health(self) -> bool:
+        """LLM sağlayıcısının erişilebilir olup olmadığını kontrol eder.
+        Timeout: 2.5 saniye. Herhangi bir exception'da False döner, asla raise etmez."""
+        try:
+            self._client.models.list(timeout=2.5)
+            return True
+        except Exception:
+            return False

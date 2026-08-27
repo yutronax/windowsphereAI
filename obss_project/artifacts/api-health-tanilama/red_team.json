@@ -1,0 +1,62 @@
+{
+  "task": "api-health-tanilama",
+  "reviewed_at": "2026-08-25T00:00:00Z",
+  "summary": "Endpoint implementasyonu atdd.md'deki AC-1..AC-7'yi ve davranış sözleşmesi tablosunu birebir karşılıyor; path sızıntısı yok, whitelist mantığı is_path_allowed'a devrediliyor, LLM ping try/except ile asla raise etmiyor. Ana eksik: OpenAICompatibleLLMClient.check_llm_health()'in gerçek implementasyonu artık hiçbir yerde doğrudan (mock'suz) unit test edilmiyor — vakıf testler kaldırılırken bu boşluk giderilmedi, sadece endpoint-seviyesinde stub üzerinden dolaylı kapsandı.",
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "test-gap",
+      "file": "backend/tests/test_plan_generation.py",
+      "issue": "verify_report.md'nin belirttiği gibi 6 vakıf test + HealthCheckFakeLLMClient tamamen kaldırıldı ama yerine gerçek OpenAICompatibleLLMClient.check_llm_health()'i (plan_generation.py:138-144) gerçek bir openai client mock'uyla (ör. monkeypatch self._client.models.list) test eden YENİ bir unit test eklenmedi. Şu an bu metodun 'timeout=2.5 geçiyor mu', 'exception yutuyor mu' davranışı SADECE main.py'deki health endpoint testlerinde, kendi check_llm_health()'ini yeniden implemente eden bir stub client üzerinden dolaylı doğrulanıyor — gerçek kod hiçbir testte doğrudan çağrılmıyor.",
+      "better_approach": "plan_generation.py'ye OpenAICompatibleLLMClient._client yerine geçebilecek küçük bir sahte openai client (models.list metodu olan) enjekte eden 1-2 odaklı unit test eklenmeli: (a) models.list başarılı -> True, (b) models.list exception fırlatıyor -> False, (c) timeout parametresinin gerçekten 2.5 olarak geçildiğinin doğrulanması (çağrı argümanlarını assert ederek).",
+      "reason": "atdd.md Test Strategy bölümü 'Unit: %25 — plan_generation.py'deki LLM erişilebilirlik kontrolü (mock client ile reachable/unreachable/timeout senaryoları)' diye açıkça talep ediyor; mevcut durumda bu unit-seviyesi hedef fiilen karşılanmıyor, sadece integration testleriyle dolaylı örtülüyor. DÜZELTİLDİ (aynı gün): 3 odaklı unit test eklendi (gerçek OpenAICompatibleLLMClient, _client.models.list mock'lanarak) — reachable/unreachable/timeout-arg senaryoları artık gerçek kodu doğrudan çağırıyor. Doğrulama: 134/134 test PASS."
+    },
+    {
+      "severity": "low",
+      "category": "maintainability",
+      "file": "backend/main.py",
+      "issue": "get_llm_client() (satır 207-212) ve get_llm_client_for_health() (satır 215-221) neredeyse birebir aynı gövdeye sahip (api_key oku, yoksa farklı davran, base_url oku, OpenAICompatibleLLMClient döndür) — kod tekrarı var.",
+      "better_approach": "Ortak bir _build_llm_client(api_key, base_url) -> LLMClient yardımcı fonksiyonu çıkarılıp her iki dependency de sadece 'api_key yoksa ne yapılır' kısmını (raise vs None) kendi içinde tutabilirdi.",
+      "reason": "task_context bu ayrımın FastAPI dependency-override testleri için ZORUNLU olduğunu doğru şekilde belirtiyor (iki ayrı fonksiyon referansı gerekiyor) — bu doğru bir mimari karar, ama ortak mantığın (api_key/base_url okuma) da iki kez yazılması gereksiz; sadece davranış farkı (raise/None) ayrılabilirdi. Düşük öncelik, mevcut haliyle de doğru çalışıyor."
+    },
+    {
+      "severity": "low",
+      "category": "test-gap",
+      "file": "backend/tests/test_main_integration.py",
+      "issue": "AC-7 (path malformed) sadece boş string senaryosunu test ediyor (satır 2420-2432); atdd.md'nin bahsettiği 'path-traversal denemesi gibi ayrıştırılamayan bir değer' örneği hiç test edilmiyor.",
+      "better_approach": "?path=../../../../etc/passwd gibi bir traversal payload'ı için de bir test eklenebilir — ama gerçek davranışın 400 değil path_allowed:false olması beklenir (Path.resolve() bunu sorunsuz çözer), bu yüzden test asıl amacı 'traversal 400 değil doğru şekilde reddedilen bir whitelist kontrolüne düşüyor' göstermek olmalı.",
+      "reason": "atdd.md AC-7'nin metni traversal'ı 'malformed' örneği olarak gösteriyor ama davranış sözleşmesi tablosunda traversal ayrı bir satır olarak yok; kod incelemesi traversal'ın aslında AC-4 (whitelist dışı) yoluna düştüğünü gösteriyor, bu nüans testlerle belgelenmemiş — küçük bir netlik eksikliği, blocking değil."
+    }
+  ],
+  "strengths": [
+    "backend/main.py health() (satır 224-253): LLM ping try/except Exception ile sarılı, hiçbir koşulda 500'e düşmüyor (AC-6 config yoksa da 200 döner) — atdd.md'nin 'sessiz hiçbir şey olmadı durumu yapısal olarak mümkün değil' ilkesiyle tutarlı.",
+    "path_allowed: null (hiç sorulmadı) ile false (sorgulandı, reddedildi) ayrımı doğru korunmuş, gerçek dosya sistemi path'i hiçbir zaman response'a konmuyor (sadece boolean/null) — atdd.md'nin 'Diğer ölçülebilir kriterler' güvenlik şartını karşılıyor.",
+    "get_llm_client (mevcut /api/plan akışı, 503 raise eder) hiç değiştirilmedi, get_llm_client_for_health tamamen ayrı yeni bir dependency — mimari not doğru: mevcut davranışa regresyon riski yok.",
+    "check_llm_health() (plan_generation.py:138-145) docstring'i net: 'Herhangi bir exception'da False döner, asla raise etmez' — ve health() bunu ayrıca try/except ile de sarmalıyor (defense in depth, satır 232-235)."
+  ],
+  "risks": [
+    "/api/health, LLM sağlayıcısına her çağrıda gerçek bir ağ isteği atıyor (models.list) — atdd.md bunu zaten Risks bölümünde bilinen/kabul edilmiş bir sınır olarak işaretlemiş (rate-limit/cache bu görevin kapsamı dışı), ama izleme aracı sık poll ederse LLM kotası tüketilebileceği unutulmamalı.",
+    "check_llm_health()'in gerçek implementasyonunun (openai SDK çağrısı) hiçbir unit testte doğrudan egzersiz edilmemesi, ileride bu metod içinde bir regresyon (ör. yanlış timeout parametresi, yanlış istisna sınıfı yakalama) olursa sadece entegrasyon testlerinin (stub client kullandığı için) bunu YAKALAYAMAYACAĞI anlamına geliyor — gerçek openai kütüphanesiyle entegrasyon regresyonu sessizce geçebilir."
+  ],
+  "caveman_review": {
+    "complexity": "low",
+    "unnecessary_files": 0,
+    "unnecessary_helpers": 0,
+    "unnecessary_abstractions": 0
+  },
+  "scope_review": {
+    "matches_atdd": true,
+    "scope_expansion": false
+  },
+  "ready_to_commit": {
+    "atdd_satisfied": true,
+    "tests_passed": true,
+    "no_critical_findings": true,
+    "scope_respected": true,
+    "caveman_satisfied": true,
+    "security_acceptable": true,
+    "maintainability_acceptable": true,
+    "no_blocking_risks": true
+  },
+  "verdict": "approve-with-changes"
+}

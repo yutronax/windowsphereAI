@@ -1271,3 +1271,12 @@ class DetectPiiResponse(BaseModel):
     sadece RedactionRegion (page + koordinatlar)."""
 
     regions: list[RedactionRegion]
+
+
+class HealthCheckResponse(BaseModel):
+    """Saga #331: `/api/health` endpoint yanıtı — LLM erişilebilirlik ve
+    (opsiyonel) path whitelist durumu."""
+
+    status: str
+    llm_reachable: bool
+    path_allowed: bool | None

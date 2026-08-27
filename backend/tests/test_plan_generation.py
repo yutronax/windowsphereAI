@@ -1,10 +1,12 @@
 import json
+from unittest.mock import MagicMock
 
 import pytest
 
 from backend.models import DateSource, PdfFileMetadata, PlanSkeleton, SortOrder
 from backend.plan_generation import (
     DEFAULT_MODEL_ID,
+    OpenAICompatibleLLMClient,
     PlanGenerationError,
     build_metadata_prompt,
     generate_plan_skeleton,
@@ -268,3 +270,26 @@ def test_system_prompt_documents_split_requires_exactly_one_file_name():
 
     assert "Böl" in PLAN_SYSTEM_PROMPT
     assert "tam olarak 1" in PLAN_SYSTEM_PROMPT or "TAM OLARAK 1" in PLAN_SYSTEM_PROMPT
+
+
+def test_check_llm_health_returns_true_when_models_list_succeeds():
+    client = OpenAICompatibleLLMClient(api_key="test-key")
+    client._client.models.list = MagicMock(return_value=None)
+
+    assert client.check_llm_health() is True
+
+
+def test_check_llm_health_returns_false_when_models_list_raises():
+    client = OpenAICompatibleLLMClient(api_key="test-key")
+    client._client.models.list = MagicMock(side_effect=Exception("network error"))
+
+    assert client.check_llm_health() is False
+
+
+def test_check_llm_health_passes_timeout_arg():
+    client = OpenAICompatibleLLMClient(api_key="test-key")
+    client._client.models.list = MagicMock(return_value=None)
+
+    client.check_llm_health()
+
+    client._client.models.list.assert_called_once_with(timeout=2.5)

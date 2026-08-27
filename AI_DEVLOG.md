@@ -2431,6 +2431,39 @@ artık HER dispatch prompt'unun sonuna açık bir "GİT KOMUTU ÇALIŞTIRMA
 YASAK" satırı ekleniyor (bkz. proje hafızası
 `feedback_haiku_subagent_git_yasagi.md`).
 
+## api-health-tanilama (Saga #331, epic #33) — Epic #33 tamamlandı
+
+**FastAPI `dependency_overrides` çakışması — paylaşılan dependency iki
+farklı davranış taşıyamaz.** `/api/health` genişletilirken plan.md'nin
+ilk kararı health endpoint'inin mevcut `get_llm_client()`'ı (API key
+yoksa 503 fırlatan, `/api/plan` tarafından kullanılan) ÇAĞIRMAYACAĞI
+yönündeydi. Ama `test-copilot`'un yazdığı testler `app.dependency_overrides
+[get_llm_client]` deseniyle mock kuruyordu — FastAPI'nin override
+mekanizması sadece route'ta `Depends()` ile birebir aynı obje referansı
+kullanılırsa devreye giriyor, bu yüzden iki gereksinim (health 200
+dönmeli + testler override edilebilmeli) aynı paylaşılan fonksiyonda bir
+arada olamadı. Çözüm: `get_llm_client_for_health()` adında tamamen ayrı,
+raise etmeyen bir dependency eklendi; `test-copilot`'un health testleri
+override hedefini bu yeni fonksiyona çevirecek şekilde geriye dönük
+düzeltildi (`/api/plan`'ın kendi 503 testi hiç dokunulmadan, sıfır
+regresyonla korundu — 131→134 arası tüm koşumlarda doğrulandı).
+
+**Red-team bulgusu — vakıf (tautolojik) unit testler.** `test-copilot`'un
+ilk dispatch'i `test_plan_generation.py`'e `check_llm_health()` için 6
+"unit test" eklemişti, ama bunlar gerçek `OpenAICompatibleLLMClient`'ı
+değil kendi yazdıkları bir sahte sınıfın (`HealthCheckFakeLLMClient`)
+kendi mantığını test ediyordu — sıfır gerçek kapsam, üstelik sahte
+sınıfın sözleşmesi (raise eder) gerçek implementasyonla (asla raise
+etmez) çelişiyordu. `verify` sırasında yakalanıp 6 test + sahte sınıf
+tamamen kaldırıldı; `red-team` bunu ayrıca bir `medium/test-gap` bulgusu
+olarak işaretledi (atdd.md'nin unit-test hedefi artık hiç karşılanmıyordu)
+— düzeltme olarak gerçek `OpenAICompatibleLLMClient._client.models.list`'i
+mock'layan 3 odaklı test eklendi.
+
+Backend: 10 yeni endpoint testi + 3 yeni LLM-health unit testi
+(`backend/tests/test_main_integration.py`, `test_plan_generation.py`),
+134/134 yeşil.
+
 **Tasarım değişikliği — timestamp-bazlı eşik filtresi flaky çıktı.**
 İlk implementasyon "Geçmişi Temizle" eşiğini `created_at` (ISO timestamp)
 karşılaştırmasıyla filtreliyordu. Bağımsız test çalıştırması bunun bu
