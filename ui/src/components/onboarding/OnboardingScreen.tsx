@@ -100,18 +100,18 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
         .onboarding-primary-btn {
           height: 44px;
           border-radius: 8px;
-          background-color: #2563EB;
+          background-color: #1E3A8A;
           color: #fff;
           border: none;
         }
         .onboarding-primary-btn:hover:not(:disabled) {
-          background-color: #1D4ED8;
+          background-color: #1E3172;
         }
         .onboarding-primary-btn:active:not(:disabled) {
-          background-color: #1E40AF;
+          background-color: #172554;
         }
         .onboarding-primary-btn:focus-visible {
-          outline: 2px solid #1E40AF;
+          outline: 2px solid #1E3A8A;
           outline-offset: 2px;
         }
         .onboarding-primary-btn:disabled {
@@ -128,14 +128,14 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
           width: 100%;
           box-sizing: border-box;
           min-height: 120px;
-          border-radius: 12px;
+          border-radius: 8px;
           border: 1px solid #E5E7EB;
           font-size: 16px;
           padding: 16px;
         }
         .onboarding-textarea:focus {
-          border-color: #2563EB;
-          box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+          border-color: #1E3A8A;
+          box-shadow: 0 0 0 3px rgba(30, 58, 138, 0.1);
           outline: none;
         }
         .onboarding-textarea::placeholder {

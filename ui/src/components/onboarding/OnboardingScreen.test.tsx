@@ -92,7 +92,7 @@ describe('OnboardingScreen', () => {
 
     expect(parseFloat(style.height)).toBeGreaterThanOrEqual(44);
     expect(style.borderRadius).toBe('8px');
-    expect(style.backgroundColor).toBe('rgb(37, 99, 235)');
+    expect(style.backgroundColor).toBe('rgb(30, 58, 138)');
     expect(style.color).toBe('rgb(255, 255, 255)');
   });
 
@@ -109,7 +109,7 @@ describe('OnboardingScreen', () => {
   });
 });
 
-// AC-5: #2563EB arka plan + beyaz metin, WCAG AA (>=4.5:1) kontrast oranını karşılamalı.
+// AC-5: #1E3A8A arka plan + beyaz metin, WCAG AA (>=4.5:1) kontrast oranını karşılamalı.
 describe('primary button color contrast (AC-5)', () => {
   function relativeLuminance([r, g, b]: [number, number, number]): number {
     const [rs, gs, bs] = [r, g, b].map((channel) => {
@@ -127,8 +127,8 @@ describe('primary button color contrast (AC-5)', () => {
     return (lighter + 0.05) / (darker + 0.05);
   }
 
-  it('meets WCAG AA contrast (>=4.5:1) for white text on #2563EB', () => {
-    const background: [number, number, number] = [0x25, 0x63, 0xeb];
+  it('meets WCAG AA contrast (>=4.5:1) for white text on #1E3A8A', () => {
+    const background: [number, number, number] = [0x1e, 0x3a, 0x8a];
     const text: [number, number, number] = [255, 255, 255];
 
     expect(contrastRatio(background, text)).toBeGreaterThanOrEqual(4.5);
@@ -137,7 +137,7 @@ describe('primary button color contrast (AC-5)', () => {
 
 // AC-1/AC-2: istek metin kutusu (textarea) render, stil ve controlled-state doğrulaması.
 describe('request textarea (onboarding-istek-metin-kutusu)', () => {
-  it('renders a textarea with min-height 120px, border-radius 12px, and #E5E7EB border (AC-1)', () => {
+  it('renders a textarea with min-height 120px, border-radius 8px, and #E5E7EB border (AC-1)', () => {
     render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
 
     const textarea = screen.getByTestId('request-textarea');
@@ -145,7 +145,7 @@ describe('request textarea (onboarding-istek-metin-kutusu)', () => {
 
     expect(textarea).toBeInTheDocument();
     expect(parseFloat(style.minHeight)).toBeGreaterThanOrEqual(120);
-    expect(style.borderRadius).toBe('12px');
+    expect(style.borderRadius).toBe('8px');
     expect(style.borderColor).toBe('rgb(229, 231, 235)');
   });
 
