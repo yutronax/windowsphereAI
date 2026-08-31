@@ -82,7 +82,7 @@ export default function PlanCard({ plan, onApprove, onChangePlan, stale = false,
       <style>{`
         .plan-card {
           border: 1px solid #E5E7EB;
-          border-radius: 12px;
+          border-radius: 8px;
           padding: 12px 16px;
           margin-top: 8px;
           background-color: #FAFAFA;
@@ -109,16 +109,16 @@ export default function PlanCard({ plan, onApprove, onChangePlan, stale = false,
           height: 44px;
           padding: 0 20px;
           border-radius: 8px;
-          background-color: #2563EB;
+          background-color: #1E3A8A;
           color: #fff;
           border: none;
           font-size: 16px;
         }
         .plan-card-approve-btn:hover:not(:disabled) {
-          background-color: #1D4ED8;
+          background-color: #1E3172;
         }
         .plan-card-approve-btn:focus-visible {
-          outline: 2px solid #1E40AF;
+          outline: 2px solid #1E3A8A;
           outline-offset: 2px;
         }
         .plan-card-approve-btn:disabled {

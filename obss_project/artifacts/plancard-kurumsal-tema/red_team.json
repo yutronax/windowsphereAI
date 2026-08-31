@@ -1,0 +1,33 @@
+{
+  "task": "plancard-kurumsal-tema",
+  "reviewed_at": "2026-09-01T00:00:00Z",
+  "summary": "Değişiklik gerçekten kapsamı ile uyumlu: sadece iki renk/border-radius değeri güncellenmiş, mantık/state/erişilebilirlik akışına dokunulmamış. En büyük gerçek risk kod içi değil süreçsel: tüm buton/tema renkleri PlanCard.tsx içine gömülü <style> string olarak tekrarlanıyor, bu da bir sonraki 'unutulan bileşen' tekrarına zaten davetiye çıkarıyor.",
+  "findings": [
+    {
+      "severity": "low",
+      "category": "maintainability",
+      "file": "ui/src/components/chat/PlanCard.tsx",
+      "issue": "Renk/border-radius değerleri inline <style> string içinde hardcoded; ChatScreen.tsx ve OnboardingScreen.tsx'te de aynı değerler ayrı ayrı tekrarlanıyor.",
+      "better_approach": "Ortak bir theme.ts / CSS custom properties (:root değişkenleri) katmanı çıkarılıp PlanCard, ChatScreen, OnboardingScreen buradan referans alsın.",
+      "reason": "Bu üçüncü 'unutulan bileşen kurumsal temaya geçmedi' vakası; kök neden kopyala-yapıştır renk tanımları, düzeltme tek merkezi kaynak."
+    },
+    {
+      "severity": "low",
+      "category": "test-gap",
+      "file": "ui/src/components/chat/PlanCard.tsx",
+      "issue": "Görsel/renk değişikliği için hiçbir assertion yok; gelecekte biri #1E3A8A'yı yanlışlıkla geri #2563EB yaparsa hiçbir test bunu yakalamaz.",
+      "better_approach": "Kritik marka renkleri için hafif bir getComputedStyle tabanlı doğrulama eklenebilir.",
+      "reason": "Regresyonu şu an tespit eden tek mekanizma insan gözü; otomatik gate yok."
+    }
+  ],
+  "strengths": [
+    "Diff kapsamla sınırlı: sadece background-color ve border-radius değişmiş, canApprove/fail-closed güvenlik mantığına dokunulmamış.",
+    "tsc --noEmit ve 103/103 test PASS ile doğrulanmış.",
+    "Bulk-onay eşiği ve fail-closed onay mantığı bu PR ile bozulmamış."
+  ],
+  "risks": [],
+  "caveman_review": {"complexity": "low", "unnecessary_files": 0, "unnecessary_helpers": 0, "unnecessary_abstractions": 0},
+  "scope_review": {"matches_atdd": true, "scope_expansion": false},
+  "ready_to_commit": {"atdd_satisfied": true, "tests_passed": true, "no_critical_findings": true, "scope_respected": true, "caveman_satisfied": true, "security_acceptable": true, "maintainability_acceptable": true, "no_blocking_risks": true},
+  "verdict": "approve"
+}
