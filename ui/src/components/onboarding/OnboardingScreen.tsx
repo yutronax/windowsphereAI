@@ -87,22 +87,80 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
   }
 
   return (
-    <main>
+    <main data-testid="onboarding-card" className="onboarding-card">
       <h1>Klasör Seç</h1>
-      {backendStatus === 'starting' && <p>Başlatılıyor…</p>}
+      <p className="onboarding-subtitle">Hangi klasördeki dosyaları organize etmek istersiniz?</p>
+      {backendStatus === 'starting' && (
+        <div data-testid="backend-status-banner" className="backend-status-banner" role="status">
+          <p>Başlatılıyor…</p>
+        </div>
+      )}
       {backendStatus === 'backend_timeout' && (
-        <>
+        <div data-testid="backend-status-banner" className="backend-status-banner" role="status">
           <p>Backend ulaşılamadı veya zaman aşımına uğradı.</p>
           <button type="button" onClick={onRetry}>Tekrar dene</button>
-        </>
+        </div>
       )}
       <style>{`
+        main.onboarding-card {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          min-height: 100vh;
+          padding: 32px 16px;
+          background-color: #f5f5f5;
+          box-sizing: border-box;
+          max-width: 560px;
+          margin: 0 auto;
+          width: 100%;
+        }
+        .onboarding-card > h1 {
+          font-size: 32px;
+          font-weight: 700;
+          margin: 0 0 8px 0;
+          text-align: center;
+        }
+        .onboarding-card > .onboarding-subtitle {
+          font-size: 16px;
+          color: #6B7280;
+          text-align: center;
+          margin: 0 0 32px 0;
+        }
+        .backend-status-banner {
+          background-color: #fef3c7;
+          border: 1px solid #fcd34d;
+          border-radius: 8px;
+          padding: 16px;
+          margin-bottom: 24px;
+        }
+        .backend-status-banner p {
+          margin: 0 0 12px 0;
+          color: #92400e;
+          font-size: 14px;
+        }
+        .backend-status-banner button {
+          background-color: #92400e;
+          color: white;
+          border: none;
+          border-radius: 4px;
+          padding: 8px 16px;
+          cursor: pointer;
+          font-size: 14px;
+        }
+        .backend-status-banner button:hover {
+          background-color: #78350f;
+        }
         .onboarding-primary-btn {
           height: 44px;
           border-radius: 8px;
           background-color: #1E3A8A;
           color: #fff;
           border: none;
+          font-size: 16px;
+          font-weight: 500;
+          cursor: pointer;
+          margin-bottom: 16px;
         }
         .onboarding-primary-btn:hover:not(:disabled) {
           background-color: #1E3172;
@@ -118,11 +176,19 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
           background-color: #94A3B8;
           cursor: not-allowed;
         }
+        .onboarding-path-wrapper {
+          background-color: #f3f4f6;
+          border-radius: 6px;
+          padding: 12px 16px;
+          margin-bottom: 16px;
+        }
         .onboarding-path {
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
-          max-width: 320px;
+          margin: 0;
+          font-size: 14px;
+          color: #374151;
         }
         .onboarding-textarea {
           width: 100%;
@@ -132,6 +198,8 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
           border: 1px solid #E5E7EB;
           font-size: 16px;
           padding: 16px;
+          font-family: inherit;
+          margin-bottom: 16px;
         }
         .onboarding-textarea:focus {
           border-color: #1E3A8A;
@@ -151,25 +219,52 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
         .onboarding-error-message {
           color: #DC2626;
           font-size: 14px;
-          margin-top: 4px;
+          margin: 0 0 16px 0;
+        }
+        .onboarding-continue-btn {
+          width: 100%;
+          height: 44px;
+          border-radius: 8px;
+          background-color: #1E3A8A;
+          color: #fff;
+          border: none;
+          font-size: 16px;
+          font-weight: 500;
+          cursor: pointer;
+        }
+        .onboarding-continue-btn:hover:not(:disabled) {
+          background-color: #1E3172;
+        }
+        .onboarding-continue-btn:active:not(:disabled) {
+          background-color: #172554;
+        }
+        .onboarding-continue-btn:focus-visible {
+          outline: 2px solid #1E3A8A;
+          outline-offset: 2px;
+        }
+        .onboarding-continue-btn:disabled {
+          background-color: #94A3B8;
+          cursor: not-allowed;
         }
       `}</style>
       <button ref={chooseFolderButtonRef} type="button" className="onboarding-primary-btn" onClick={chooseFolder} disabled={!isReady}>Klasör Seç</button>
       {selectedFolder && (
         <>
-          <p
-            data-testid="selected-folder-path"
-            className="onboarding-path"
-            tabIndex={0}
-            aria-describedby="folder-path-tooltip-content"
-            onFocus={() => setIsFocused(true)}
-            onBlur={() => setIsFocused(false)}
-            onMouseEnter={() => setIsHovered(true)}
-            onMouseLeave={() => setIsHovered(false)}
-            onKeyDown={handleFolderPathKeyDown}
-          >
-            {selectedFolder}
-          </p>
+          <div className="onboarding-path-wrapper">
+            <p
+              data-testid="selected-folder-path"
+              className="onboarding-path"
+              tabIndex={0}
+              aria-describedby="folder-path-tooltip-content"
+              onFocus={() => setIsFocused(true)}
+              onBlur={() => setIsFocused(false)}
+              onMouseEnter={() => setIsHovered(true)}
+              onMouseLeave={() => setIsHovered(false)}
+              onKeyDown={handleFolderPathKeyDown}
+            >
+              {selectedFolder}
+            </p>
+          </div>
           {isPathTooltipVisible && (
             <span id="folder-path-tooltip-content" role="tooltip" data-testid="folder-path-tooltip">{selectedFolder}</span>
           )}
@@ -199,7 +294,7 @@ export default function OnboardingScreen({ backendStatus, onContinue, onRetry }:
           <p className="onboarding-error-message">{submitError}</p>
         </div>
       )}
-      <button type="button" onClick={handleContinueClick} disabled={!canSubmit}>Devam</button>
+      <button type="button" className="onboarding-continue-btn" onClick={handleContinueClick} disabled={!canSubmit}>Devam</button>
     </main>
   );
 }

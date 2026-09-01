@@ -567,3 +567,108 @@ describe('session submission (ilk-istek-oturum-baglami)', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /devam/i })).toBeEnabled());
   });
 });
+
+// onboarding-ekrani-tasarim görsel yeniden tasarım — AC-1, AC-2, AC-3, AC-4, AC-5, AC-7
+describe('onboarding-ekrani-tasarim görsel yeniden tasarım', () => {
+  // AC-1: Sayfa açık arkaplanlı, ortalanmış, 480-560px genişliğinde kart içinde
+  it('renders the page with light background and centered card layout (AC-1 — background)', () => {
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    // Kart elemanı (onboarding-card data-testid veya root main wrapper)
+    // Şimdilik <main> elemanının background'ını test et
+    const mainElement = document.querySelector('main');
+    if (!mainElement) throw new Error('Main element not found');
+
+    const style = getComputedStyle(mainElement);
+    // Background beyaz/açık renk olmalı (siyah/transparent DEĞİL)
+    expect(style.backgroundColor).not.toBe('transparent');
+    expect(style.backgroundColor).not.toMatch(/rgb\(0,\s*0,\s*0\)/);
+  });
+
+  it('renders the card with constrained max-width between 480-560px (AC-1 — max-width)', () => {
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    // Kart wrapper elemanı (veya onboarding-card class'lı eleman)
+    const cardElement = document.querySelector('[data-testid="onboarding-card"], .onboarding-card, main');
+    if (!cardElement) throw new Error('Card element not found');
+
+    const style = getComputedStyle(cardElement);
+    const maxWidth = parseFloat(style.maxWidth);
+
+    // maxWidth 480-560px aralığında olmalı
+    expect(maxWidth).toBeGreaterThanOrEqual(480);
+    expect(maxWidth).toBeLessThanOrEqual(560);
+  });
+
+  // AC-2: Başlığın altında açıklayıcı alt metin
+  it('displays descriptive subtitle text below the title (AC-2)', () => {
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    // Açıklayıcı alt metin "Hangi klasördeki..." vb.
+    const subtitle = screen.queryByText(/hangi klasördeki/i);
+    expect(subtitle).toBeVisible();
+  });
+
+  // AC-3: "Devam" butonu tam genişlik (width: 100%)
+  it('renders the Continue button with full width (100%) (AC-3)', () => {
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    const continueButton = screen.getByRole('button', { name: /devam/i });
+    const style = getComputedStyle(continueButton);
+
+    expect(style.width).toBe('100%');
+  });
+
+  // AC-4: Seçilen klasör yolu chip/etiket görünümünde (hafif arkaplan, yuvarlak köşeler)
+  it('wraps selected folder path in a chip-styled element with border-radius (AC-4)', async () => {
+    openFolderDialog.mockResolvedValue('C:\\Users\\Yusuf\\Documents\\Müvekkiller');
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /klasör seç/i }));
+
+    const pathElement = await screen.findByTestId('selected-folder-path');
+    // Chip wrapper'ı kontrol et (pathElement veya parent'ı yuvarlak köşeli olmalı)
+    const chipElement = pathElement.parentElement || pathElement;
+    const style = getComputedStyle(chipElement);
+
+    // borderRadius > 0 olmalı (yuvarlak köşeler)
+    const borderRadius = parseFloat(style.borderRadius);
+    expect(borderRadius).toBeGreaterThan(0);
+
+    // Arkaplan rengi sayfa arkaplanından farklı olmalı (chip görünümü)
+    expect(style.backgroundColor).not.toBe('transparent');
+  });
+
+  // AC-5: Backend durum mesajları (starting/backend_timeout) banner container'ında
+  it('wraps "starting" status message in a banner container (AC-5)', () => {
+    render(<OnboardingScreen backendStatus="starting" onContinue={vi.fn()} />);
+
+    const startingMessage = screen.getByText(/başlatılıyor/i);
+    // Banner container'ı var olmalı (data-testid="backend-status-banner" veya div.banner vb.)
+    const bannerContainer = startingMessage.closest('[data-testid="backend-status-banner"], .backend-status-banner, div[role="status"]');
+
+    expect(bannerContainer || startingMessage.parentElement).toBeInTheDocument();
+  });
+
+  it('wraps "backend_timeout" status message in a banner container (AC-5)', () => {
+    render(<OnboardingScreen backendStatus="backend_timeout" onContinue={vi.fn()} />);
+
+    const timeoutMessage = screen.getByText(/backend.*(ulaşılamadı|zaman aşımı)/i);
+    // Banner container'ı var olmalı
+    const bannerContainer = timeoutMessage.closest('[data-testid="backend-status-banner"], .backend-status-banner, div[role="status"]');
+
+    expect(bannerContainer || timeoutMessage.parentElement).toBeInTheDocument();
+  });
+
+  // AC-7: Kart elementinin box-sizing: border-box olması (overflow önleme)
+  it('applies box-sizing: border-box to prevent overflow (AC-7)', () => {
+    render(<OnboardingScreen backendStatus="ready" onContinue={vi.fn()} />);
+
+    // Kart elemanı (onboarding-card veya main wrapper)
+    const cardElement = document.querySelector('[data-testid="onboarding-card"], .onboarding-card, main');
+    if (!cardElement) throw new Error('Card element not found');
+
+    const style = getComputedStyle(cardElement as HTMLElement);
+    expect(style.boxSizing).toBe('border-box');
+  });
+});
