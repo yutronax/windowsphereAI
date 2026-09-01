@@ -2491,3 +2491,39 @@ eklenmesi öneriliyor.
 
 Backend: 7 yeni test, 92/92 yeşil (5x tekrar doğrulandı). Frontend: 5 yeni
 test, 167/167 yeşil (tüm proje).
+
+## buton-kart-primitifleri (Saga #346, epic #36)
+
+**jest-dom `toHaveStyle` — CSS keyword'ü computed rgb'ye normalize etmiyor.**
+`Button.tsx`/`Card.tsx` (token katmanı üzerine kurulu `Button`/`Card`
+primitifleri, Saga #345'in `tokens.ts`'ini ilk tüketen kod) yazıldıktan
+sonra tek bir test (`color: 'white'` bekleyen assertion) implementasyon
+doğruyken sürekli FAIL veriyordu. Kök neden izole bir debug testiyle
+doğrudan doğrulandı: jsdom'un `getComputedStyle`'ı `color` değerini her
+zaman `rgb(255, 255, 255)` formunda döndürüyor, ama bu projedeki jest-dom
+sürümü beklenen tarafta CSS keyword'ünü (`'white'`) aynı forma normalize
+etmiyor — implementasyon tarafında hangi değer yazılırsa yazılsın (`white`,
+`#FFFFFF`, `rgb(...)`) test asla geçemezdi. Düzeltme implementasyonda değil
+test dosyasında yapıldı: `color: 'white'` → `color: 'rgb(255, 255, 255)'`.
+
+**Bağımsız red-team turu AC-1'in kısmen karşılandığını yakaladı —
+`verify` bunu YANLIŞLIKLA PASS işaretlemişti.** atdd.md'nin AC-1'i
+`primary` variant'ın `primaryHover`/`primaryActive` token'larını da
+kullanmasını açıkça istiyordu; ilk implementasyon sadece statik
+`tokens.colors.primary`'yi uyguluyordu, hover/active hiç yoktu. Hiçbir test
+bunu kontrol etmediği için (`verify_report.md` "tüm token değerleri
+uygulanıyor" diyerek geçirmişti) bu eksiklik sadece bağımsız red-team
+turunda (kod okuma + atdd.md ile satır satır karşılaştırma) ortaya çıktı.
+Düzeltme: `useState` + `onMouseEnter`/`onMouseLeave`/`onMouseDown`/
+`onMouseUp` ile hover/active state eklendi (`danger` variant için envanterde
+olmayan bir "dangerHover" token'ı UYDURULMADI, statik kaldı). Takip
+red-team turu düzeltmeyi doğruladı, 238/238 test yeşil kaldı.
+
+**Ders:** "tüm AC'ler tabloda ✓" diyen bir verify raporu, her AC'nin alt
+maddelerinin (bu örnekte "primary renk" AC'sinin üç alt-değeri: normal/
+hover/active) tek tek kontrol edildiği anlamına gelmiyor — testin gerçekten
+neyi assert ettiğini okumadan bir satırlık PASS'e güvenmek, tam da
+red-team'in var olma sebebi.
+
+Frontend: 5 yeni dosya (`Button.tsx`, `Card.tsx`, `index.ts` + 2 test
+dosyası), 238/238 tüm proje testi yeşil, sıfır regresyon.

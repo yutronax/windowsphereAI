@@ -1,0 +1,81 @@
+{
+  "task": "buton-kart-primitifleri",
+  "reviewed_at": "2026-09-01T21:20:00+03:00",
+  "updated_at": "2026-09-01T21:33:00+03:00",
+  "summary": "İlk incelemede Button.tsx'te AC-1'in istediği primaryHover/primaryActive token'ları hiç kullanılmıyordu (high/correctness). code-copilot'a geri dönülüp useState + mouse event handler'larla düzeltildi, takip incelemesiyle doğrulandı: finding #1 RESOLVED, mevcut 238 test hâlâ yeşil, danger variant'a spekülatif token eklenmedi. Kalan bulgular (mimari pseudo-class sınırlaması, button type, index.ts test-gap) düşük/orta önemde ve commit'i engellemiyor; yeni bir düşük-önem test-gap (hover/active davranışını doğrudan test eden bir test yok) not edildi.",
+  "findings": [
+    {
+      "severity": "high",
+      "category": "correctness",
+      "file": "ui/src/components/primitives/Button.tsx",
+      "issue": "atdd.md AC-1 açıkça 'primary → tokens.colors.primary/primaryHover/primaryActive... renklerini kullanır' diyor, fakat Button.tsx sadece tokens.colors.primary'yi statik backgroundColor olarak kullanıyor; primaryHover ve primaryActive hiçbir yerde referans edilmiyor (grep ile doğrulandı: 'primaryHover|primaryActive' için ui/src/components/primitives altında sıfır eşleşme).",
+      "better_approach": "Hover/active state'i onMouseEnter/onMouseLeave/onMouseDown ile React state'inde tutup dinamik backgroundColor uygulamak, ya da (proje deseniyle tutarlı olarak) PlanCard'daki gibi bir <style> bloğu + className ile :hover/:active pseudo-class kuralları eklemek.",
+      "reason": "verify_report.md AC-1'i 'kanıt: tüm token değerleri inline style ile uygulanıyor' diyerek PASS işaretlemiş ama bu yanlış — primaryHover/primaryActive kullanılmıyor, dolayısıyla AC-1 tam karşılanmıyor ve bu hiçbir testte yakalanmamış (test suite de sadece backgroundColor: tokens.colors.primary'yi kontrol ediyor, hover/active'i hiç test etmiyor).",
+      "outcome": "fixed",
+      "verification": "Takip incelemesi (2026-09-01T21:33): Button.tsx satır 25-26 (isHovered/isActive state), 28-45 (getBackgroundColor — primary variant'ta primaryActive > primaryHover > primary sırasıyla), 47-68 (mouse event handler'ları, dışarıdan gelen onMouseEnter/vb. korunuyor). Danger variant statik kalmış, spekülatif token uydurulmamış. disabled her zaman DISABLED_COLOR'a öncelik veriyor. npx vitest run → 238/238 PASS, npx tsc --noEmit → hatasız."
+    },
+    {
+      "severity": "medium",
+      "category": "architecture",
+      "file": "ui/src/components/primitives/Button.tsx",
+      "issue": "Inline `style` prop yaklaşımı, PlanCard.tsx'teki <style>{`...`}</style> + className deseninden farklı; bu yüzden :hover, :focus-visible, :disabled { cursor: not-allowed } gibi pseudo-class davranışları primitif seviyesinde imkansız (React inline style CSS pseudo-class desteklemez). PlanCard'da bu üç davranış (.plan-card-approve-btn:hover, :focus-visible, :disabled cursor) açıkça var, primitifte hiçbiri yok.",
+      "better_approach": "className + <style> bloğu yaklaşımına geçmek (PlanCard ile tutarlı) veya en azından className prop'u destekleyip global bir primitives.css dosyası eklemek.",
+      "reason": "Bu task 'primitifleri ekranlara taşımak' için temel oluşturuyor (atdd.md Hedef bölümü); eğer PlanCard ileride bu Button primitifine taşınırsa, hover/focus-visible/cursor davranışları sessizce kaybolacak — bu, primitiflerin asıl amacına (DRY + tasarım tutarlılığı, hiç kayıp olmadan) aykırı bir mimari risk."
+    },
+    {
+      "severity": "low",
+      "category": "reliability",
+      "file": "ui/src/components/primitives/Button.tsx",
+      "issue": "`<button>` elemanına `type` attribute'u verilmiyor; native HTML davranışı gereği bir <form> içine yerleştirilirse default type='submit' olur ve istenmeyen form submit'ine yol açabilir. PlanCard.tsx kendi butonlarında açıkça `type=\"button\"` kullanıyor (satır 162, 181 vb.), primitif bunu yapmıyor.",
+      "better_approach": "Button.tsx'te `type = 'button'` default prop olarak eklenmeli (tüketici override edebilir).",
+      "reason": "Bu primitif ileride formlu ekranlarda (ör. Onboarding) kullanılabilir; type default'u olmadan sessiz bir davranış farkı (form submit) oluşabilir — bu tür bir hata testlerde de yakalanmaz çünkü RTL testleri form içine render etmiyor."
+    },
+    {
+      "severity": "low",
+      "category": "test-gap",
+      "file": "ui/src/components/primitives/index.ts",
+      "issue": "verify_report.md kendisi de not ediyor: index.ts üzerinden `import { Button, Card } from './components/primitives'` yapılabildiğini doğrudan doğrulayan bir smoke/RTL testi yok; sadece tsc/build dolaylı kanıt.",
+      "better_approach": "Küçük bir index.test.ts eklenip `import { Button, Card } from './index'` ile ikisinin de tanımlı (function) olduğu assert edilebilir.",
+      "reason": "AC-6 açıkça 'ikisi de named export olarak erişilebilir olur' diyor; şu an bu iddia sadece derleme başarısına dayanıyor, doğrudan test yok — düşük risk ama atdd.md'nin 100% coverage hedefiyle tam örtüşmüyor."
+    },
+    {
+      "severity": "low",
+      "category": "test-gap",
+      "file": "ui/src/components/primitives/Button.test.tsx",
+      "issue": "Finding #1 düzeltmesi (hover/active state) doğrulandı ama bunu doğrudan test eden bir test yok (ör. fireEvent.mouseEnter/mouseDown ile backgroundColor'ın primaryHover/primaryActive'e döndüğünü kontrol eden bir assertion). Fix kod-seviyesinde doğru ama test-seviyesinde koruma altında değil.",
+      "better_approach": "Button.test.tsx'e (test-copilot tarafından) fireEvent.mouseEnter/mouseLeave/mouseDown/mouseUp kullanan 2 test eklenebilir: hover'da primaryHover, active'de primaryActive rengi doğrulanır.",
+      "reason": "İleride biri isActive/isHovered mantığını yanlışlıkla bozarsa (ör. getBackgroundColor'daki sıralamayı karıştırırsa), mevcut test suite bunu YAKALAMAZ — sessiz bir regresyon riski. Düşük önem çünkü görsel etki sınırlı (buton hâlâ tıklanabilir, sadece hover/active geri bildirimi bozulur) ve blocking değil."
+    }
+  ],
+  "strengths": [
+    "Button.tsx ve Card.tsx atdd.md'nin 'Kapsam Dışı' bölümüne sadık kalmış: Card'a variant eklenmemiş, Button'a icon/loading gibi spekülatif prop eklenmemiş — CAVEMAN açısından temiz.",
+    "Disabled buton rengi (#94A3B8) kararı plan.md'deki 'tokens.ts genişletilmeyecek' sözleşmesine uygun şekilde yerel sabit (DISABLED_COLOR) olarak tutulmuş, token dosyasına dokunulmamış.",
+    "AC-5 (regresyon yok) doğru şekilde doğrulanmış: hiçbir mevcut dosya değiştirilmemiş, tam test suite 238/238 PASS.",
+    "Props tipleri (`Omit<..., 'style'>` ile style prop'unun dışarıdan override edilmesini engellemek) token bütünlüğünü koruma açısından isabetli bir tasarım kararı."
+  ],
+  "risks": [
+    "AC-1'in tam karşılanmadığı (primaryHover/primaryActive kullanılmıyor) fark edilmeden 'approve' edilirse, ileride PlanCard gibi ekranlar bu primitife taşındığında hover/active görsel geri bildirimi kaybolur ve bu regresyon görsel/manual test dışında hiçbir otomasyonla yakalanamaz (atdd.md zaten bu task için görsel doğrulamayı kapsam dışı bırakmış).",
+    "verify_report.md'nin AC-1'i yanlış PASS işaretlemesi, pipeline'daki otomatik gate'lerin (AC-satır bazlı) yeterince katı doğrulanmadığını gösteriyor; ileride benzer 'kısmi AC karşılama, tam PASS' durumları sessizce geçebilir."
+  ],
+  "caveman_review": {
+    "complexity": "low",
+    "unnecessary_files": 0,
+    "unnecessary_helpers": 0,
+    "unnecessary_abstractions": 0
+  },
+  "scope_review": {
+    "matches_atdd": true,
+    "scope_expansion": false
+  },
+  "ready_to_commit": {
+    "atdd_satisfied": true,
+    "tests_passed": true,
+    "no_critical_findings": true,
+    "scope_respected": true,
+    "caveman_satisfied": true,
+    "security_acceptable": true,
+    "maintainability_acceptable": true,
+    "no_blocking_risks": true
+  },
+  "verdict": "approve-with-changes"
+}
