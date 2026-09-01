@@ -2527,3 +2527,55 @@ red-team'in var olma sebebi.
 
 Frontend: 5 yeni dosya (`Button.tsx`, `Card.tsx`, `index.ts` + 2 test
 dosyası), 238/238 tüm proje testi yeşil, sıfır regresyon.
+
+## primitif-katmani-gorsel-regresyon (Saga #348, epic #36) — Epic #36 tamamlandı
+
+**Tauri native klasör diyaloğu tarayıcı önizlemesinde çalışmıyor —
+`%APPDATA%\windows-ai-files\config.json` ile atlatma deseni keşfedildi.**
+`OnboardingScreen`'in "Klasör Seç" akışı `@tauri-apps/plugin-dialog`'un
+native API'sini çağırıyor, bu da düz bir Vite dev server sekmesinde
+(Tauri runtime köprüsü yok) sessizce başarısız oluyor. `backend/config.py`
+okuyunca ortaya çıktı: `GET /api/config` `%APPDATA%\windows-ai-files\
+config.json`'daki `selectedFolder`'ı okuyor, varsa `App.tsx` Onboarding'i
+hiç göstermeden doğrudan `ChatScreen`'e geçiyor. Bu, gelecekteki her
+görsel-doğrulama/E2E task'ı için native diyalog engelini aşmanın kod
+değişikliği gerektirmeyen, kalıcı bir yolu — `ilk-acilis-klasor-secimi-
+ekrani` gibi geçmiş task'larda bu kısayol hiç kullanılmamıştı.
+
+**`ChatScreen`'in `PlanCard`/`ResultCard`/`TransactionHistoryPanel`
+state'lerine App.tsx'e dokunmadan ulaşma deseni — `dev-preview.tsx`.**
+`config.json` kısayolu `sessionId`'yi `null` bırakıyor (App.tsx satır
+159), bu da `PlanCard`/`ResultCard`'ı tetikleyen `requestPlan`'ın hiç
+çalışmamasına yol açıyor — `TransactionHistoryPanel` de `sessionId`
+olmadan render edilmiyor. Çözüm: geçici, commit'lenmeyen bir
+`ui/src/dev-preview.tsx` (mevcut `PlanCard.test.tsx`/`ResultCard.test.tsx`
+testlerindeki render deseninin aynısı — gerçek `ChatScreen` bileşeni,
+sabit örnek proplarla) `main.tsx`'in yerine geçici olarak kondu, screenshot
+alındı, sonra ikisi de (main.tsx orijinaline döndürülüp dev-preview.tsx
+silinerek) tamamen geri alındı — `git status` ile iz kalmadığı
+doğrulandı. Bağımsız red-team turu bu kompozisyonun App.tsx'in gerçek kod
+yolunda ulaşılamayan sentetik bir state olduğunu doğru şekilde
+işaretledi (low/architecture) — `verify_report.md`'ye bu netleştirme
+eklendi: doğrulanan şey backend/LLM akışı değil, primitiflerin token
+render'ı.
+
+**Red-team bulgusu — kanıt kalıcılığı olmadan "PASS" raporu denetlenemez
+kalır.** İlk `verify_report.md` görsel doğrulamayı sadece metinsel
+gözlemle raporlamıştı, hiçbir screenshot saklanmamıştı (medium/test-gap
+bulgusu). Düzeltme: 3 ekran Playwright ile tekrar yakalanıp
+`artifacts/primitif-katmani-gorsel-regresyon/*.png` olarak kalıcı kanıt
+eklendi; ham `vitest` çıktısı da rapora kod bloğu olarak eklendi. Takip
+red-team incelemesi üçünü de doğruladı, verdict `approve`'a yükseltildi.
+
+**Tekrar eden altyapı sorunu — Codex vision-test köprüsü bu makinede
+hiç çalışmadı.** Üçüncü kez aynı durum (`gecersiz-klasor-reddi`,
+`ilk-istek-oturum-baglami`, şimdi bu task) — `C:\obss_bridge\ask_codex.py`
+mevcut değil. Proje emsaline uygun olarak Playwright screenshot + Claude'un
+kendi görsel incelemesi kullanıldı, `verify_report.md`'de "Codex
+vision-test DEĞİL" notuyla işaretlendi. Bu artık bir `postmortem` adayı —
+gate'in kendisi mi kaldırılmalı yoksa köprü mü kurulmalı, ayrı bir karar
+gerektiriyor.
+
+Doğrulama: 5/5 ekran/bileşen görsel olarak bozulmamış bulundu, 238/238
+Vitest yeşil, sıfır kod dosyası değişikliği (`git status` ile bağımsız
+doğrulandı).

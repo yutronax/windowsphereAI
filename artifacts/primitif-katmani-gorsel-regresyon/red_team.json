@@ -1,0 +1,66 @@
+{
+  "task": "primitif-katmani-gorsel-regresyon",
+  "reviewed_at": "2026-09-01T22:30:00+03:00",
+  "summary": "İlk incelemede kanıt kalıcılığı zayıftı (screenshot yok, ham vitest çıktısı yok) — bu 3 bulgu ana ajan tarafından hemen düzeltildi: 3 ekran Playwright ile tekrar yakalanıp artifacts/ altına kalıcı PNG olarak eklendi, ham vitest çıktısı rapora eklendi, dev-preview.tsx'in sentetik kompozisyon olduğu (App.tsx'in gerçek kod yolunda ulaşılamayan bir state) verify_report.md'de açıkça netleştirildi. Kod dosyası değişmedi (git status ile bağımsız doğrulandı), kapsam disiplini korundu.",
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "test-gap",
+      "file": "artifacts/primitif-katmani-gorsel-regresyon/verify_report.md",
+      "issue": "Gate 12 (görsel regresyon) PASS iddiasının tek kanıtı Claude'un o anki metinsel gözlemi; hiçbir .png dosyası artifacts klasöründe saklanmamış (doğrulandı: klasörde sadece 3 .md dosyası var). plan.md bunu 'opsiyonel' bırakmıştı ama sonuç, PASS iddiasının gelecekte bağımsız olarak tekrar denetlenemez olması.",
+      "better_approach": "En azından her 5 ekran için Playwright screenshot dosyası artifacts/<slug>/ altına kaydedilmeliydi (plan.md zaten bu seçeneği tanımlamıştı, sadece kullanılmadı).",
+      "reason": "verify_report.md kendisi 'Coverage/Quality Notes' bölümünde benzer bir itirafta bulunuyor (Davranış Sözleşmesi satır 7/8 test edilmedi); kanıt kalıcılığı olmadan bir sonraki oturumda bu PASS'in doğruluğu sadece metne güvenilerek kabul edilmek zorunda kalınıyor.",
+      "outcome": "fixed",
+      "verification": "3 ekran Playwright ile tekrar yakalanıp artifacts/primitif-katmani-gorsel-regresyon/01-onboarding-screen.png, 02-chatscreen-empty-shell.png, 03-chatscreen-plancard-resultcard-history.png olarak kalıcı şekilde eklendi (git status ile doğrulandı: ?? olarak görünüyor, commit'e hazır). verify_report.md gate 12 detayı bu dosyalara markdown link ile güncellendi."
+    },
+    {
+      "severity": "low",
+      "category": "architecture",
+      "file": "ui/src/App.tsx",
+      "issue": "dev-preview.tsx'in ürettiği kompozisyon (ChatScreen + sabit sessionId + gerçek backend'den TransactionHistoryPanel verisi) App.tsx'in gerçek kod yolunda hiçbir kullanıcı tarafından ulaşılabilir değil: App.tsx satır 148-164'e göre sessionId SADECE OnboardingScreen.onContinue üzerinden set edilir (native Tauri diyaloğu gerektirir), config.json kısayolu ise sessionId'yi null bırakır (satır 159: `sessionId ?? undefined`). dev-preview bu iki yolu birleştirip App.tsx'te hiç var olmayan bir state üretiyor.",
+      "better_approach": "Bu risk plan.md'nin Open Questions/Kararlar bölümünde zaten açıkça tartışılmış ve kabul edilmiş (Seçenek c, App.tsx'e dokunmama gerekçesiyle); mimari olarak makul bir tercih. Ancak verify_report.md'nin 'gerçek kullanıcı akışı sürüldü' ifadesi (gate 7 satırı) bu sentetik birleşimi biraz fazla iddialı sunuyor.",
+      "reason": "İzole bileşen render'ı (PlanCard.test.tsx deseninin aynısı, gerçek tarayıcıda) token/primitif katmanının GÖRSEL etkisini doğrulamak için yeterli ve doğru bir yöntem — ama raporlama dilinin 'App.tsx'in üreteceği gerçek bir state' ile 'sadece token doğrulama amaçlı sentetik kompozisyon' arasındaki farkı daha net vurgulaması gerekirdi.",
+      "outcome": "fixed",
+      "verification": "verify_report.md gate 7 satırına netleştirici bir cümle eklendi: dev-preview.tsx'in ürettiği kompozisyonun App.tsx'in gerçek kod yolunda ulaşılamayan sentetik bir state olduğu, doğrulanan şeyin backend/LLM akışı değil primitiflerin token render'ı olduğu açıkça belirtildi."
+    },
+    {
+      "severity": "low",
+      "category": "test-gap",
+      "file": "artifacts/primitif-katmani-gorsel-regresyon/verify_report.md",
+      "issue": "AC-4 (Vitest 238/238) iddiası ham komut çıktısı eklenmeden metinsel olarak rapor ediliyor; bağımsız doğrulanabilirlik zayıf.",
+      "better_approach": "`npx vitest run` çıktısının özet satırı (test sayıları, süre) verify_report.md'ye ham/kod-bloğu olarak eklenmeliydi.",
+      "reason": "atdd.md AC-4'ün 'kod-seviyeli kanıt, görsel kanıtı tamamlar' ifadesiyle uyumlu olması için kanıt daha somut olmalı.",
+      "outcome": "fixed",
+      "verification": "`npx vitest run` yeniden çalıştırıldı, ham özet çıktısı (`Test Files 14 passed (14)`, `Tests 238 passed (238)`) verify_report.md'nin Görsel Doğrulama Detayı bölümüne kod bloğu olarak eklendi."
+    }
+  ],
+  "strengths": [
+    "git status --short bağımsız olarak doğrulandı: bu task'a ait hiçbir kod dosyası değişmemiş/eklenmemiş, sadece yeni artifacts/primitif-katmani-gorsel-regresyon/ klasörü (beklenen tek çıktı) mevcut — verify_report.md'nin 'temizlik doğrulaması' iddiası tracked dosyalar açısından teyit edildi.",
+    "Kapsam dışı bırakılan üç madde (ekran taşıması, otomatik CI/issue mekanizması, regresyon bulunursa düzeltme) atdd.md ve verify_report.md boyunca tutarlı şekilde ihlal edilmemiş; verify_report.md hiçbir kod değişikliği önermiyor, sadece bulguyu raporluyor.",
+    "Coverage/Quality Notes bölümü, Davranış Sözleşmesi'nin #7/#8 satırlarının bu koşumda test edilmediğini kendiliğinden itiraf ediyor — bu şeffaflık, sahte bir 'tam kapsama' iddiasından kaçınıyor ve doğru bir mühendislik disiplini örneği."
+  ],
+  "risks": [
+    "vision-test skill'inin Codex bağımlılığının bu makinede tekrar tekrar çalışmaması (üçüncü task'ta aynı durum) — verify_report.md bunu 'tekrar eden gate arızası' adayı olarak işaretlemiş, bu doğru bir postmortem sinyali ama bu task'ın kendisi bunu çözmüyor, sadece belgeliyor."
+  ],
+  "caveman_review": {
+    "complexity": "low",
+    "unnecessary_files": 0,
+    "unnecessary_helpers": 0,
+    "unnecessary_abstractions": 0
+  },
+  "scope_review": {
+    "matches_atdd": true,
+    "scope_expansion": false
+  },
+  "ready_to_commit": {
+    "atdd_satisfied": true,
+    "tests_passed": true,
+    "no_critical_findings": true,
+    "scope_respected": true,
+    "caveman_satisfied": true,
+    "security_acceptable": true,
+    "maintainability_acceptable": true,
+    "no_blocking_risks": true
+  },
+  "verdict": "approve"
+}
