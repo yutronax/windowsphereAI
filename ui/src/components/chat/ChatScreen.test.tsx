@@ -596,3 +596,199 @@ describe('ChatScreen — Geçmişi Temizle (Clear History)', () => {
     }
   });
 });
+
+describe('ChatScreen — TransactionHistoryPanel entegrasyonu (sol panel, AC-2, AC-8)', () => {
+  it('renders the TransactionHistoryPanel (left panel) when sessionId is provided (AC-2, AC-8)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      render(<ChatScreen sessionId="session-456" />);
+
+      await waitFor(() => {
+        // Sol panel görünür olmalı
+        expect(screen.getByTestId('chat-left-panel')).toBeVisible();
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not render the TransactionHistoryPanel when sessionId is not provided (AC-2, regression)', () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      render(<ChatScreen />);
+
+      // Sol panel render edilmemeli
+      expect(screen.queryByTestId('chat-left-panel')).not.toBeInTheDocument();
+
+      // Fetch de çağrılmamalı
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('preserves the main-chat-screen data-testid and internal structure when left panel is added (AC-2, regression)', async () => {
+    render(<ChatScreen sessionId="session-789" />);
+
+    // Ana sohbet ekranı data-testid'si hala var
+    expect(screen.getByTestId('main-chat-screen')).toBeInTheDocument();
+
+    // Mesaj listesi hala var ve erişilebilir
+    expect(screen.getByTestId('chat-message-list')).toBeInTheDocument();
+
+    // Input textarea hala var
+    expect(screen.getByTestId('chat-input-textarea')).toBeInTheDocument();
+
+    // Send butonu hala var
+    expect(screen.getByText('Gönder')).toBeInTheDocument();
+  });
+
+  it('allows sending messages independently of the left panel state (AC-2, regression)', async () => {
+    const onSendMessage = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      render(<ChatScreen sessionId="session-789" onSendMessage={onSendMessage} />);
+
+      // Mesaj gönder
+      const textarea = screen.getByTestId('chat-input-textarea');
+      fireEvent.change(textarea, { target: { value: 'sol panel ile birlikte mesaj' } });
+      fireEvent.click(screen.getByText('Gönder'));
+
+      // Mesaj gösterilmeli
+      expect(screen.getByText('sol panel ile birlikte mesaj')).toBeVisible();
+
+      // Callback çağrılmış olmalı
+      expect(onSendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ text: 'sol panel ile birlikte mesaj', role: 'user' })
+      );
+
+      // Textarea temiz olmalı
+      expect(textarea).toHaveValue('');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('preserves PlanCard rendering alongside the left panel (AC-2, AC-3, regression)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      render(
+        <ChatScreen
+          sessionId="session-789"
+          initialMessages={[
+            {
+              id: 'p1',
+              role: 'assistant',
+              text: 'Önerilen plan:',
+              plan: { steps: [{ order: 1, operationType: 'Taşı', targetFolder: 'X', affectedFileCount: 2 }], securityStatus: 'approved' },
+            },
+          ]}
+        />
+      );
+
+      await waitFor(() => {
+        // Sol panel görülüyor
+        expect(screen.getByTestId('chat-left-panel')).toBeVisible();
+
+        // Plan Card'ı da görülüyor
+        expect(screen.getByTestId('plan-card')).toBeVisible();
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('preserves ResultCard rendering alongside the left panel (AC-2, AC-3, regression)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      render(
+        <ChatScreen
+          sessionId="session-789"
+          initialMessages={[
+            {
+              id: 'r1',
+              role: 'assistant',
+              text: 'İşlem tamamlandı:',
+              result: { fileCount: 5, destinationFolders: ['2026-09'], status: 'completed' },
+            },
+          ]}
+        />
+      );
+
+      await waitFor(() => {
+        // Sol panel görülüyor
+        expect(screen.getByTestId('chat-left-panel')).toBeVisible();
+
+        // Result Card'ı da görülüyor
+        expect(screen.getByTestId('result-card')).toBeVisible();
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('maintains fail-closed approve security with the left panel visible (AC-2, AC-3)', async () => {
+    const onApprovePlan = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      render(
+        <ChatScreen
+          sessionId="session-789"
+          onApprovePlan={onApprovePlan}
+          initialMessages={[
+            {
+              id: 'p1',
+              role: 'assistant',
+              text: 'Önerilen plan:',
+              plan: {
+                steps: [{ order: 1, operationType: 'Taşı', targetFolder: 'X', affectedFileCount: 2 }],
+                securityStatus: 'rejected',
+                rejectionReason: 'reddedildi',
+              },
+            },
+          ]}
+        />
+      );
+
+      await waitFor(() => {
+        // Sol panel render edildi
+        expect(screen.getByTestId('chat-left-panel')).toBeVisible();
+      });
+
+      // Rejected plan'ı approve etmeye çalış
+      fireEvent.click(screen.getByTestId('plan-approve-button'));
+
+      // onApprovePlan çağrılmamalı (fail-closed)
+      expect(onApprovePlan).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

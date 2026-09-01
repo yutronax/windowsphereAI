@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type UIEvent } from 'r
 import PlanCard, { type Plan } from './PlanCard';
 import ResultCard, { type TransactionResult } from './ResultCard';
 import SearchPanel from '../search/SearchPanel';
+import TransactionHistoryPanel from './TransactionHistoryPanel';
 import { BACKEND_ORIGIN } from '../../lib/backendHealth';
 
 export type ChatMessage = {
@@ -74,6 +75,7 @@ export default function ChatScreen({
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [isSearchPanelOpen, setIsSearchPanelOpen] = useState(false);
   const [clearHistoryStatus, setClearHistoryStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
   const nextMessageIdRef = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
@@ -157,7 +159,9 @@ export default function ChatScreen({
   }
 
   return (
-    <main data-testid="main-chat-screen" className="chat-screen">
+    <div style={{ display: 'flex', height: '100vh' }}>
+      {sessionId && <TransactionHistoryPanel sessionId={sessionId} refreshTrigger={refreshTrigger} />}
+      <main data-testid="main-chat-screen" className="chat-screen" style={{ flex: 1 }}>
       <style>{`
         .chat-screen {
           display: flex;
@@ -358,7 +362,10 @@ export default function ChatScreen({
               <PlanCard
                 plan={message.plan}
                 onChangePlan={() => handleChangePlan(message.id)}
-                onApprove={() => onApprovePlan?.(message.id)}
+                onApprove={() => {
+                  setRefreshTrigger((prev) => prev + 1);
+                  onApprovePlan?.(message.id);
+                }}
                 stale={staleMessageIds.has(message.id)}
                 isGeneratingPlan={isGeneratingPlan}
               />
@@ -460,6 +467,7 @@ export default function ChatScreen({
         />
         <button type="button" onClick={sendDraft} disabled={draft.trim() === '' || isGeneratingPlan}>Gönder</button>
       </div>
-    </main>
+      </main>
+    </div>
   );
 }
