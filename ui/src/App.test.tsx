@@ -164,6 +164,41 @@ describe('App — gerçek /api/plan bağlantısı (Saga #287)', () => {
   // olarak burada not düşüldü — pipeline talimatı gereği).
 });
 
+describe('App — theme toggle button (Saga #360 dark/light theme support)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }));
+  });
+
+  it('renders the theme toggle button on OnboardingScreen (AC-7, Davranış Sözleşmesi #7)', async () => {
+    render(<App />);
+
+    // Theme toggle should be visible regardless of screen state
+    const themeToggleButton = await screen.findByTestId('theme-toggle-button');
+    expect(themeToggleButton).toBeInTheDocument();
+    expect(themeToggleButton).toBeVisible();
+  });
+
+  it('renders the theme toggle button alongside ChatScreen (AC-7, Davranış Sözleşmesi #7)', async () => {
+    render(<App />);
+
+    // Navigate to ChatScreen by clicking the mock onboarding continue button
+    fireEvent.click(await screen.findByText('mock-onboarding-continue'));
+
+    // Theme toggle should still be visible alongside ChatScreen
+    const themeToggleButton = await screen.findByTestId('theme-toggle-button');
+    expect(themeToggleButton).toBeInTheDocument();
+    expect(themeToggleButton).toBeVisible();
+    expect(await screen.findByTestId('main-chat-screen')).toBeVisible();
+  });
+
+  it('theme toggle has accessible aria-label (AC-7)', async () => {
+    render(<App />);
+
+    const themeToggleButton = await screen.findByTestId('theme-toggle-button');
+    expect(themeToggleButton).toHaveAttribute('aria-label');
+  });
+});
+
 describe('App — gerçek /api/transactions/apply bağlantısı (Saga #309)', () => {
   async function renderChatScreen(fetchMock: ReturnType<typeof vi.fn>) {
     vi.stubGlobal('fetch', fetchMock);

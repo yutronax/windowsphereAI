@@ -6,6 +6,7 @@ import { toTransactionResult } from './lib/transactionResult';
 import type { TransactionResult } from './components/chat/ResultCard';
 import OnboardingScreen from './components/onboarding/OnboardingScreen';
 import { BACKEND_ORIGIN, waitForBackendHealth } from './lib/backendHealth';
+import { applyStoredTheme, toggleTheme } from './lib/theme';
 
 type SetupConfig = { selectedFolder: string };
 
@@ -30,6 +31,10 @@ export default function App() {
     setBackendStatus('starting');
     void waitForBackendHealth().then(({ status }) => setBackendStatus(status));
   }
+
+  useEffect(() => {
+    applyStoredTheme();
+  }, []);
 
   useEffect(() => {
     fetch(`${BACKEND_ORIGIN}/api/config`)
@@ -146,20 +151,31 @@ export default function App() {
   }
 
   if (config === undefined) return null;
-  if (config || sessionId) {
-    return (
-      <ChatScreen
-        messages={messages}
-        onMessagesChange={setMessages}
-        onSendMessage={handleSendMessage}
-        isGeneratingPlan={isGeneratingPlan}
-        planError={planError}
-        onRetry={handleRetry}
-        onApprovePlan={handleApprovePlan}
-        sessionId={sessionId ?? undefined}
-      />
-    );
-  }
-
-  return <OnboardingScreen backendStatus={backendStatus} onContinue={setSessionId} onRetry={checkBackend} />;
+  return (
+    <>
+      <button
+        type="button"
+        data-testid="theme-toggle-button"
+        aria-label="Temayı değiştir"
+        onClick={toggleTheme}
+        style={{ position: 'fixed', top: '12px', right: '12px', zIndex: 10 }}
+      >
+        🌓
+      </button>
+      {config || sessionId ? (
+        <ChatScreen
+          messages={messages}
+          onMessagesChange={setMessages}
+          onSendMessage={handleSendMessage}
+          isGeneratingPlan={isGeneratingPlan}
+          planError={planError}
+          onRetry={handleRetry}
+          onApprovePlan={handleApprovePlan}
+          sessionId={sessionId ?? undefined}
+        />
+      ) : (
+        <OnboardingScreen backendStatus={backendStatus} onContinue={setSessionId} onRetry={checkBackend} />
+      )}
+    </>
+  );
 }

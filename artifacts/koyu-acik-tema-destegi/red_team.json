@@ -1,0 +1,79 @@
+{
+  "task": "koyu-acik-tema-destegi",
+  "reviewed_at": "2026-09-02T16:30:00+03:00",
+  "summary": "Implementasyon ATDD/plan ile büyük ölçüde uyumlu; 7 bileşenin kaynak/test dosyaları bağımsız olarak git diff --stat ile doğrulandı (hiç dokunulmamış), 282/282 test ve tsc --noEmit bağımsız olarak yeşil. Ancak setupTests.ts'e eklenen global CSSStyleDeclaration.prototype.getPropertyValue monkeypatch, sınırlı kapsamlı bir tema özelliği için orantısız derecede geniş bir blast radius taşıyor ve daha izole bir alternatifle çözülebilirdi; ayrıca içindeki senkronizasyon kontrolü sadece console.warn ile uyarıyor, gerçek bir guard değil.",
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "architecture",
+      "file": "ui/src/setupTests.ts",
+      "issue": "CSSStyleDeclaration.prototype.getPropertyValue TÜM proje genelinde (282 test, 15 dosya) kalıcı olarak monkeypatch'leniyor. Bu, tek bir görevin (tema desteği) ihtiyacı için global bir tarayıcı prototipini değiştiren, gelecekteki HERHANGİ bir testin CSS-ilişkili assertion'ını sessizce etkileyebilecek çok geniş kapsamlı bir müdahale.",
+      "better_approach": "Global prototype patch yerine, sadece etkilenen test dosyalarında import edilen paylaşılan bir test-yardımcı fonksiyonu veya özel bir custom matcher tanımlayıp SADECE ilgili dosyalarda kullanmak.",
+      "reason": "atdd.md'nin Risks bölümü bu riski öngörmüştü ama seçilen çözüm etki alanını gereğinden fazla genişletiyor."
+    },
+    {
+      "severity": "medium",
+      "category": "maintainability",
+      "file": "ui/src/setupTests.ts",
+      "issue": "`cssVariableMap` theme.css'in elle yazılmış kopyası; senkron kontrolü sadece ANAHTAR SAYISINI karşılaştırıyor, DEĞER eşleşmesini değil, ve sadece console.warn basıyor (fail etmiyor). Biri bir rengin DEĞERİNİ değiştirip haritayı güncellemeyi unutursa hiçbir uyarı olmadan testler yanlış rengi doğrulamaya devam eder.",
+      "better_approach": "Değer-bazlı karşılaştırma + test suite başında throw ile fail-fast.",
+      "reason": "Mevcut kontrol drift'i gerçekten yakalamıyor, gerçek bir teknik borç."
+    },
+    {
+      "severity": "low",
+      "category": "reliability",
+      "file": "ui/src/setupTests.ts",
+      "issue": "Senkron kontrolü await edilmeyen bir `import().then()` içinde — deterministik çalışmıyor, CI loglarında güvenilir görünmeyebilir.",
+      "better_approach": "tokens.ts'i static import et.",
+      "reason": "Async/await hijyeni eksik."
+    },
+    {
+      "severity": "medium",
+      "category": "readability",
+      "file": "ui/src/App.tsx",
+      "issue": "Toggle butonu hiçbir CSS positioning olmadan normal doküman akışında ekleniyor — gerçek tarayıcıda OnboardingScreen'in ortalanmış kartını itebilir. jsdom testleri layout hesaplamadığı için bunu yakalamaz.",
+      "better_approach": "Butona `position: fixed` + köşe konumlandırması eklenmeli.",
+      "reason": "verify_report.md gate 12 (görsel regresyon) N/A — bu risk hiç doğrulanmamış."
+    },
+    {
+      "severity": "low",
+      "category": "test-gap",
+      "file": "ui/src/theme.css",
+      "issue": "Açık temada `--color-white: #1F2937` kararının Button/danger buton üzerindeki metin kontrastına etkisi doğrulanmadı.",
+      "better_approach": "Gerçek tarayıcıda kontrast kontrolü.",
+      "reason": "atdd.md zaten WCAG audit'ini kapsam dışı bırakmış, blocker değil."
+    }
+  ],
+  "strengths": [
+    "7 bileşenin ne kaynak kodu ne testleri değişmiş — bağımsız git diff ile doğrulandı, AC-5 harfi harfine karşılanıyor.",
+    "tokens.ts'teki 19 renk anahtarı ile theme.css'teki :root bloğu birebir eşleşiyor (AC-6).",
+    "toggleTheme()/applyStoredTheme() try/catch mantığı localStorage hatasını DOM güncellemesinden ayrı ele alıyor.",
+    "tsc --noEmit ve vitest run bağımsız olarak doğrulandı, iddia edilen sonuçlarla eşleşti.",
+    "setupTests.ts sapmasının şeffaf raporlanması ve 3 turda ele alınması iyi mühendislik disiplini."
+  ],
+  "risks": [
+    "Global CSS-var monkeypatch'i gelecekteki testleri sessizce etkileyebilir.",
+    "Toggle butonunun stilsiz konumlandırması gerçek tarayıcıda layout riski taşıyor, doğrulanmadı."
+  ],
+  "caveman_review": {
+    "complexity": "medium",
+    "unnecessary_files": 0,
+    "unnecessary_helpers": 0,
+    "unnecessary_abstractions": 1
+  },
+  "scope_review": {
+    "matches_atdd": true,
+    "scope_expansion": true
+  },
+  "ready_to_commit": {
+    "atdd_satisfied": true,
+    "tests_passed": true,
+    "no_critical_findings": true,
+    "scope_respected": false,
+    "caveman_satisfied": true,
+    "security_acceptable": true,
+    "maintainability_acceptable": true,
+    "no_blocking_risks": true
+  },
+  "verdict": "approve-with-changes"
+}
