@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import PlanCard, { type Plan } from './PlanCard';
+import { tokens } from '../../tokens';
 
 const onePlan: Plan = { steps: [{ order: 1, operationType: 'Taşı', targetFolder: 'X', affectedFileCount: 1 }] };
 
@@ -202,5 +203,35 @@ describe('PlanCard (plan-adimlari-kart / Saga #262)', () => {
     fireEvent.click(screen.getByTestId('plan-approve-button'));
     fireEvent.click(screen.getByTestId('plan-bulk-confirm-button'));
     expect(onApprove).toHaveBeenCalledOnce();
+  });
+
+  // --- plan-result-kartlari-tasarim (Saga #355) NEW TESTS (RED) ---
+  // AC-7: PlanCard sarmalayıcı section'ı Card primitifinin arkaplan/border token'larını kullanacak.
+  // Henüz Card primitifine taşınmadı, inline style kullanıyor — bu testler kırmızı olacak.
+
+  it('plan-card section uses Card primitive background and border styling from tokens (AC-7, plan-result-kartlari-tasarim)', () => {
+    render(<PlanCard plan={onePlan} />);
+
+    const planCardSection = screen.getByTestId('plan-card');
+    expect(planCardSection).toHaveStyle({
+      backgroundColor: tokens.colors.panelBackground,
+      border: `1px solid ${tokens.colors.border}`,
+      borderRadius: tokens.radius.default,
+    });
+  });
+
+  // AC-4: PlanCard'ın "Planı onayla" butonu primitife taşındığında Button token'larını doğru uygulamalı.
+  // Henüz Button primitifine taşınmadı, inline style kullanıyor — bu test kırmızı olacak.
+
+  it('plan-approve-button uses Button primitive token values for height, padding, borderRadius and fontSize (AC-4, plan-result-kartlari-tasarim)', () => {
+    render(<PlanCard plan={{ ...onePlan, securityStatus: 'approved' }} />);
+
+    const approveButton = screen.getByTestId('plan-approve-button');
+    expect(approveButton).toHaveStyle({
+      height: tokens.size.buttonHeight,
+      borderRadius: tokens.radius.default,
+      padding: tokens.spacing.buttonPadding,
+      fontSize: tokens.fontSize.base,
+    });
   });
 });

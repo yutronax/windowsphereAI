@@ -1,9 +1,9 @@
 import { ReactNode, useState } from 'react';
 import { tokens } from '../../tokens';
 
-type Variant = 'primary' | 'danger';
+type Variant = 'primary' | 'danger' | 'danger-outline' | 'secondary';
 
-interface ButtonProps extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'style'> {
+interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
   children: ReactNode;
   'data-testid'?: string;
@@ -20,6 +20,7 @@ export default function Button({
   onMouseLeave,
   onMouseDown,
   onMouseUp,
+  style: propStyle,
   ...props
 }: ButtonProps) {
   const [isHovered, setIsHovered] = useState(false);
@@ -40,8 +41,44 @@ export default function Button({
       return tokens.colors.primary;
     }
 
+    if (variant === 'danger-outline' || variant === 'secondary') {
+      return tokens.colors.white;
+    }
+
     // danger variant: statik renk, hover/active desteği yok
     return tokens.colors.danger;
+  };
+
+  const getTextColor = () => {
+    if (disabled) {
+      return '#FFFFFF';
+    }
+
+    if (variant === 'danger-outline') {
+      return tokens.colors.danger;
+    }
+
+    if (variant === 'secondary') {
+      return tokens.colors.textDark;
+    }
+
+    return '#FFFFFF';
+  };
+
+  const getBorderStyle = () => {
+    if (disabled) {
+      return 'none';
+    }
+
+    if (variant === 'danger-outline') {
+      return `1px solid ${tokens.colors.danger}`;
+    }
+
+    if (variant === 'secondary') {
+      return `1px solid ${tokens.colors.border}`;
+    }
+
+    return 'none';
   };
 
   const handleMouseEnter = (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -71,11 +108,13 @@ export default function Button({
     <button
       style={{
         backgroundColor: getBackgroundColor(),
-        color: '#FFFFFF',
+        color: getTextColor(),
+        border: getBorderStyle(),
         height: tokens.size.buttonHeight,
         borderRadius: tokens.radius.default,
         padding: tokens.spacing.buttonPadding,
         fontSize: tokens.fontSize.base,
+        ...propStyle,
       }}
       disabled={disabled}
       data-testid={dataTestId}

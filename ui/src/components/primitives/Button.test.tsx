@@ -110,4 +110,43 @@ describe('Button (primitives, Saga #346)', () => {
     const button = screen.getByTestId('primitive-button-children');
     expect(button).toHaveTextContent(buttonText);
   });
+
+  // --- plan-result-kartlari-tasarim (Saga #355) NEW TESTS (RED) ---
+  // AC-6: ResultCard'ın outline-kırmızı "Geri al" butonu için yeni danger-outline
+  // variant'ı — henüz Button.tsx tarafından desteklenmiyor, bu testler kırmızı olacak.
+
+  it('renders Button with danger-outline variant: white background, red border and text (AC-6, plan-result-kartlari-tasarim)', () => {
+    render(
+      <Button variant="danger-outline" data-testid="primitive-button-danger-outline">
+        Geri al
+      </Button>,
+    );
+
+    const button = screen.getByTestId('primitive-button-danger-outline');
+    expect(button).toBeInTheDocument();
+    expect(button).toHaveStyle({
+      backgroundColor: 'rgb(255, 255, 255)',
+      color: tokens.colors.danger,
+      border: `1px solid ${tokens.colors.danger}`,
+      height: tokens.size.buttonHeight,
+      borderRadius: tokens.radius.default,
+      padding: tokens.spacing.buttonPadding,
+      fontSize: tokens.fontSize.base,
+    });
+  });
+
+  it('danger-outline variant disabled applies disabled styling while keeping outline style (AC-6, plan-result-kartlari-tasarim)', () => {
+    render(
+      <Button variant="danger-outline" disabled data-testid="primitive-button-danger-outline-disabled">
+        Geri al
+      </Button>,
+    );
+
+    const button = screen.getByTestId('primitive-button-danger-outline-disabled');
+    expect(button).toBeDisabled();
+    expect(button).toHaveStyle({
+      backgroundColor: '#94A3B8',
+      // Disabled state overrides the danger-outline styling
+    });
+  });
 });

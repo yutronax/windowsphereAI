@@ -1,4 +1,7 @@
 import { useState } from 'react';
+import Button from '../primitives/Button';
+import Card from '../primitives/Card';
+import { tokens } from '../../tokens';
 
 // Saga #281: backend'in üretebileceği bilinen operasyon türleri
 // (backend/models.py: OperationType enum ile birebir eşleşir).
@@ -78,14 +81,15 @@ export default function PlanCard({ plan, onApprove, onChangePlan, stale = false,
   }
 
   return (
-    <section className="plan-card" data-testid="plan-card" aria-label="Önerilen plan">
+    <Card
+      data-testid="plan-card"
+      aria-label="Önerilen plan"
+      className="plan-card"
+    >
       <style>{`
         .plan-card {
-          border: 1px solid #E5E7EB;
-          border-radius: 8px;
           padding: 12px 16px;
           margin-top: 8px;
-          background-color: #FAFAFA;
         }
         .plan-card-list {
           margin: 0;
@@ -101,48 +105,19 @@ export default function PlanCard({ plan, onApprove, onChangePlan, stale = false,
           font-weight: 600;
         }
         .plan-card-meta {
-          color: #4B5563;
-          font-size: 14px;
+          color: ${tokens.colors.textSecondary};
+          font-size: ${tokens.fontSize.small};
         }
         .plan-card-approve-btn {
           margin-top: 12px;
-          height: 44px;
-          padding: 0 20px;
-          border-radius: 8px;
-          background-color: #1E3A8A;
-          color: #fff;
-          border: none;
-          font-size: 16px;
-        }
-        .plan-card-approve-btn:hover:not(:disabled) {
-          background-color: #1E3172;
-        }
-        .plan-card-approve-btn:focus-visible {
-          outline: 2px solid #1E3A8A;
-          outline-offset: 2px;
-        }
-        .plan-card-approve-btn:disabled {
-          background-color: #94A3B8;
-          cursor: not-allowed;
         }
         .plan-card-status-text {
-          color: #4B5563;
-          font-size: 14px;
+          color: ${tokens.colors.textSecondary};
+          font-size: ${tokens.fontSize.small};
           margin-top: 8px;
         }
         .plan-card-status-text.is-rejected {
-          color: #DC2626;
-        }
-        .plan-card-change-btn {
-          margin-top: 12px;
-          margin-left: 8px;
-          height: 44px;
-          padding: 0 20px;
-          border-radius: 8px;
-          background-color: #fff;
-          color: #374151;
-          border: 1px solid #D1D5DB;
-          font-size: 16px;
+          color: ${tokens.colors.danger};
         }
       `}</style>
       <ol className="plan-card-list">
@@ -158,27 +133,27 @@ export default function PlanCard({ plan, onApprove, onChangePlan, stale = false,
       </ol>
       {isConfirmingBulk ? (
         <>
-          <button
-            type="button"
+          <Button
+            variant="primary"
             className="plan-card-approve-btn"
             data-testid="plan-bulk-confirm-button"
             onClick={handleApprove}
           >
             Evet, onayla ({totalAffectedFileCount} dosya)
-          </button>
-          <button
-            type="button"
-            className="plan-card-change-btn"
+          </Button>
+          <Button
+            variant="secondary"
+            style={{ marginTop: '12px', marginLeft: '8px' }}
             data-testid="plan-bulk-confirm-cancel-button"
             onClick={handleCancelBulkConfirm}
           >
             Vazgeç
-          </button>
+          </Button>
         </>
       ) : (
         <>
-          <button
-            type="button"
+          <Button
+            variant="primary"
             className="plan-card-approve-btn"
             data-testid="plan-approve-button"
             disabled={!canApprove}
@@ -186,16 +161,16 @@ export default function PlanCard({ plan, onApprove, onChangePlan, stale = false,
             onClick={handleApprove}
           >
             Planı onayla
-          </button>
-          <button
-            type="button"
-            className="plan-card-change-btn"
+          </Button>
+          <Button
+            variant="secondary"
+            style={{ marginTop: '12px', marginLeft: '8px' }}
             data-testid="plan-change-button"
             disabled={isGeneratingPlan}
             onClick={() => onChangePlan?.()}
           >
             Planı değiştir
-          </button>
+          </Button>
         </>
       )}
       {isBulk && isConfirmingBulk && (
@@ -216,6 +191,6 @@ export default function PlanCard({ plan, onApprove, onChangePlan, stale = false,
           </p>
         </div>
       )}
-    </section>
+    </Card>
   );
 }

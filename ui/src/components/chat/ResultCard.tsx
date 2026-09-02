@@ -1,5 +1,7 @@
 import { useState } from 'react';
-
+import Button from '../primitives/Button';
+import Card from '../primitives/Card';
+import { tokens } from '../../tokens';
 import { BACKEND_ORIGIN } from '../../lib/backendHealth';
 
 export type TransactionResult = {
@@ -115,19 +117,16 @@ export default function ResultCard({ result }: Props) {
   }
 
   return (
-    <section
-      className="result-card"
+    <Card
       data-testid="result-card"
       aria-label="İşlem sonucu"
       onMouseEnter={handleHoverLoadPreview}
+      className="result-card"
     >
       <style>{`
         .result-card {
-          border: 1px solid #E5E7EB;
-          border-radius: 12px;
           padding: 12px 16px;
           margin-top: 8px;
-          background-color: #FAFAFA;
         }
         .result-card-file-count {
           font-weight: 600;
@@ -136,66 +135,32 @@ export default function ResultCard({ result }: Props) {
         .result-card-folders {
           margin: 0;
           padding-left: 20px;
-          color: #4B5563;
-          font-size: 14px;
+          color: ${tokens.colors.textSecondary};
+          font-size: ${tokens.fontSize.small};
         }
         .result-card-empty-folders {
           margin: 0;
-          color: #4B5563;
-          font-size: 14px;
+          color: ${tokens.colors.textSecondary};
+          font-size: ${tokens.fontSize.small};
         }
         .result-card-status-text {
-          color: #4B5563;
-          font-size: 14px;
+          color: ${tokens.colors.textSecondary};
+          font-size: ${tokens.fontSize.small};
           margin-top: 8px;
         }
         .result-card-status-text.is-failed {
-          color: #DC2626;
+          color: ${tokens.colors.danger};
         }
         .result-card-revert-btn {
           margin-top: 12px;
-          height: 44px;
-          padding: 0 20px;
-          border-radius: 8px;
-          background-color: #fff;
-          color: #DC2626;
-          border: 1px solid #DC2626;
-          font-size: 16px;
-        }
-        .result-card-revert-btn:disabled {
-          background-color: #F3F4F6;
-          color: #9CA3AF;
-          border-color: #D1D5DB;
-          cursor: not-allowed;
-        }
-        .result-card-revert-confirm-btn {
-          margin-top: 12px;
-          height: 44px;
-          padding: 0 20px;
-          border-radius: 8px;
-          background-color: #DC2626;
-          color: #fff;
-          border: none;
-          font-size: 16px;
-        }
-        .result-card-revert-cancel-btn {
-          margin-top: 12px;
-          margin-left: 8px;
-          height: 44px;
-          padding: 0 20px;
-          border-radius: 8px;
-          background-color: #fff;
-          color: #374151;
-          border: 1px solid #D1D5DB;
-          font-size: 16px;
         }
         .result-card-revert-status-text {
-          color: #4B5563;
-          font-size: 14px;
+          color: ${tokens.colors.textSecondary};
+          font-size: ${tokens.fontSize.small};
           margin-top: 8px;
         }
         .result-card-revert-status-text.is-failed {
-          color: #DC2626;
+          color: ${tokens.colors.danger};
         }
       `}</style>
       <p className="result-card-file-count" data-testid="result-file-count">
@@ -266,33 +231,33 @@ export default function ResultCard({ result }: Props) {
         <>
           {revertState === 'confirming' ? (
             <>
-              <button
-                type="button"
-                className="result-card-revert-confirm-btn"
+              <Button
+                variant="danger"
+                className="result-card-revert-btn"
                 data-testid="result-revert-confirm-button"
                 onClick={handleConfirmRevert}
               >
                 Evet, geri al
-              </button>
-              <button
-                type="button"
-                className="result-card-revert-cancel-btn"
+              </Button>
+              <Button
+                variant="secondary"
+                style={{ marginTop: '12px', marginLeft: '8px' }}
                 data-testid="result-revert-cancel-button"
                 onClick={() => setRevertState('idle')}
               >
                 Vazgeç
-              </button>
+              </Button>
             </>
           ) : (
-            <button
-              type="button"
+            <Button
+              variant="danger-outline"
               className="result-card-revert-btn"
               data-testid="result-revert-button"
               disabled={revertState === 'reverting'}
               onClick={() => setRevertState('confirming')}
             >
               {revertState === 'reverting' ? 'Geri alınıyor…' : 'Geri al'}
-            </button>
+            </Button>
           )}
         </>
       )}
@@ -313,17 +278,17 @@ export default function ResultCard({ result }: Props) {
                 : 'Geri alma isteği başarısız oldu, lütfen tekrar deneyin.'}
           </p>
           {revertState === 'error' && (
-            <button
-              type="button"
+            <Button
+              variant="danger-outline"
               className="result-card-revert-btn"
               data-testid="result-revert-retry-button"
               onClick={() => setRevertState('idle')}
             >
               Tekrar dene
-            </button>
+            </Button>
           )}
         </div>
       )}
-    </section>
+    </Card>
   );
 }

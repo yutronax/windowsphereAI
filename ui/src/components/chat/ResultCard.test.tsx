@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import ResultCard from './ResultCard';
+import { tokens } from '../../tokens';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -355,5 +356,74 @@ describe('ResultCard hover onizleme (Saga #317)', () => {
     fireEvent.mouseEnter(screen.getByTestId('result-card'));
 
     expect(await screen.findByTestId('result-preview-unavailable')).toHaveTextContent('Önizleme mevcut değil');
+  });
+});
+
+// --- plan-result-kartlari-tasarim (Saga #355) NEW TESTS (RED) ---
+// AC-7: ResultCard sarmalayıcı section'ı Card primitifinin arkaplan/border token'larını kullanacak.
+// Henüz Card primitifine taşınmadı, inline style kullanıyor — bu test kırmızı olacak.
+
+describe('ResultCard Card primitive styling (Saga #355, plan-result-kartlari-tasarim)', () => {
+  const baseResult = { fileCount: 1, destinationFolders: ['2026-08'], status: 'completed' as const };
+
+  it('result-card section uses Card primitive background and border styling from tokens (AC-7, plan-result-kartlari-tasarim)', () => {
+    render(<ResultCard result={baseResult} />);
+
+    const resultCardSection = screen.getByTestId('result-card');
+    expect(resultCardSection).toHaveStyle({
+      backgroundColor: tokens.colors.panelBackground,
+      border: `1px solid ${tokens.colors.border}`,
+      borderRadius: tokens.radius.default,
+    });
+  });
+});
+
+// AC-6: ResultCard'ın "Geri al" ve "Evet, geri al" butonları primitiflere taşındığında
+// danger-outline (outline-kırmızı) ve danger (dolu-kırmızı) variant'larını kullanacak.
+// Henüz Button primitiflerine taşınmadı, inline style kullanıyor — bu testler kırmızı olacak.
+
+describe('ResultCard revert button primitive styling (Saga #355, plan-result-kartlari-tasarim)', () => {
+  const baseResult = { fileCount: 1, destinationFolders: ['2026-08'], status: 'completed' as const };
+
+  it('result-revert-button uses danger-outline variant: white background, red border and text (AC-6, plan-result-kartlari-tasarim)', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    // Not: hover/mouseEnter burada tetiklenmiyor, bu yüzden fetchSpy'ın
+    // mockResolvedValue ile yapılandırılmasına gerek yok — sadece stil
+    // assertion'ı test ediliyor.
+    render(<ResultCard result={{ ...baseResult, transactionId: 1 }} />);
+
+    const revertButton = screen.getByTestId('result-revert-button');
+    expect(revertButton).toHaveStyle({
+      backgroundColor: 'rgb(255, 255, 255)',
+      color: tokens.colors.danger,
+      border: `1px solid ${tokens.colors.danger}`,
+      height: tokens.size.buttonHeight,
+      borderRadius: tokens.radius.default,
+      padding: tokens.spacing.buttonPadding,
+      fontSize: tokens.fontSize.base,
+    });
+  });
+
+  it('result-revert-confirm-button uses danger variant: red background, white text (AC-6, plan-result-kartlari-tasarim)', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    // Not: hover/mouseEnter burada tetiklenmiyor, bu yüzden fetchSpy'ın
+    // mockResolvedValue ile yapılandırılmasına gerek yok — sadece stil
+    // assertion'ı test ediliyor.
+    render(<ResultCard result={{ ...baseResult, transactionId: 1 }} />);
+
+    // First click to show confirm button
+    fireEvent.click(screen.getByTestId('result-revert-button'));
+
+    const confirmButton = screen.getByTestId('result-revert-confirm-button');
+    expect(confirmButton).toHaveStyle({
+      backgroundColor: tokens.colors.danger,
+      color: 'rgb(255, 255, 255)',
+      height: tokens.size.buttonHeight,
+      borderRadius: tokens.radius.default,
+      padding: tokens.spacing.buttonPadding,
+      fontSize: tokens.fontSize.base,
+    });
   });
 });

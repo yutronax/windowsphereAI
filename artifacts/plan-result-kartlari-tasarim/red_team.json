@@ -1,0 +1,63 @@
+{
+  "task": "plan-result-kartlari-tasarim",
+  "reviewed_at": "2026-09-02T00:00:00Z",
+  "summary": "Refactor davranışsal olarak doğru korunmuş (fail-closed onay, bulk-confirm eşiği, revert state machine, hex renkler kaldırılmış), ve code_diff.md'nin 'transparent yerine white' iddiası git history ile bağımsız doğrulandı (orijinal .result-card-revert-btn zaten background-color:#fff kullanıyordu, doğru düzeltme). Ancak Karar 2 (.secondary-button component-local kalması) iki dosyada bire bir kopyalanmış CSS ile sonuçlanmış — bu, görevin asıl amacı olan 'tasarım tutarlılığını tek noktadan yönetme' hedefine kısmen aykırı bir mimari kompromi.",
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "architecture",
+      "file": "ui/src/components/chat/PlanCard.tsx, ui/src/components/chat/ResultCard.tsx",
+      "issue": "`.secondary-button` CSS bloğu (background/border/color/height/borderRadius/padding/fontSize, 10 satır) her iki dosyada BİREBİR aynı şekilde kopyalanmış (satır satır identik). Bu, tam olarak Epic'in çözmek istediği 'tasarım tutarlılığı tek noktadan yönetilemiyor' problemini yeniden üretiyor — sadece hex yerine token referansları kullanılarak. Bir üçüncü kart eklendiğinde bu blok üçüncü kez kopyalanacak.",
+      "better_approach": "Button primitifine `variant: 'secondary'` (nötr/beyaz bg + gri border) eklemek, tıpkı `danger-outline` için yapıldığı gibi. Bu, plan.md'nin zaten öngördüğü genişletme desenini (Button.tsx'e yeni variant) izler ve CAVEMAN ilkesini de karşılar (yeni dosya değil, mevcut primitife bir dal ekler).",
+      "reason": "atdd.md hedefi ('bakım tek noktadan tokens.ts/primitifler üzerinden yapılabilsin') açıkça bunu istiyor; component-local class kopyası bu hedefi kısmen boşa çıkarıyor. Karar 2'nin gerekçesi ('yeni variant eklemek plan.md'de kapsanmamıştı') zayıf çünkü aynı PR zaten Button.tsx'i `danger-outline` ile genişletti — tutarlılık için `secondary` de eklenebilirdi, ek kapsam riski marjinal."
+    },
+    {
+      "severity": "low",
+      "category": "readability",
+      "file": "ui/src/components/primitives/Button.test.tsx, ui/src/components/chat/ResultCard.test.tsx",
+      "issue": "Test başlıkları hâlâ 'transparent background' diyor (örn. 'renders Button with danger-outline variant: transparent background, red border and text') ama assertion'lar `rgb(255, 255, 255)` (dolu beyaz) bekliyor — isim ile içerik tutarsız, gelecekteki bir okuyucuyu yanıltabilir.",
+      "better_approach": "Test başlıklarını 'white background' olarak güncelle (davranış değişmiyor, sadece isimlendirme netliği).",
+      "reason": "code_diff.md kendi de bu 'transparent→white' düzeltmesini belgeliyor ama test adları güncellenmemiş; okunabilirlik/iz sürülebilirlik için düzeltilmeli."
+    },
+    {
+      "severity": "low",
+      "category": "test-gap",
+      "file": "ui/src/components/chat/ResultCard.test.tsx",
+      "issue": "Yeni eklenen 2 revert-button primitif stil testi `vi.stubGlobal('fetch', fetchSpy)` kullanıyor ama `fetchSpy` hiç `mockResolvedValue` ile yapılandırılmamış — bileşenin `onMouseEnter` (hover preview) tetiklenmese bile, testler kırılgan bir varsayıma dayanıyor (hover event'i JSDOM'da otomatik tetiklenmiyor olması şansa bağlı, coverage amacına aykırı değil ama gizli bir varsayım).",
+      "better_approach": "Yorum satırıyla 'hover tetiklenmiyor çünkü render sonrası mouseEnter dispatch edilmiyor' açıklaması eklenebilir.",
+      "reason": "Gelecekte biri bu testin yanına bir `fireEvent.mouseEnter` eklerse fetch mock'lanmamış olduğundan sessizce undefined body ile patlayabilir; düşük risk ama netlik eksik."
+    }
+  ],
+  "strengths": [
+    "code_diff.md'nin 'orijinal ResultCard revert-btn zaten background-color:#fff kullanıyordu, transparent değil' iddiası git log -p ile (commit d66887c: `.result-card-revert-btn { ... background-color: #fff; }`) bağımsız olarak doğrulandı — sapma gerekçesi doğru ve dürüst.",
+    "Fail-closed onay mantığı (`canApprove = isApproved && !hasApproved && !stale && !isGeneratingPlan`) ve BULK_CONFIRM_THRESHOLD=20 satır satır aynı korunmuş; PlanCard.tsx satır 60 ve 39 karşılaştırmalı okundu, davranış değişmemiş.",
+    "Davranış Sözleşmesi tablosundaki 14 satırın tamamı ilgili testid'lerle (plan-approve-button, plan-bulk-confirm-button/-cancel-button, result-revert-confirm/-cancel/-retry-button, result-preview-loading/-error vb.) PlanCard.tsx/ResultCard.tsx'te birebir eşleşiyor; yeni testler bunları kırmamış (bağımsız `npx vitest run` ile 260/260 doğrulandı).",
+    "Orijinal koddaki `.result-card-revert-btn`/`-confirm-btn`/`-cancel-btn` sınıflarında hiç `:hover` kuralı yoktu (git show ile doğrulandı) — bu yüzden Button primitifinin `danger`/`danger-outline` variant'larının hover/active state desteklememesi bir regresyon değil, orijinal davranışın doğru korunması.",
+    "`rgb(255, 255, 255)` literal düzeltmesi meşru: jsdom/testing-library computed style normalizasyonu `white` keyword'ünü `rgb(255,255,255)`'e çeviriyor, bu implementasyon davranışını DEĞİL sadece assertion-formatını değiştiriyor (test-copilot ilkesi ihlali değil) — implementasyon dosyaları bu düzeltme sırasında değiştirilmedi."
+  ],
+  "risks": [
+    "`.secondary-button` kopyalanmış CSS bloğu, gelecekteki bir tasarım değişikliğinde (örn. buton border-radius'unun güncellenmesi) iki dosyanın senkronize güncellenmesini gerektirir — unutulması durumunda görsel tutarsızlık geri döner (tam olarak bu görevin çözmeye çalıştığı problem).",
+    "Test dosyalarında (`Button.test.tsx`) 'transparent' etiketli ama beyaz bekleyen test isimleri, ileride kod incelemesi yapan biri için yanıltıcı olabilir ve gerçek davranışla dokümantasyon arasında küçük bir güven açığı yaratır."
+  ],
+  "caveman_review": {
+    "complexity": "low",
+    "unnecessary_files": 0,
+    "unnecessary_helpers": 0,
+    "unnecessary_abstractions": 0
+  },
+  "scope_review": {
+    "matches_atdd": true,
+    "scope_expansion": false
+  },
+  "ready_to_commit": {
+    "atdd_satisfied": true,
+    "tests_passed": true,
+    "no_critical_findings": true,
+    "scope_respected": true,
+    "caveman_satisfied": true,
+    "security_acceptable": true,
+    "maintainability_acceptable": true,
+    "no_blocking_risks": true
+  },
+  "verdict": "approve-with-changes"
+}
