@@ -1,0 +1,56 @@
+{
+  "task": "arama-paneli-gorsel-tutarlilik",
+  "reviewed_at": "2026-09-02T00:00:00Z",
+  "summary": "SearchPanel.tsx dogru sekilde Card primitifi + tokens.ts tabanli stille genisletildi; davranis/fetch/debounce/latestRequestIdRef mantigina dokunulmamis, AC-7 (read-only liste) korunmus, 265/265 test bagimsiz calistirilarak dogrulandi. Kucuk semantic-HTML regresyonu ve label spacing tutarsizligi disinda bloklayici bulgu yok.",
+  "findings": [
+    {
+      "severity": "low",
+      "category": "correctness",
+      "file": "ui/src/components/search/SearchPanel.tsx",
+      "issue": "Sarmalayici eleman `<section>`'dan `Card`'a (icinde `<div>`) gecti; bu semantik HTML kaybina yol acar (section artik ARIA landmark/region degil, generic div). aria-label eklenmis olsa da `<div aria-label>` bir `region` rolu tasimaz, tarayici erisilebilirlik agacinda section kadar anlamli degildir.",
+      "better_approach": "Card primitifine `as`/`role=\"region\"` gibi opsiyonel bir prop eklenip SearchPanel'de `role=\"region\"` acikca verilebilirdi, ya da Card'in kendisi varsayilan olarak `role` prop'unu destekleyebilirdi.",
+      "reason": "atdd.md AC-2 sadece 'Card primitifi kullanilsin' diyor, semantik kayip konusunda sessiz kaliyor; verify_report.md gate 9 (erisilebilirlik) N/A olarak isaretlenmis, bu yuzden bu regresyon hicbir gate'te yakalanmadi."
+    },
+    {
+      "severity": "low",
+      "category": "maintainability",
+      "file": "ui/src/components/search/SearchPanel.tsx",
+      "issue": "`.search-panel-filters label { margin-bottom: 4px; }` kurali eklenmis ama label'lar `<label htmlFor=...>` olarak tek basina render ediliyor, hemen ardindan input geliyor; margin-bottom flex-column duzeninde satirlar arasi gap:8px ile birlikte cift bosluk etkisi yaratabilir (label alti 4px + flex gap 8px = filtre gruplari arasinda tutarsiz gorsel aralik). Bu davranissal degil ama plan.md'nin 'PlanCard/ChatScreen ile tutarli spacing' hedefiyle hafif celisir.",
+      "better_approach": "label margin-bottom kaldirilip sadece flex gap'e guvenilebilirdi, ya da label+input ciftleri ayri bir 'group' div'ine sarilip gap tek yerden yonetilebilirdi.",
+      "reason": "Kucuk bir gorsel tutarlilik kusuru, plan.md'nin 'basit flex column + gap' CAVEMAN kararina %100 sadik degil (iki farkli spacing mekanizmasi ust uste biniyor)."
+    }
+  ],
+  "strengths": [
+    "atdd.md Davranis Sozlesmesi tablosundaki 10 satirin hicbiri kod diff'inde degismemis: debounce (300ms), fetch cagrisi sayisi, latestRequestIdRef yaris-durumu mantigi, hata mesaji metinleri (422/410/network/genel), hint/empty ayrimi, unmount reset — tumu SearchPanel.tsx'te state/effect bloklarina dokunulmadan aynen duruyor (git diff'te sadece JSX/style eklendi, useEffect/useState/fetch mantigi diff disi).",
+    "AC-7 dogrulandi: `<li key={item.filename}>` elemaninda onClick/role/tabIndex EKLENMEMIS, mevcut 'does not trigger any action when a result row is clicked' testi hala gecerli ve degismemis.",
+    "5 yeni stil testi zayif degil — `toBeInTheDocument()` gibi degil, gercek `toHaveStyle({...})` ile `tokens.colors.*`/`tokens.fontSize.*`/`tokens.radius.default` degerlerini dogrudan tokens.ts objesinden import ederek karsilastiriyor (SearchPanel.test.tsx satir 4, 225-320).",
+    "`.search-panel-input`/`.search-panel-results`/`.search-panel-hint`/`.search-panel-error`/`.search-panel-empty` class isimleri projede baska hicbir yerde tanimli degil (grep ile dogrulandi) — global CSS/className catismasi riski yok.",
+    "`npx vitest run` bagimsiz olarak calistirildi: 14 dosya / 265 test hepsi yesil, code_diff.md'nin iddiasi teyit edildi (kor guven degil, gercek calistirma ile).",
+    "tokens.spacing.md/sm halisinasyonu (atdd.md Risks) plan asamasinda dogru sekilde tespit edilip literal px degerlerine (projenin zaten yaygin deseni, PlanCard/ChatScreen ile tutarli) donusturulmus."
+  ],
+  "risks": [
+    "SearchPanel gercek render/gorsel dogrulamasi (vision-test) backend+oturum bagimliligi nedeniyle N/A birakildi (verify_report.md gate 12) — bu, stil degerlerinin unit testte dogru olsa bile gercek tarayicida gorsel olarak beklenen sonucu verdiginin manuel/insan onayina kadar kanitlanmadigi anlamina gelir.",
+    "Card->div gecisiyle olusan semantik/erisilebilirlik kaybi (section->div) hicbir otomatik gate tarafindan yakalanmiyor (gate 9 N/A), bu tur regresyonlar bu task paterninde (PlanCard/ResultCard'da da ayni desen kullanilmis) sistematik olarak kor nokta olusturuyor olabilir."
+  ],
+  "caveman_review": {
+    "complexity": "low",
+    "unnecessary_files": 0,
+    "unnecessary_helpers": 0,
+    "unnecessary_abstractions": 0
+  },
+  "scope_review": {
+    "matches_atdd": true,
+    "scope_expansion": false
+  },
+  "ready_to_commit": {
+    "atdd_satisfied": true,
+    "tests_passed": true,
+    "no_critical_findings": true,
+    "scope_respected": true,
+    "caveman_satisfied": true,
+    "security_acceptable": true,
+    "maintainability_acceptable": true,
+    "no_blocking_risks": true
+  },
+  "verdict": "approve"
+}

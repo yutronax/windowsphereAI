@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { BACKEND_ORIGIN } from '../../lib/backendHealth';
+import Card from '../primitives/Card';
+import { tokens } from '../../tokens';
 
 // Saga #334: backend/models.py::SearchResultItem ile birebir eşleşir
 // (mutlak path İÇERMEZ, bkz. backend/models.py satır 409-416). Diğer
@@ -106,12 +108,52 @@ export default function SearchPanel({ sessionId }: Props) {
   }, [sessionId, nameContains, extension, modifiedAfter, modifiedBefore, hasAnyFilter]);
 
   return (
-    <section className="search-panel" data-testid="search-panel">
+    <Card className="search-panel" data-testid="search-panel" aria-label="Dosya arama paneli">
+      <style>{`
+        .search-panel {
+          padding: 12px 16px;
+        }
+        .search-panel-filters {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .search-panel-filters label {
+          font-size: ${tokens.fontSize.small};
+          color: ${tokens.colors.textDark};
+          margin-bottom: 4px;
+        }
+        .search-panel-input {
+          border: 1px solid ${tokens.colors.border};
+          border-radius: ${tokens.radius.default};
+          padding: 8px 12px;
+          font-size: ${tokens.fontSize.base};
+          box-sizing: border-box;
+        }
+        .search-panel-hint,
+        .search-panel-empty {
+          color: ${tokens.colors.textSecondary};
+          font-size: ${tokens.fontSize.small};
+          margin: 0;
+        }
+        .search-panel-error {
+          color: ${tokens.colors.danger};
+          margin: 0;
+        }
+        .search-panel-results {
+          color: ${tokens.colors.textSecondary};
+          font-size: ${tokens.fontSize.small};
+          margin: 0;
+          padding-left: 20px;
+        }
+      `}</style>
+
       <div className="search-panel-filters">
         <label htmlFor="search-panel-name">Isim içerir</label>
         <input
           id="search-panel-name"
           type="text"
+          className="search-panel-input"
           value={nameContains}
           onChange={(e) => setNameContains(e.target.value)}
         />
@@ -120,6 +162,7 @@ export default function SearchPanel({ sessionId }: Props) {
         <input
           id="search-panel-extension"
           type="text"
+          className="search-panel-input"
           value={extension}
           onChange={(e) => setExtension(e.target.value)}
         />
@@ -128,6 +171,7 @@ export default function SearchPanel({ sessionId }: Props) {
         <input
           id="search-panel-modified-after"
           type="text"
+          className="search-panel-input"
           value={modifiedAfter}
           onChange={(e) => setModifiedAfter(e.target.value)}
         />
@@ -136,25 +180,26 @@ export default function SearchPanel({ sessionId }: Props) {
         <input
           id="search-panel-modified-before"
           type="text"
+          className="search-panel-input"
           value={modifiedBefore}
           onChange={(e) => setModifiedBefore(e.target.value)}
         />
       </div>
 
-      {!hasAnyFilter && <p data-testid="search-panel-hint">Aramak için bir filtre girin</p>}
+      {!hasAnyFilter && <p className="search-panel-hint" data-testid="search-panel-hint">Aramak için bir filtre girin</p>}
 
       {error && (
-        <p data-testid="search-panel-error" role="alert">
+        <p className="search-panel-error" data-testid="search-panel-error" role="alert">
           {error}
         </p>
       )}
 
       {!error && hasAnyFilter && hasSearched && results.length === 0 && (
-        <p data-testid="search-panel-empty">Sonuç bulunamadı</p>
+        <p className="search-panel-empty" data-testid="search-panel-empty">Sonuç bulunamadı</p>
       )}
 
       {!error && results.length > 0 && (
-        <ul data-testid="search-panel-results">
+        <ul className="search-panel-results" data-testid="search-panel-results">
           {results.map((item) => (
             <li key={item.filename}>
               <span>{item.filename}</span>
@@ -165,6 +210,6 @@ export default function SearchPanel({ sessionId }: Props) {
           ))}
         </ul>
       )}
-    </section>
+    </Card>
   );
 }

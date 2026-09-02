@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import SearchPanel from './SearchPanel';
+import { tokens } from '../../tokens';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -217,5 +218,96 @@ describe('SearchPanel (dosya-arama-frontend-ui / Saga #334)', () => {
     expect(() => fireEvent.click(row as HTMLElement)).not.toThrow();
     // No navigation/callback exists to assert on — the contract is simply
     // that the row is not an interactive element (no button/link role).
+  });
+
+  // AC-2: Card primitifi token'larını doğrula (sarmalayıcı section)
+  it('applies Card primitif token styles to the search-panel wrapper (AC-2)', () => {
+    render(<SearchPanel sessionId="session-1" />);
+
+    const searchPanel = screen.getByTestId('search-panel');
+    expect(searchPanel).toHaveStyle({
+      backgroundColor: tokens.colors.panelBackground,
+      border: `1px solid ${tokens.colors.border}`,
+      borderRadius: tokens.radius.default,
+    });
+  });
+
+  // AC-3: Input stili — isim filtresinin border/border-radius/font-size token'larını doğrula
+  it('applies input style tokens to the nameContains input (AC-3)', () => {
+    render(<SearchPanel sessionId="session-1" />);
+
+    const nameInput = screen.getByLabelText(/isim/i);
+    expect(nameInput).toHaveStyle({
+      border: `1px solid ${tokens.colors.border}`,
+      borderRadius: tokens.radius.default,
+      fontSize: tokens.fontSize.base,
+    });
+  });
+
+  // AC-4: Sonuç listesi stili — search-panel-results'in textSecondary/fontSize.small kullandığını doğrula
+  it('applies result list style tokens when results are present (AC-4)', async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockJsonResponse({
+        results: [{ filename: 'test.pdf', extension: '.pdf', modifiedAt: '2026-08-01T00:00:00Z', sizeBytes: 1024 }],
+        partial: false,
+      }),
+    );
+
+    render(<SearchPanel sessionId="session-1" />);
+    fireEvent.change(screen.getByLabelText(/isim/i), { target: { value: 'test' } });
+    vi.advanceTimersByTime(300);
+
+    await waitFor(() => expect(screen.getByTestId('search-panel-results')).toBeVisible());
+
+    const resultsList = screen.getByTestId('search-panel-results');
+    expect(resultsList).toHaveStyle({
+      color: tokens.colors.textSecondary,
+      fontSize: tokens.fontSize.small,
+    });
+  });
+
+  // AC-5: Hata mesajı rengi — search-panel-error'ün danger token'ını doğrula
+  it('applies danger color token to the error message (AC-5)', async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('network down'));
+
+    render(<SearchPanel sessionId="session-1" />);
+    fireEvent.change(screen.getByLabelText(/isim/i), { target: { value: 'test' } });
+    vi.advanceTimersByTime(300);
+
+    await waitFor(() => expect(screen.getByTestId('search-panel-error')).toBeVisible());
+
+    const errorElement = screen.getByTestId('search-panel-error');
+    expect(errorElement).toHaveStyle({
+      color: tokens.colors.danger,
+    });
+  });
+
+  // AC-6: Hint/empty mesaj stili — search-panel-hint'in textSecondary/fontSize.small kullandığını doğrula
+  it('applies hint and empty message style tokens (AC-6)', async () => {
+    render(<SearchPanel sessionId="session-1" />);
+
+    // İlk render'da hint mesajı görülüyor
+    const hintElement = screen.getByTestId('search-panel-hint');
+    expect(hintElement).toHaveStyle({
+      color: tokens.colors.textSecondary,
+      fontSize: tokens.fontSize.small,
+    });
+
+    // Şimdi filtreyi gir ve fetch mock'la (boş sonuç dönsün)
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockJsonResponse({ results: [], partial: false }),
+    );
+
+    fireEvent.change(screen.getByLabelText(/isim/i), { target: { value: 'empty' } });
+    vi.advanceTimersByTime(300);
+
+    // Empty mesajı göreceğiz
+    await waitFor(() => expect(screen.getByTestId('search-panel-empty')).toBeVisible());
+
+    const emptyElement = screen.getByTestId('search-panel-empty');
+    expect(emptyElement).toHaveStyle({
+      color: tokens.colors.textSecondary,
+      fontSize: tokens.fontSize.small,
+    });
   });
 });
