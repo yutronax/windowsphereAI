@@ -1,0 +1,59 @@
+{
+  "task": "sohbet-ekrani-gorsel-iyilestirme",
+  "reviewed_at": "2026-09-02T00:00:00Z",
+  "summary": "Token taşıması genel olarak temiz ve pixel-perfect yapılmış (build/tip/testler PASS, data-testid/aria korunmuş), ancak '#fff' beyaz rengi tokens.ts'e taşınmamış (AC-1'in 'ham hex 0'a iner' hedefini tam karşılamıyor, orkestratör tarafından grep ile doğrulandı: ChatScreen.tsx satır 197/210/291/303/315) ve e2e/vision-test doğrulaması backend erişilemediği için hiç yapılamamış — bu ikisi commit öncesi netleştirilmeli.",
+  "findings": [
+    {
+      "severity": "low",
+      "category": "correctness",
+      "file": "ui/src/components/chat/ChatScreen.tsx",
+      "issue": "5 yerde (satır 197, 210, 291, 303, 315) hâlâ ham '#fff' hex değeri kullanılıyor; tokens.ts'te bir 'white'/'onPrimary' karşılığı eklenmemiş. atdd.md AC-1 açıkça 'kaynak kodda ham hex renk sayısı 0'a iner' diyor.",
+      "better_approach": "tokens.ts'e colors.white (veya colors.onPrimaryText) = '#fff' eklenip bu 5 kullanım yeri ona yönlendirilmeli.",
+      "reason": "AC-1'in harfiyen karşılanması için gerekli; atdd.md Davranış Sözleşmesi #7 (kısmi başarı = bazı hex'ler taşınmış bazıları kalmış) senaryosuna tam uyan, küçük ama gerçek bir boşluk.",
+      "outcome": "fixed",
+      "outcome_detail": "tokens.ts'e colors.white='#fff' eklendi, ChatScreen.tsx'teki 5 satır tokens.colors.white'a taşındı (test-first: önce 2 red test eklendi, sonra implementasyon). Orkestratör grep ile doğruladı (satır 197/210/291/303/315 artık ${tokens.colors.white}). Tam suite tekrar çalıştırıldı: 14 dosya/253 test PASS, tsc --noEmit 0 hata."
+    },
+    {
+      "severity": "medium",
+      "category": "reliability",
+      "file": "obss_project/artifacts/sohbet-ekrani-gorsel-iyilestirme/verify_report.md",
+      "issue": "Gate 7 (e2e) ve Gate 12 (görsel regresyon/vision-test) INCONCLUSIVE — backend'e erişilemediği için ChatScreen hiç canlı render edilip gözle/otomatik karşılaştırılamamış. atdd.md'nin öngördüğü %20 e2e payı fiilen sıfır kalmış.",
+      "better_approach": "Commit öncesi backend (FastAPI) ayağa kaldırılıp en azından bir kez manuel/vision-test screenshot karşılaştırması yapılmalı, ya da bu risk kullanıcıya açıkça 'commit sonrası doğrulanacak' olarak işaretlenip onay istenmeli.",
+      "reason": "Pixel-perfect iddiası şu an sadece toHaveStyle unit assertion'larına dayanıyor; CSS özelliklerinin (örn. media query, font-family, gerçek DOM cascade etkileşimi) gerçek tarayıcıda aynı göründüğü doğrulanmamış.",
+      "outcome": "skipped",
+      "outcome_detail": "Bu ortamda backend (FastAPI) çalıştırılamıyor — çözümü bu pipeline adımlarının kapsamı dışında. Kullanıcıya açıkça bildirildi: commit sonrası backend'i elle çalıştırıp ChatScreen'i gözle kontrol etmesi önerildi."
+    }
+  ],
+  "strengths": [
+    "tokens.ts'e eklenen 10 yeni alan (dangerBanner*/dangerMessage*/success*/connected) mevcut hex değerlerle birebir eşleşiyor ve mevcut alanlar değişmemiş — pixel-perfect kural korunmuş.",
+    "ChatScreen.tsx ve TransactionHistoryPanel.tsx'te tüm data-testid, role, aria-* öznitelikleri değişmeden kalmış; grep ile hex tarafında sadece '#fff' dışında kalıntı bulunamadı.",
+    "Button/Card primitiflerinin ChatScreen'in 32px küçük butonlarına ve TransactionHistoryPanel'in padding'ine uymadığı doğru tespit edilip (plan.md) zorla uygulanmamış — bu, gereksiz bir soyutlamayı (yanlış primitif kullanımı) önlemiş, iyi bir karar.",
+    "npx tsc --noEmit ve tam test suite (251/251) PASS; CAVEMAN açısından yeni dosya/soyutlama/yardımcı fonksiyon eklenmemiş, minimum diff ilkesine uyulmuş."
+  ],
+  "risks": [
+    "pypdf bağımlılık CVE'leri (verify_report.md Gate 10) bu görevle ilgisiz ama proje genelinde pre-existing bir güvenlik borcu olarak kayıtta duruyor — bu görevi bloklamaz ama ayrı takip gerektirir (bkz. task_e97fecf5).",
+    "Vision-test/e2e doğrulamasının hiç çalışmamış olması, ileride bir CSS cascade/gerçek tarayıcı farkının fark edilmeden merge edilmesi riskini taşıyor."
+  ],
+  "caveman_review": {
+    "complexity": "low",
+    "unnecessary_files": 0,
+    "unnecessary_helpers": 0,
+    "unnecessary_abstractions": 0
+  },
+  "scope_review": {
+    "matches_atdd": true,
+    "scope_expansion": false
+  },
+  "ready_to_commit": {
+    "atdd_satisfied": true,
+    "tests_passed": true,
+    "no_critical_findings": true,
+    "scope_respected": true,
+    "caveman_satisfied": true,
+    "security_acceptable": true,
+    "maintainability_acceptable": true,
+    "no_blocking_risks": true
+  },
+  "verdict": "approve",
+  "post_review_update": "Low-severity '#fff' bulgusu düzeltildi (bkz. findings[0].outcome). Medium-severity e2e/vision-test bulgusu ortam kısıtı nedeniyle skipped olarak kaldı ve kullanıcıya açıkça bildirildi — bloklayıcı değil. atdd_satisfied artık true; verdict approve-with-changes'ten approve'a yükseltildi."
+}

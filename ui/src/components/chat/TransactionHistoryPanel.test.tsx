@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import TransactionHistoryPanel from './TransactionHistoryPanel';
+import { tokens } from '../../tokens';
 
 // Mock the backendHealth module to control BACKEND_ORIGIN
 vi.mock('../../lib/backendHealth', () => ({
@@ -505,6 +506,117 @@ describe('TransactionHistoryPanel (sol panel — işlem geçmişi)', () => {
         await waitFor(() => {
           // Panel kendi data-testid'si olmalı (ChatScreen tarafından selectable)
           expect(screen.getByTestId('chat-left-panel')).toBeVisible();
+        });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+  });
+
+  describe('TransactionHistoryPanel — Design tokens usage (sohbet-ekrani-gorsel-iyilestirme / AC-1, AC-4)', () => {
+    it('renders connection-status with connected token color when health check succeeds (AC-4)', async () => {
+      const mockTransactions = [
+        {
+          id: 'tx-1',
+          createdAt: '2026-09-01T13:55:00Z',
+          status: 'completed',
+          fileCount: 2,
+          targetFolders: ['Belgeler'],
+        },
+      ];
+
+      const fetchMock = vi.fn((url) => {
+        if (url.includes('/api/transactions')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => mockTransactions,
+          });
+        }
+        if (url.includes('/api/health')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ status: 'ok', llm_reachable: true, path_allowed: true }),
+          });
+        }
+        return Promise.reject(new Error('Unknown endpoint'));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      try {
+        render(<TransactionHistoryPanel sessionId="session-123" />);
+
+        await waitFor(() => {
+          const connectionStatus = screen.getByTestId('connection-status');
+          expect(connectionStatus).toHaveStyle({ color: tokens.colors.connected });
+        });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('renders connection-status with danger color when health check fails (AC-4)', async () => {
+      const mockTransactions = [
+        {
+          id: 'tx-1',
+          createdAt: '2026-09-01T13:55:00Z',
+          status: 'completed',
+          fileCount: 1,
+          targetFolders: ['Belgeler'],
+        },
+      ];
+
+      const fetchMock = vi.fn((url) => {
+        if (url.includes('/api/transactions')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => mockTransactions,
+          });
+        }
+        if (url.includes('/api/health')) {
+          return Promise.reject(new Error('Health check failed'));
+        }
+        return Promise.reject(new Error('Unknown endpoint'));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      try {
+        render(<TransactionHistoryPanel sessionId="session-123" />);
+
+        await waitFor(() => {
+          const connectionStatus = screen.getByTestId('connection-status');
+          expect(connectionStatus).toHaveStyle({ color: tokens.colors.danger });
+        });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('renders chat-left-panel with border token color (AC-1)', async () => {
+      const mockTransactions = [
+        {
+          id: 'tx-1',
+          createdAt: '2026-09-01T13:55:00Z',
+          status: 'completed',
+          fileCount: 1,
+          targetFolders: ['Belgeler'],
+        },
+      ];
+
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => mockTransactions,
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      try {
+        render(<TransactionHistoryPanel sessionId="session-123" />);
+
+        await waitFor(() => {
+          const panel = screen.getByTestId('chat-left-panel');
+          // borderRight should use tokens.colors.border
+          expect(panel).toHaveStyle({
+            borderRightColor: tokens.colors.border,
+          });
         });
       } finally {
         vi.unstubAllGlobals();

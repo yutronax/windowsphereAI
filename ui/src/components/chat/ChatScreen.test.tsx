@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import ChatScreen from './ChatScreen';
+import { tokens } from '../../tokens';
 
 describe('ChatScreen (dikey-mesaj-akisi / Saga #259)', () => {
   it('renders no messages initially when none are provided (AC-1)', () => {
@@ -790,5 +791,123 @@ describe('ChatScreen — TransactionHistoryPanel entegrasyonu (sol panel, AC-2, 
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('ChatScreen — Design tokens usage (sohbet-ekrani-gorsel-iyilestirme / AC-1, AC-2)', () => {
+  it('renders user message bubble with primary color from tokens (AC-1)', () => {
+    render(<ChatScreen initialMessages={[{ id: 'u1', role: 'user', text: 'merhaba' }]} />);
+
+    const userBubble = screen.getByTestId('chat-message-bubble-u1');
+    expect(userBubble).toHaveStyle({ backgroundColor: tokens.colors.primary });
+  });
+
+  it('renders assistant message bubble with panelBackground color from tokens (AC-1)', () => {
+    render(<ChatScreen initialMessages={[{ id: 'a1', role: 'assistant', text: 'yanıt' }]} />);
+
+    const assistantBubble = screen.getByTestId('chat-message-bubble-a1');
+    expect(assistantBubble).toHaveStyle({ backgroundColor: tokens.colors.panelBackground });
+    expect(assistantBubble).toHaveStyle({ color: tokens.colors.textDark });
+  });
+
+  it('renders plan-error-indicator with danger banner tokens (AC-5)', () => {
+    render(<ChatScreen planError="Hata meydana geldi" isGeneratingPlan={false} />);
+
+    const indicator = screen.getByTestId('plan-error-indicator');
+    expect(indicator).toHaveStyle({ backgroundColor: tokens.colors.dangerBannerBg });
+    expect(indicator).toHaveStyle({ borderColor: tokens.colors.dangerBannerBorder });
+    expect(indicator).toHaveStyle({ color: tokens.colors.dangerBannerText });
+  });
+
+  it('renders clear-history-success-message with success tokens (AC-5)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ clearedAt: '2026-09-01T12:00:00Z' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      render(<ChatScreen sessionId="session-123" />);
+
+      fireEvent.click(screen.getByTestId('chat-clear-history-button'));
+
+      await waitFor(() => {
+        const successMsg = screen.getByTestId('chat-clear-history-success-message');
+        expect(successMsg).toHaveStyle({ backgroundColor: tokens.colors.successBg });
+        expect(successMsg).toHaveStyle({ color: tokens.colors.successText });
+        expect(successMsg).toHaveStyle({ borderColor: tokens.colors.successBorder });
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('renders clear-history-error-message with danger message tokens (AC-5)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ detail: 'Hata' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      render(<ChatScreen sessionId="session-123" />);
+
+      fireEvent.click(screen.getByTestId('chat-clear-history-button'));
+
+      await waitFor(() => {
+        const errorMsg = screen.getByTestId('chat-clear-history-error-message');
+        expect(errorMsg).toHaveStyle({ backgroundColor: tokens.colors.dangerMessageBg });
+        expect(errorMsg).toHaveStyle({ color: tokens.colors.dangerMessageText });
+        expect(errorMsg).toHaveStyle({ borderColor: tokens.colors.dangerMessageBorder });
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('preserves all critical data-testid attributes for testing (regression, AC-6)', () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      render(
+        <ChatScreen
+          sessionId="session-456"
+          initialMessages={[
+            { id: 'm1', role: 'user', text: 'test' },
+            { id: 'a1', role: 'assistant', text: 'response' },
+          ]}
+          planError="Error"
+        />
+      );
+
+      // Critical data-testid selectors that must not be removed
+      const criticalTestIds = [
+        'chat-message-list',
+        'chat-message-m1',
+        'chat-message-bubble-m1',
+        'chat-message-a1',
+        'chat-message-bubble-a1',
+        'plan-error-indicator',
+        'chat-input-textarea',
+        'main-chat-screen',
+      ];
+
+      for (const testId of criticalTestIds) {
+        expect(screen.getByTestId(testId)).toBeInTheDocument();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('renders user message bubble text color from tokens.colors.white (AC-1)', () => {
+    render(<ChatScreen initialMessages={[{ id: 'u2', role: 'user', text: 'test' }]} />);
+    const userBubble = screen.getByTestId('chat-message-bubble-u2');
+    expect(userBubble).toHaveStyle({ color: tokens.colors.white });
   });
 });

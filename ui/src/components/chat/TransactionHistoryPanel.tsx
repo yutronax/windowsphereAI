@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { BACKEND_ORIGIN } from '../../lib/backendHealth';
 import { relativeTime } from '../../lib/relativeTime';
+import { tokens } from '../../tokens';
 
 type TransactionSummary = {
   id: string;
@@ -108,7 +109,7 @@ export default function TransactionHistoryPanel({ sessionId, refreshTrigger = 0 
   }
 
   return (
-    <div data-testid="chat-left-panel" style={{ padding: '12px', borderRight: '1px solid #E5E7EB' }}>
+    <div data-testid="chat-left-panel" style={{ padding: '12px', borderRight: `1px solid ${tokens.colors.border}` }}>
       <div style={{ marginBottom: '12px', fontSize: '14px', fontWeight: 600 }}>
         İşlem Geçmişi
       </div>
@@ -119,7 +120,7 @@ export default function TransactionHistoryPanel({ sessionId, refreshTrigger = 0 
           style={{
             marginBottom: '8px',
             fontSize: '12px',
-            color: connectionStatus === 'connected' ? '#059669' : '#DC2626',
+            color: connectionStatus === 'connected' ? tokens.colors.connected : tokens.colors.danger,
           }}
         >
           {connectionStatus === 'connected' ? '✓ Bağlı' : 'Bağlantı kesildi'}
@@ -127,19 +128,19 @@ export default function TransactionHistoryPanel({ sessionId, refreshTrigger = 0 
       )}
 
       {isLoading && (
-        <div data-testid="transaction-history-loading" style={{ padding: '8px 0', color: '#6B7280', fontSize: '13px' }}>
+        <div data-testid="transaction-history-loading" style={{ padding: '8px 0', color: tokens.colors.textMuted, fontSize: '13px' }}>
           Yükleniyor...
         </div>
       )}
 
       {error && (
-        <div data-testid="transaction-history-error" style={{ padding: '8px 0', color: '#DC2626', fontSize: '13px' }}>
+        <div data-testid="transaction-history-error" style={{ padding: '8px 0', color: tokens.colors.danger, fontSize: '13px' }}>
           {error}
         </div>
       )}
 
       {!isLoading && !error && transactions.length === 0 && (
-        <div style={{ padding: '8px 0', color: '#6B7280', fontSize: '13px' }}>
+        <div style={{ padding: '8px 0', color: tokens.colors.textMuted, fontSize: '13px' }}>
           Henüz hiç işlem yok
         </div>
       )}
@@ -147,7 +148,7 @@ export default function TransactionHistoryPanel({ sessionId, refreshTrigger = 0 
       {!isLoading && !error && transactions.length > 0 && (
         <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
           {transactions.map((tx) => (
-            <li key={tx.id} style={{ padding: '8px 0', fontSize: '13px', color: '#111827', borderBottom: '1px solid #E5E7EB' }}>
+            <li key={tx.id} style={{ padding: '8px 0', fontSize: '13px', color: tokens.colors.textDark, borderBottom: `1px solid ${tokens.colors.border}` }}>
               {tx.targetFolders.join(', ')} → {tx.fileCount} dosya · {relativeTime(tx.createdAt)}
             </li>
           ))}

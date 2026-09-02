@@ -4,6 +4,7 @@ import ResultCard, { type TransactionResult } from './ResultCard';
 import SearchPanel from '../search/SearchPanel';
 import TransactionHistoryPanel from './TransactionHistoryPanel';
 import { BACKEND_ORIGIN } from '../../lib/backendHealth';
+import { tokens } from '../../tokens';
 
 export type ChatMessage = {
   id: string;
@@ -192,12 +193,12 @@ export default function ChatScreen({
           line-height: 1.5;
         }
         .chat-message-item[data-role="user"] .chat-message-bubble {
-          background-color: #1E3A8A;
-          color: #fff;
+          background-color: ${tokens.colors.primary};
+          color: ${tokens.colors.white};
         }
         .chat-message-item[data-role="assistant"] .chat-message-bubble {
-          background-color: #F3F4F6;
-          color: #111827;
+          background-color: ${tokens.colors.panelBackground};
+          color: ${tokens.colors.textDark};
         }
         .chat-scroll-to-latest-button {
           align-self: center;
@@ -205,8 +206,8 @@ export default function ChatScreen({
           height: 32px;
           padding: 0 16px;
           border-radius: 16px;
-          background-color: #111827;
-          color: #fff;
+          background-color: ${tokens.colors.textDark};
+          color: ${tokens.colors.white};
           border: none;
           font-size: 13px;
           cursor: pointer;
@@ -215,11 +216,11 @@ export default function ChatScreen({
           margin: 0;
           padding: 4px 16px 0;
           font-size: 13px;
-          color: #4B5563;
+          color: ${tokens.colors.textSecondary};
         }
         .chat-input-area {
           flex: 0 0 auto;
-          border-top: 1px solid #E5E7EB;
+          border-top: 1px solid ${tokens.colors.border};
           padding: 12px 16px;
           display: flex;
           gap: 8px;
@@ -229,13 +230,13 @@ export default function ChatScreen({
           resize: none;
           min-height: 44px;
           border-radius: 8px;
-          border: 1px solid #E5E7EB;
+          border: 1px solid ${tokens.colors.border};
           padding: 8px 12px;
           font-size: 16px;
           box-sizing: border-box;
         }
         .chat-input-textarea:disabled {
-          background-color: #F3F4F6;
+          background-color: ${tokens.colors.panelBackground};
           cursor: not-allowed;
         }
         .plan-loading-indicator {
@@ -244,7 +245,7 @@ export default function ChatScreen({
           gap: 8px;
           padding: 4px 16px;
           font-size: 14px;
-          color: #4B5563;
+          color: ${tokens.colors.textSecondary};
         }
         .plan-loading-dots {
           display: inline-flex;
@@ -254,7 +255,7 @@ export default function ChatScreen({
           width: 6px;
           height: 6px;
           border-radius: 50%;
-          background-color: #6B7280;
+          background-color: ${tokens.colors.textMuted};
           animation: plan-loading-bounce 1.2s infinite ease-in-out both;
         }
         .plan-loading-dot:nth-child(1) { animation-delay: -0.24s; }
@@ -276,9 +277,9 @@ export default function ChatScreen({
           margin: 4px 16px 0;
           padding: 8px 12px;
           border-radius: 8px;
-          background-color: #FEF2F2;
-          border: 1px solid #FCA5A5;
-          color: #B91C1C;
+          background-color: ${tokens.colors.dangerBannerBg};
+          border: 1px solid ${tokens.colors.dangerBannerBorder};
+          color: ${tokens.colors.dangerBannerText};
           font-size: 14px;
         }
         .plan-retry-button {
@@ -286,8 +287,8 @@ export default function ChatScreen({
           height: 32px;
           padding: 0 14px;
           border-radius: 8px;
-          background-color: #DC2626;
-          color: #fff;
+          background-color: ${tokens.colors.danger};
+          color: ${tokens.colors.white};
           border: none;
           font-size: 13px;
           cursor: pointer;
@@ -298,8 +299,8 @@ export default function ChatScreen({
           height: 32px;
           padding: 0 14px;
           border-radius: 8px;
-          background-color: #111827;
-          color: #fff;
+          background-color: ${tokens.colors.textDark};
+          color: ${tokens.colors.white};
           border: none;
           font-size: 13px;
           cursor: pointer;
@@ -310,14 +311,14 @@ export default function ChatScreen({
           height: 32px;
           padding: 0 14px;
           border-radius: 8px;
-          background-color: #111827;
-          color: #fff;
+          background-color: ${tokens.colors.textDark};
+          color: ${tokens.colors.white};
           border: none;
           font-size: 13px;
           cursor: pointer;
         }
         .chat-clear-history-button:disabled {
-          background-color: #6B7280;
+          background-color: ${tokens.colors.textMuted};
           cursor: not-allowed;
         }
         .chat-clear-history-message {
@@ -328,14 +329,14 @@ export default function ChatScreen({
           font-size: 13px;
         }
         .chat-clear-history-success-message {
-          background-color: #D1FAE5;
-          color: #065F46;
-          border: 1px solid #A7F3D0;
+          background-color: ${tokens.colors.successBg};
+          color: ${tokens.colors.successText};
+          border: 1px solid ${tokens.colors.successBorder};
         }
         .chat-clear-history-error-message {
-          background-color: #FEE2E2;
-          color: #991B1B;
-          border: 1px solid #FECACA;
+          background-color: ${tokens.colors.dangerMessageBg};
+          color: ${tokens.colors.dangerMessageText};
+          border: 1px solid ${tokens.colors.dangerMessageBorder};
         }
       `}</style>
       <ul

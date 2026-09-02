@@ -31,4 +31,37 @@ describe('tokens (design-tokens-foundation / Saga #345)', () => {
       }
     }
   });
+
+  // AC-5: New danger/success color variants for ChatScreen visual improvements
+  // (plan-error-indicator: dangerBannerBg/dangerBannerBorder/dangerBannerText)
+  it('exports dangerBannerBg, dangerBannerBorder, dangerBannerText with their exact values (AC-5, plan-error-indicator)', () => {
+    expect(tokens.colors.dangerBannerBg).toBe('#FEF2F2');
+    expect(tokens.colors.dangerBannerBorder).toBe('#FCA5A5');
+    expect(tokens.colors.dangerBannerText).toBe('#B91C1C');
+  });
+
+  // AC-5: New danger variants for clear-history error message
+  // (chat-clear-history-error-message: dangerMessageBg/dangerMessageBorder/dangerMessageText)
+  it('exports dangerMessageBg, dangerMessageBorder, dangerMessageText with their exact values (AC-5, clear-history-error-message)', () => {
+    expect(tokens.colors.dangerMessageBg).toBe('#FEE2E2');
+    expect(tokens.colors.dangerMessageBorder).toBe('#FECACA');
+    expect(tokens.colors.dangerMessageText).toBe('#991B1B');
+  });
+
+  // AC-5: New success color variants for clear-history success message
+  // (chat-clear-history-success-message: successBg/successBorder/successText)
+  it('exports successBg, successBorder, successText with their exact values (AC-5, clear-history-success-message)', () => {
+    expect(tokens.colors.successBg).toBe('#D1FAE5');
+    expect(tokens.colors.successBorder).toBe('#A7F3D0');
+    expect(tokens.colors.successText).toBe('#065F46');
+  });
+
+  // AC-4: New connected status color token for TransactionHistoryPanel
+  it('exports connected color with its exact value (AC-4, connection-status)', () => {
+    expect(tokens.colors.connected).toBe('#059669');
+  });
+
+  it('exports white color with its exact value (AC-1, ChatScreen ham hex temizliği)', () => {
+    expect(tokens.colors.white).toBe('#fff');
+  });
 });
