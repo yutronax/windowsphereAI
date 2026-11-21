@@ -32,11 +32,14 @@ npm run tauri:build   # .exe/installer (bu projede henüz doğrulanmadı)
 marka/logo tasarımı ayrı bir görev).
 
 ## Backend
-Proje kendi `.venv`'ini henüz içermiyor — `../.venv` (Yazılım_müh kökü) üzerinden çalıştırılabilir:
-```bash
-"../.venv/Scripts/python.exe" -m pytest backend/tests/ -v
+Depo kökünde Python sanal ortamı oluşturun ve bağımlılıkları kurun:
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest backend/tests/ -v
 ```
-Gerekli paketler: `fastapi`. Proje kendi `requirements.txt`/`pyproject.toml`'unu henüz tanımlamıyor (ayrı bir task).
+Backend'i ayrı bir terminalde `python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000` ile başlatın.
 
 `WORD_TO_PDF` operasyonu (Saga #339) için LibreOffice gerekir, `soffice`
 PATH'te bulunabilir olmalı:
@@ -61,3 +64,4 @@ sonraki çağrılar hızlıdır.
 - Backend hâlâ ayrı bir FastAPI process olarak `BACKEND_ORIGIN` sabit
   URL'i üzerinden çağrılıyor (sidecar değil) — bu değişmedi.
 - `npm audit`, vite/vitest zincirinde bir dev-server-only güvenlik açığı raporluyor (Saga task #278) — bilinçli olarak ertelendi.
+
